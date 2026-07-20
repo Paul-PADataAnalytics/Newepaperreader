@@ -231,9 +231,9 @@ bool DisplayHAL::windowShouldClose() {
 #endif
 }
 
+#endif
+
 void DisplayHAL::injectTouch(int x, int y) {
     simulatedTouchX = x;
     simulatedTouchY = y;
 }
-
-#endif

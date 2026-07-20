@@ -30,6 +30,11 @@ public:
     // Check if a file is open
     bool isOpen() const;
 
+    // Bookmarking API
+    size_t getPosition() const;
+    void setPosition(size_t pos);
+
+
 private:
     File file;
     std::string currentFilePath;

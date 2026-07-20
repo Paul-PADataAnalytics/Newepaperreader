@@ -1,5 +1,15 @@
+#ifndef NATIVE_TESTING
+#include "touch.h"
+static TouchClass touch;
+#endif
 #include "DisplayHAL.h"
 #include <stdio.h>
+
+#ifndef NATIVE_TESTING
+#include <Arduino.h>
+#include <Wire.h>
+#include "utilities.h"
+#endif
 
 static int simulatedTouchX = -1;
 static int simulatedTouchY = -1;
@@ -28,7 +38,13 @@ bool DisplayHAL::getTouch(int &x, int &y) {
         return true;
     }
 #ifndef NATIVE_TESTING
-    // TODO: Read from real I2C touch sensor
+    if (touch.scanPoint()) {
+        uint16_t tx, ty;
+        touch.getPoint(tx, ty, 0);
+        x = tx;
+        y = ty;
+        return true;
+    }
 #endif
     return false;
 }
@@ -36,8 +52,11 @@ bool DisplayHAL::getTouch(int &x, int &y) {
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
 
+
 void DisplayHAL::init() {
     epd_init();
+    Wire.begin(BOARD_SDA, BOARD_SCL);
+    touch.begin(Wire);
 }
 
 void DisplayHAL::powerOn() {

@@ -16,6 +16,7 @@
 #include "EpubParser.h"
 #include "reader/FileBrowser.h"
 #include "reader/TextReader.h"
+#include "comm/WiFiSync.h"
 
 // SD Pins are defined in LilyGo-EPD47 utilities.h
 
@@ -23,7 +24,8 @@ uint8_t *framebuffer;
 
 enum AppState {
     STATE_LIBRARY,
-    STATE_READING
+    STATE_READING,
+    STATE_WIFI_SYNC
 };
 
 AppState currentState = STATE_LIBRARY;
@@ -32,9 +34,54 @@ TypographyEngine typography;
 EpubParser epubParser;
 TextReader textReader;
 
+#ifndef NATIVE_TESTING
+unsigned long lastTouchTime = 0;
+#endif
+
 std::vector<FileInfo> libraryFiles;
 std::string currentBookText = "";
 int currentReadingOffset = 0; // simplistic pagination
+std::string currentBookPath = ""; // to save bookmarks
+
+void saveBookmark(const std::string& path, int offset) {
+#ifndef NATIVE_TESTING
+    std::string bmkPath = path + ".bmk";
+    File f = SD.open(bmkPath.c_str(), FILE_WRITE);
+    if (f) {
+        f.printf("%d", offset);
+        f.close();
+    }
+#else
+    std::string bmkPath = path + ".bmk";
+    FILE* f = fopen(bmkPath.c_str(), "w");
+    if (f) {
+        fprintf(f, "%d", offset);
+        fclose(f);
+    }
+#endif
+}
+
+int loadBookmark(const std::string& path) {
+#ifndef NATIVE_TESTING
+    std::string bmkPath = path + ".bmk";
+    File f = SD.open(bmkPath.c_str(), FILE_READ);
+    if (f) {
+        String s = f.readString();
+        f.close();
+        return s.toInt();
+    }
+#else
+    std::string bmkPath = path + ".bmk";
+    FILE* f = fopen(bmkPath.c_str(), "r");
+    if (f) {
+        int offset = 0;
+        fscanf(f, "%d", &offset);
+        fclose(f);
+        return offset;
+    }
+#endif
+    return 0;
+}
 
 void drawLibrary() {
     UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
@@ -45,10 +92,11 @@ void drawLibrary() {
     
     int y = 60;
     for (size_t i = 0; i < libraryFiles.size(); i++) {
-        if (y > 540 - 60) break;
+        if (y > 540 - 130) break;
         UIFramework::drawButton(framebuffer, 40, y, 880, 50, libraryFiles[i].name.c_str());
         y += 60;
     }
+    UIFramework::drawButton(framebuffer, 40, 540 - 60, 880, 50, "Enter WiFi Sync Mode");
     DisplayHAL::display(framebuffer);
 }
 
@@ -108,43 +156,86 @@ void openBook(int index) {
         currentBookText = "Failed to parse EPUB.";
     }
 
-    currentReadingOffset = 0;
+    currentBookPath = path;
+    int savedOffset = loadBookmark(path);
+
+    if (isText && textReader.isOpen()) {
+        textReader.setPosition(savedOffset);
+        currentBookText = textReader.getPageText();
+        currentReadingOffset = 0;
+    } else {
+        currentReadingOffset = savedOffset;
+        if (currentReadingOffset < 0) currentReadingOffset = 0;
+        if (currentReadingOffset > currentBookText.length()) currentReadingOffset = 0;
+    }
+
     currentState = STATE_READING;
     drawReading();
 }
 
+void drawWiFiSync() {
+    UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
+    UIFramework::drawTopBar(framebuffer, "WiFi Sync Mode", 100);
+    
+    std::string info = "Connect to WiFi SoftAP: 'EPD-Reader'\n";
+    info += "Then open http://192.168.4.1 in your browser.\n\n";
+    info += "Tap anywhere to exit WiFi Sync Mode.";
+    
+    typography.renderText(info, 40, 100, framebuffer);
+    DisplayHAL::display(framebuffer);
+}
+
 void handleTouch(int x, int y) {
     if (currentState == STATE_LIBRARY) {
+        if (y > 540 - 60) {
+            currentState = STATE_WIFI_SYNC;
+            startWiFiSync();
+            drawWiFiSync();
+            return;
+        }
         int index = (y - 60) / 60;
         if (index >= 0 && index < libraryFiles.size()) {
             openBook(index);
         }
     } else if (currentState == STATE_READING) {
         if (y < 60 && x < 100) {
-            if (textReader.isOpen()) textReader.closeFile();
+            if (textReader.isOpen()) {
+                saveBookmark(currentBookPath, textReader.getPosition());
+                textReader.closeFile();
+            } else {
+                saveBookmark(currentBookPath, currentReadingOffset);
+            }
             currentState = STATE_LIBRARY;
             drawLibrary();
         } else if (x > 960 / 2) {
             if (textReader.isOpen()) {
                 textReader.nextPage();
                 currentBookText = textReader.getPageText();
+                saveBookmark(currentBookPath, textReader.getPosition());
                 currentReadingOffset = 0;
             } else {
                 currentReadingOffset += 1200; // rough guess
                 if (currentReadingOffset > currentBookText.length()) currentReadingOffset = currentBookText.length();
+                saveBookmark(currentBookPath, currentReadingOffset);
             }
             drawReading();
         } else {
             if (textReader.isOpen()) {
                 textReader.prevPage();
                 currentBookText = textReader.getPageText();
+                saveBookmark(currentBookPath, textReader.getPosition());
                 currentReadingOffset = 0;
             } else {
                 currentReadingOffset -= 1200;
                 if (currentReadingOffset < 0) currentReadingOffset = 0;
+                saveBookmark(currentBookPath, currentReadingOffset);
             }
             drawReading();
         }
+    } else if (currentState == STATE_WIFI_SYNC) {
+        stopWiFiSync();
+        currentState = STATE_LIBRARY;
+        drawLibrary();
     }
 }
 
@@ -233,6 +324,7 @@ void loop() {
     int tx, ty;
     if (DisplayHAL::getTouch(tx, ty)) {
 #ifndef NATIVE_TESTING
+        lastTouchTime = millis();
         Serial.printf("Handling touch at %d, %d\n", tx, ty);
 #else
         printf("Handling touch at %d, %d\n", tx, ty);
@@ -247,7 +339,12 @@ void loop() {
     }
     usleep(100000); // 100ms
 #else
-    delay(100);
+    if (millis() - lastTouchTime > 5000) {
+        esp_sleep_enable_timer_wakeup(100 * 1000);
+        esp_light_sleep_start();
+    } else {
+        delay(100);
+    }
 #endif
 }
 

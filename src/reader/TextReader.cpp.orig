@@ -1,8 +1,6 @@
-#include <cstring>
 
 #include "TextReader.h"
 #include "MarkdownParser.h"
-#include "RTFParser.h"
 
 TextReader::TextReader() : fileSize(0), currentPosition(0) {
     memset(pageBuffer, 0, sizeof(pageBuffer));
@@ -57,10 +55,6 @@ std::string TextReader::getPageText() {
     if (currentFilePath.length() >= 3 && 
         currentFilePath.substr(currentFilePath.length() - 3) == ".md") {
         text = MarkdownParser::stripMarkdown(text);
-    } else if (currentFilePath.length() >= 4 && 
-               (currentFilePath.substr(currentFilePath.length() - 4) == ".rtf" || 
-                currentFilePath.substr(currentFilePath.length() - 4) == ".RTF")) {
-        text = RTFParser::stripRTF(text);
     }
 
     return text;
@@ -95,18 +89,4 @@ float TextReader::getProgress() const {
 
 bool TextReader::isOpen() const {
     return file == true;
-}
-
-size_t TextReader::getPosition() const {
-    return currentPosition;
-}
-
-void TextReader::setPosition(size_t pos) {
-    if (pos < fileSize) {
-        currentPosition = pos;
-        // Reset page history to avoid weird back-tracking
-        pageHistory.clear();
-        pageHistory.push_back(0); // Root
-        if (pos > 0) pageHistory.push_back(pos);
-    }
 }

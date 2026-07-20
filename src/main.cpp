@@ -10,6 +10,7 @@
 #endif
 
 #include "DisplayHAL.h"
+#include "AppComm.h"
 
 // Define SPI pins for SD Card (adjust if using ESP32-S3 version)
 #define SD_MISO 19
@@ -72,9 +73,25 @@ void setup() {
         }
     }
 #endif
+
+    // Initialize communication (TCP mock or BLE)
+    AppComm::init();
 }
 
 void loop() {
+    // Poll communication
+    AppComm::poll();
+
+    // Process messages
+    while (AppComm::hasData()) {
+        std::string msg = AppComm::getNextMessage();
+#ifndef NATIVE_TESTING
+        Serial.printf("App Msg: %s\n", msg.c_str());
+#else
+        printf("App Msg: %s\n", msg.c_str());
+#endif
+    }
+
     // E-readers usually sleep most of the time to save power.
     // For now, just idle.
 #ifdef NATIVE_TESTING
@@ -85,7 +102,7 @@ void loop() {
     }
     usleep(100000); // Sleep 100ms
 #else
-    delay(1000);
+    delay(100);
 #endif
 }
 

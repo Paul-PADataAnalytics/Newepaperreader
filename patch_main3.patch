@@ -1,0 +1,18 @@
+--- src/main.cpp
++++ src/main.cpp
+@@ -87,7 +87,14 @@
+     UIFramework::drawTopBar(framebuffer, "Loading...", 100);
+     DisplayHAL::display(framebuffer);
+ 
+-    if (epubParser.open(path)) {
++    bool isText = false;
++    if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
++    if (path.length() >= 3 && path.substr(path.length() - 3) == ".md") isText = true;
++
++    if (isText) {
++        if (textReader.openFile(path.c_str())) currentBookText = textReader.getPageText();
++        else currentBookText = "Failed to open text file.";
++    } else if (epubParser.open(path)) {
+         auto chapters = epubParser.getChapterList();
+         if (!chapters.empty()) {
+             std::string html = epubParser.getFileContent(chapters[0]);

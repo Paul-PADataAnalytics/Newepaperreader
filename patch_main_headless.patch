@@ -1,0 +1,17 @@
+--- src/main.cpp
++++ src/main.cpp
+@@ -257,6 +257,14 @@
+ #ifdef NATIVE_TESTING
+ int main(int argc, char** argv) {
+     setup();
++    if (argc > 1 && strcmp(argv[1], "--headless") == 0) {
++        printf("Running headless test...\n");
++        // The first file in library is the RTF if it's the only one, or index 0. 
++        // Let's inject a touch to open index 0: y = 60 + 20 = 80
++        DisplayHAL::injectTouch(50, 80);
++        loop(); // processes touch and opens book
++        DisplayHAL::dumpFramebuffer("screenshot_rtf_test.pgm", framebuffer);
++        return 0;
++    }
+     while (true) {
+         loop();

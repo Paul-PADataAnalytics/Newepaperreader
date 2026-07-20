@@ -14,6 +14,7 @@
 #include "ui/UIFramework.h"
 #include "TypographyEngine.h"
 #include "EpubParser.h"
+#include "embedded_font.h"
 #include "reader/FileBrowser.h"
 #include "reader/TextReader.h"
 #include "comm/WiFiSync.h"
@@ -86,17 +87,24 @@ int loadBookmark(const std::string& path) {
 void drawLibrary() {
     UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
     UIFramework::drawTopBar(framebuffer, "Library - /books", 100);
+    typography.renderText("Library - /books", 10, 5, framebuffer);
     
     fileBrowser.setRoot("/books");
     libraryFiles = fileBrowser.getFiles();
+    
+    if (libraryFiles.empty()) {
+        typography.renderText("No books found or SD Card error.", 40, 100, framebuffer);
+    }
     
     int y = 60;
     for (size_t i = 0; i < libraryFiles.size(); i++) {
         if (y > 540 - 130) break;
         UIFramework::drawButton(framebuffer, 40, y, 880, 50, libraryFiles[i].name.c_str());
+        typography.renderText(libraryFiles[i].name.c_str(), 50, y + 10, framebuffer);
         y += 60;
     }
     UIFramework::drawButton(framebuffer, 40, 540 - 60, 880, 50, "Enter WiFi Sync Mode");
+    typography.renderText("Enter WiFi Sync Mode", 50, 540 - 50, framebuffer);
     DisplayHAL::display(framebuffer);
 }
 
@@ -290,24 +298,26 @@ void setup() {
     
 #ifndef NATIVE_TESTING
     SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
-    if (!SD.begin(SD_CS)) {
+    bool sdMounted = SD.begin(SD_CS, SPI, 4000000, "/sd", 5, false);
+    if (!sdMounted) {
+        Serial.println("Retrying SD Card Mount at 1MHz...");
+        delay(100);
+        sdMounted = SD.begin(SD_CS, SPI, 1000000, "/sd", 5, false);
+    }
+    if (!sdMounted) {
         Serial.println("SD Card Mount Failed!");
     } else {
         Serial.println("SD Card initialized.");
-        uint8_t cardType = SD.cardType();
-        if(cardType == CARD_NONE){
-            Serial.println("No SD card attached");
-        } else {
-            Serial.printf("SD Card Size: %lluMB\n", SD.cardSize() / (1024 * 1024));
-        }
+        Serial.printf("SD Card Size: %lluMB\n", SD.cardSize() / (1024 * 1024));
     }
 #endif
 
     UIFramework::init();
     
 #ifndef NATIVE_TESTING
-    if (!typography.loadFont("/sd/Roboto-Regular.ttf", 32)) {
-        Serial.println("Failed to load /sd/Roboto-Regular.ttf");
+    if (!typography.loadFont("/sd/data/Roboto-Regular.ttf", 48.0f)) {
+        Serial.println("Falling back to embedded font...");
+        typography.loadFontFromMemory(data_Roboto_Regular_ttf, data_Roboto_Regular_ttf_len, 48.0f);
     }
 #else
     if (!typography.loadFont("data/Roboto-Regular.ttf", 32)) {
@@ -339,12 +349,7 @@ void loop() {
     }
     usleep(100000); // 100ms
 #else
-    if (millis() - lastTouchTime > 5000) {
-        esp_sleep_enable_timer_wakeup(100 * 1000);
-        esp_light_sleep_start();
-    } else {
-        delay(100);
-    }
+    delay(10);
 #endif
 }
 

@@ -9,6 +9,9 @@ public:
 
     // Load font from a TTF file (from SD card or native filesystem)
     bool loadFont(const char* filepath, float fontSize);
+    
+    // Load font from embedded memory array
+    bool loadFontFromMemory(const uint8_t* fontData, size_t size, float fontSize);
 
     // Render a paragraph starting at given x, y with fixed margins.
     // Text layout uses Glyph-Exact Pagination Algorithm.
@@ -22,6 +25,7 @@ public:
 
 private:
     uint8_t* fontBuffer; // PSRAM memory for TTF file
+    bool isEmbeddedFont;
     float fontSize;
     void* fontInfo; // Pointer to stbtt_fontinfo
     

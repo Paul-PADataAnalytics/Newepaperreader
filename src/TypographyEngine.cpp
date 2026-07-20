@@ -34,19 +34,19 @@ static void drawPixel(int x, int y, uint8_t color, uint8_t* framebuffer) {
     bool isLower = (x % 2 != 0);
     uint8_t c = color & 0x0F;
     if (isLower) {
-        framebuffer[index] = (framebuffer[index] & 0xF0) | c;
-    } else {
         framebuffer[index] = (framebuffer[index] & 0x0F) | (c << 4);
+    } else {
+        framebuffer[index] = (framebuffer[index] & 0xF0) | c;
     }
 #endif
 }
 
-TypographyEngine::TypographyEngine() : fontBuffer(nullptr), fontSize(16.0f), fontInfo(nullptr) {
+TypographyEngine::TypographyEngine() : fontBuffer(nullptr), isEmbeddedFont(false), fontSize(16.0f), fontInfo(nullptr) {
     fontInfo = malloc(sizeof(stbtt_fontinfo));
 }
 
 TypographyEngine::~TypographyEngine() {
-    if (fontBuffer) {
+    if (fontBuffer && !isEmbeddedFont) {
 #ifndef NATIVE_TESTING
         heap_caps_free(fontBuffer);
 #else
@@ -95,35 +95,56 @@ bool TypographyEngine::loadFont(const char* filepath, float size) {
     return true;
 }
 
+bool TypographyEngine::loadFontFromMemory(const uint8_t* fontData, size_t size, float fontSize) {
+    this->fontSize = fontSize;
+    this->fontBuffer = (uint8_t*)fontData;
+    this->isEmbeddedFont = true;
+    
+    if (!stbtt_InitFont((stbtt_fontinfo*)fontInfo, fontBuffer, 0)) {
+        printf("Failed to init embedded font\n");
+        return false;
+    }
+    
+    return true;
+}
+
 // Simple UTF-8 decoder
 static uint32_t decodeUTF8(const std::string& text, size_t& i) {
     uint32_t codepoint = 0;
     uint8_t c = text[i];
     if (c <= 0x7F) {
         codepoint = c;
+        i++;
     } else if ((c & 0xE0) == 0xC0) {
         codepoint = c & 0x1F;
         if (i + 1 < text.length()) {
-            codepoint = (codepoint << 6) | (text[++i] & 0x3F);
-        }
+            codepoint = (codepoint << 6) | (text[i+1] & 0x3F);
+            i += 2;
+        } else i++;
     } else if ((c & 0xF0) == 0xE0) {
         codepoint = c & 0x0F;
         if (i + 2 < text.length()) {
-            codepoint = (codepoint << 6) | (text[++i] & 0x3F);
-            codepoint = (codepoint << 6) | (text[++i] & 0x3F);
-        }
+            codepoint = (codepoint << 6) | (text[i+1] & 0x3F);
+            codepoint = (codepoint << 6) | (text[i+2] & 0x3F);
+            i += 3;
+        } else i++;
     } else if ((c & 0xF8) == 0xF0) {
         codepoint = c & 0x07;
         if (i + 3 < text.length()) {
-            codepoint = (codepoint << 6) | (text[++i] & 0x3F);
-            codepoint = (codepoint << 6) | (text[++i] & 0x3F);
-            codepoint = (codepoint << 6) | (text[++i] & 0x3F);
-        }
+            codepoint = (codepoint << 6) | (text[i+1] & 0x3F);
+            codepoint = (codepoint << 6) | (text[i+2] & 0x3F);
+            codepoint = (codepoint << 6) | (text[i+3] & 0x3F);
+            i += 4;
+        } else i++;
+    } else {
+        i++;
     }
     return codepoint;
 }
 
 void TypographyEngine::renderText(const std::string& text, int startX, int startY, uint8_t* framebuffer) {
+    if (!fontBuffer) return; // Font failed to load
+    
     stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
     
     float scale = stbtt_ScaleForPixelHeight(info, fontSize);
@@ -138,7 +159,6 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
     int x = startX + MARGIN_LEFT;
     int y = startY + MARGIN_TOP + ascent;
     
-    // Simple screen bounds
 #ifdef NATIVE_TESTING
     int screenWidth = EPD_WIDTH;
     int screenHeight = EPD_HEIGHT;
@@ -147,7 +167,7 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
     int screenHeight = 540;
 #endif
 
-    for (size_t i = 0; i < text.length(); ++i) {
+    for (size_t i = 0; i < text.length(); ) {
         uint32_t codepoint = decodeUTF8(text, i);
         
         if (codepoint == '\n') {
@@ -167,15 +187,13 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
         }
         
         if (y > screenHeight - MARGIN_BOTTOM) {
-            // Reached bottom, stop pagination
-            break;
+            break; // Screen full
         }
         
-        int glyphIndex = stbtt_FindGlyphIndex(info, codepoint);
-        if (glyphIndex == 0) {
-            // Missing glyph placeholder
-            int boxWidth = fontSize * 0.5f;
-            int boxHeight = fontSize * 0.8f;
+        if (stbtt_FindGlyphIndex(info, codepoint) == 0) {
+            // Draw missing glyph box
+            int boxWidth = 10;
+            int boxHeight = ascent;
             int boxY = y - boxHeight;
             for (int by = 0; by < boxHeight; ++by) {
                 for (int bx = 0; bx < boxWidth; ++bx) {
@@ -200,20 +218,14 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
             for (int r = 0; r < h; ++r) {
                 for (int c = 0; c < w; ++c) {
                     uint8_t alpha = bitmap[r * w + c];
-                    if (alpha > 128) {
-                        // For 4-bit grayscale, 0x00 is black, 0x0F is white.
-                        // We do a simple thresholding for black pixels.
-                        drawPixel(x + c_x1 + c, y + c_y1 + r, 0x00, framebuffer);
-                    } else if (alpha > 0) {
-                        // Add some basic anti-aliasing approximation (e.g. gray 0x08)
-                        uint8_t gray = 0x0F - (alpha >> 4);
-                        // However, we only draw if it's darker than white, to not overwrite other things?
-                        // Just overwrite. Wait, we want to blend. Let's keep it simple: draw gray.
+                    if (alpha > 0) {
+                        // Basic anti-aliasing approximation
+                        uint8_t gray = 15 - (alpha * 15 / 255);
                         drawPixel(x + c_x1 + c, y + c_y1 + r, gray, framebuffer);
                     }
                 }
             }
-            stbtt_FreeBitmap(bitmap, info->userdata);
+            stbtt_FreeBitmap(bitmap, nullptr);
         }
         
         x += advanceWidth * scale;
@@ -221,6 +233,7 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
 }
 
 size_t TypographyEngine::findPreviousPageStart(const std::string& text, size_t currentIndex) {
+    if (!fontBuffer) return 0; // Font failed to load
     if (currentIndex == 0 || text.empty()) return 0;
     
     stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;

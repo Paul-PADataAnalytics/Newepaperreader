@@ -1,6 +1,6 @@
 #ifndef NATIVE_TESTING
-#include "touch.h"
-static TouchClass touch;
+#include <TouchDrvGT911.hpp>
+static TouchDrvGT911 touch;
 #endif
 #include "DisplayHAL.h"
 #include <stdio.h>
@@ -38,9 +38,8 @@ bool DisplayHAL::getTouch(int &x, int &y) {
         return true;
     }
 #ifndef NATIVE_TESTING
-    if (touch.scanPoint()) {
-        uint16_t tx, ty;
-        touch.getPoint(tx, ty, 0);
+    int16_t tx, ty;
+    if (touch.getPoint(&tx, &ty, 1)) {
         x = tx;
         y = ty;
         return true;
@@ -55,8 +54,26 @@ bool DisplayHAL::getTouch(int &x, int &y) {
 
 void DisplayHAL::init() {
     epd_init();
+    
+    pinMode(TOUCH_INT, OUTPUT);
+    digitalWrite(TOUCH_INT, HIGH);
+    
     Wire.begin(BOARD_SDA, BOARD_SCL);
-    touch.begin(Wire);
+    
+    uint8_t touchAddress = 0x14;
+    Wire.beginTransmission(0x14);
+    if (Wire.endTransmission() == 0) touchAddress = 0x14;
+    Wire.beginTransmission(0x5D);
+    if (Wire.endTransmission() == 0) touchAddress = 0x5D;
+    
+    touch.setPins(-1, TOUCH_INT);
+    if (touch.begin(Wire, touchAddress, BOARD_SDA, BOARD_SCL)) {
+        touch.setMaxCoordinates(EPD_WIDTH, EPD_HEIGHT);
+        touch.setSwapXY(true);
+        touch.setMirrorXY(false, true);
+    } else {
+        printf("Touch initialization failed!\\n");
+    }
 }
 
 void DisplayHAL::powerOn() {

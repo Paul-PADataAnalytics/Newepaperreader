@@ -1,4 +1,3 @@
-#ifndef NATIVE_TESTING
 #include "EpubParser.h"
 #include <miniz.h>
 #include <tinyxml2.h>
@@ -173,4 +172,3 @@ std::string EpubParser::resolvePath(const std::string& basePath, const std::stri
     // Here we just append, assuming relPath is relative to basePath without traversing up.
     return basePath + relPath;
 }
-#endif

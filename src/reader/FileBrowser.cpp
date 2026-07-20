@@ -1,4 +1,3 @@
-#ifndef NATIVE_TESTING
 #include "FileBrowser.h"
 
 FileBrowser::FileBrowser() : currentPath("/") {
@@ -77,4 +76,3 @@ void FileBrowser::loadDirectory(const char* path) {
         file = dir.openNextFile();
     }
 }
-#endif

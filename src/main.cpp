@@ -15,6 +15,7 @@
 #include "TypographyEngine.h"
 #include "EpubParser.h"
 #include "reader/FileBrowser.h"
+#include "reader/TextReader.h"
 
 // SD Pins are defined in LilyGo-EPD47 utilities.h
 
@@ -29,6 +30,7 @@ AppState currentState = STATE_LIBRARY;
 FileBrowser fileBrowser;
 TypographyEngine typography;
 EpubParser epubParser;
+TextReader textReader;
 
 std::vector<FileInfo> libraryFiles;
 std::string currentBookText = "";
@@ -86,7 +88,14 @@ void openBook(int index) {
     UIFramework::drawTopBar(framebuffer, "Loading...", 100);
     DisplayHAL::display(framebuffer);
 
-    if (epubParser.open(path)) {
+    bool isText = false;
+    if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
+    if (path.length() >= 3 && path.substr(path.length() - 3) == ".md") isText = true;
+
+    if (isText) {
+        if (textReader.openFile(path.c_str())) currentBookText = textReader.getPageText();
+        else currentBookText = "Failed to open text file.";
+    } else if (epubParser.open(path)) {
         auto chapters = epubParser.getChapterList();
         if (!chapters.empty()) {
             std::string html = epubParser.getFileContent(chapters[0]);
@@ -112,15 +121,28 @@ void handleTouch(int x, int y) {
         }
     } else if (currentState == STATE_READING) {
         if (y < 60 && x < 100) {
+            if (textReader.isOpen()) textReader.closeFile();
             currentState = STATE_LIBRARY;
             drawLibrary();
         } else if (x > 960 / 2) {
-            currentReadingOffset += 1200; // rough guess
-            if (currentReadingOffset > currentBookText.length()) currentReadingOffset = currentBookText.length();
+            if (textReader.isOpen()) {
+                textReader.nextPage();
+                currentBookText = textReader.getPageText();
+                currentReadingOffset = 0;
+            } else {
+                currentReadingOffset += 1200; // rough guess
+                if (currentReadingOffset > currentBookText.length()) currentReadingOffset = currentBookText.length();
+            }
             drawReading();
         } else {
-            currentReadingOffset -= 1200;
-            if (currentReadingOffset < 0) currentReadingOffset = 0;
+            if (textReader.isOpen()) {
+                textReader.prevPage();
+                currentBookText = textReader.getPageText();
+                currentReadingOffset = 0;
+            } else {
+                currentReadingOffset -= 1200;
+                if (currentReadingOffset < 0) currentReadingOffset = 0;
+            }
             drawReading();
         }
     }
@@ -197,7 +219,7 @@ void setup() {
         Serial.println("Failed to load /sd/Roboto-Regular.ttf");
     }
 #else
-    if (!typography.loadFont("Roboto-Regular.ttf", 32)) {
+    if (!typography.loadFont("data/Roboto-Regular.ttf", 32)) {
         printf("Failed to load Roboto-Regular.ttf\n");
     }
 #endif
@@ -232,6 +254,26 @@ void loop() {
 #ifdef NATIVE_TESTING
 int main(int argc, char** argv) {
     setup();
+    if (argc > 1 && strcmp(argv[1], "--headless") == 0) {
+        printf("Running headless test for markdown...\n");
+        int indexToOpen = 0;
+        int rtfIndex = -1;
+        printf("Library files:\n");
+        for (int i=0; i<libraryFiles.size(); i++) {
+            printf(" - %s\n", libraryFiles[i].name.c_str());
+            if (libraryFiles[i].name == "test_document.rtf") rtfIndex = i;
+            if (libraryFiles[i].name == "test.md") {
+                indexToOpen = i;
+            }
+        }
+        openBook(indexToOpen);
+        DisplayHAL::dumpFramebuffer("screenshot_markdown.pgm", framebuffer);
+        if (rtfIndex != -1) {
+            openBook(rtfIndex);
+            DisplayHAL::dumpFramebuffer("screenshot_rtf_test.pgm", framebuffer);
+        }
+        return 0;
+    }
     while (true) {
         loop();
     }

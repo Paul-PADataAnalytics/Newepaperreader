@@ -25,8 +25,12 @@ public:
     static void drawRect(int x, int y, int width, int height, uint8_t color, uint8_t* framebuffer);
     static void fillRect(int x, int y, int width, int height, uint8_t color, uint8_t* framebuffer);
 
+    static void dumpFramebuffer(const char* filepath, uint8_t* framebuffer);
+    static bool getTouch(int &x, int &y);
+
 #ifdef NATIVE_TESTING
     static void handleEvents();
     static bool windowShouldClose();
+    static void injectTouch(int x, int y);
 #endif
 };

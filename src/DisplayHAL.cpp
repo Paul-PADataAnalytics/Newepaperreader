@@ -1,4 +1,37 @@
 #include "DisplayHAL.h"
+#include <stdio.h>
+
+static int simulatedTouchX = -1;
+static int simulatedTouchY = -1;
+
+void DisplayHAL::dumpFramebuffer(const char* filepath, uint8_t* framebuffer) {
+    FILE* f = fopen(filepath, "wb");
+    if (!f) return;
+    // For ESP32, use SPIFFS or SD card if needed, but for native we just use POSIX fopen.
+    fprintf(f, "P5\n%d %d\n255\n", EPD_WIDTH, EPD_HEIGHT);
+    for (int i = 0; i < EPD_WIDTH * EPD_HEIGHT / 2; i++) {
+        uint8_t pair = framebuffer[i];
+        uint8_t p1 = (pair & 0xF0) | (pair >> 4);
+        uint8_t p2 = ((pair & 0x0F) << 4) | (pair & 0x0F);
+        fputc(p1, f);
+        fputc(p2, f);
+    }
+    fclose(f);
+}
+
+bool DisplayHAL::getTouch(int &x, int &y) {
+    if (simulatedTouchX >= 0 && simulatedTouchY >= 0) {
+        x = simulatedTouchX;
+        y = simulatedTouchY;
+        simulatedTouchX = -1;
+        simulatedTouchY = -1;
+        return true;
+    }
+#ifndef NATIVE_TESTING
+    // TODO: Read from real I2C touch sensor
+#endif
+    return false;
+}
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
@@ -196,6 +229,11 @@ bool DisplayHAL::windowShouldClose() {
 #else
     return false;
 #endif
+}
+
+void DisplayHAL::injectTouch(int x, int y) {
+    simulatedTouchX = x;
+    simulatedTouchY = y;
 }
 
 #endif

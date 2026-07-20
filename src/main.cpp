@@ -91,7 +91,35 @@ void loop() {
 
 #ifdef NATIVE_TESTING
 int main(int argc, char** argv) {
+    bool isTestMode = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--test") == 0) {
+            isTestMode = true;
+            break;
+        }
+    }
+
     setup();
+
+    if (isTestMode) {
+        printf("Running headless test mode...\n");
+        // Inject a simulated touch event
+        DisplayHAL::injectTouch(100, 200);
+
+        // Process touch and update UI
+        int tx, ty;
+        if (DisplayHAL::getTouch(tx, ty)) {
+            printf("Touch received at %d, %d. Drawing a rectangle...\n", tx, ty);
+            DisplayHAL::drawRect(tx - 10, ty - 10, 20, 20, 0x00, framebuffer); // Draw black rect
+            DisplayHAL::display(framebuffer);
+        }
+
+        // Dump the framebuffer
+        DisplayHAL::dumpFramebuffer("test_output.pgm", framebuffer);
+        printf("Test completed. Framebuffer dumped to test_output.pgm\n");
+        return 0;
+    }
+
     while (true) {
         loop();
     }

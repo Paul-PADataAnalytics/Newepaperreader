@@ -3,6 +3,7 @@ import sys
 import threading
 import time
 import os
+import glob
 
 try:
     import serial
@@ -11,9 +12,27 @@ except ImportError:
     print("Please install it by running: pip install pyserial")
     sys.exit(1)
 
-PORT = '/dev/ttyACM0'
 BAUD = 115200
 FB_SIZE = 960 * 540 // 2
+
+
+def resolve_port():
+    env_port = os.environ.get("EPD_SERIAL_PORT")
+    if env_port:
+        return env_port
+
+    candidates = sorted(glob.glob('/dev/ttyACM*'))
+    if candidates:
+        return candidates[0]
+
+    candidates = sorted(glob.glob('/dev/ttyUSB*'))
+    if candidates:
+        return candidates[0]
+
+    return '/dev/ttyACM0'
+
+
+PORT = resolve_port()
 
 try:
     ser = serial.Serial(PORT, BAUD, timeout=1)

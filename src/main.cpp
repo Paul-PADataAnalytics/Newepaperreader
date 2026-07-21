@@ -7,6 +7,7 @@
 #else
 #include <stdio.h>
 #include <unistd.h>
+#include <cctype>
 #include <cstring>
 #include <cstdlib>
 #endif
@@ -252,38 +253,162 @@ void drawLibrary() {
     DisplayHAL::display(framebuffer);
 }
 
+static void appendNormalizedChar(std::string& out, char c) {
+    if (c == '\r' || c == '\t') {
+        c = ' ';
+    }
+    if (c == '\n') {
+        if (!out.empty() && out.back() != '\n') {
+            out.push_back('\n');
+        }
+        return;
+    }
+    if (isspace(static_cast<unsigned char>(c))) {
+        if (!out.empty() && out.back() != ' ' && out.back() != '\n') {
+            out.push_back(' ');
+        }
+        return;
+    }
+    out.push_back(c);
+}
+
+static void appendBlockBreak(std::string& out) {
+    if (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+    }
+    if (out.empty() || out.back() != '\n') {
+        out.push_back('\n');
+    }
+}
+
+static char decodeHtmlEntity(const std::string& entity) {
+    if (entity == "nbsp") return ' ';
+    if (entity == "amp") return '&';
+    if (entity == "lt") return '<';
+    if (entity == "gt") return '>';
+    if (entity == "quot") return '"';
+    if (entity.size() > 1 && entity[0] == '#') {
+        int base = 10;
+        size_t start = 1;
+        if (entity.size() > 2 && (entity[1] == 'x' || entity[1] == 'X')) {
+            base = 16;
+            start = 2;
+        }
+        char* end = nullptr;
+        long value = strtol(entity.c_str() + start, &end, base);
+        if (end && *end == '\0') {
+            if (value == 160) return ' ';
+            if (value >= 32 && value <= 126) return static_cast<char>(value);
+        }
+    }
+    return ' ';
+}
+
 char* stripHTML(const char* html, size_t len, size_t& outLen) {
     if (!html) {
         outLen = 0;
         return nullptr;
     }
-    
-    // Allocate max possible size in PSRAM
-#ifndef NATIVE_TESTING
-    char* text = (char*)ps_malloc(len + 1);
-    if (!text) text = (char*)malloc(len + 1);
-#else
-    char* text = (char*)malloc(len + 1);
-#endif
 
-    if (!text) {
+    std::string text;
+    text.reserve(len);
+
+    for (size_t i = 0; i < len; i++) {
+        char c = html[i];
+        if (c == '<') {
+            size_t tagEnd = i + 1;
+            while (tagEnd < len && html[tagEnd] != '>') {
+                tagEnd++;
+            }
+            std::string tag(html + i + 1, html + tagEnd);
+            std::string lowerTag;
+            lowerTag.reserve(tag.size());
+            for (char ch : tag) {
+                lowerTag.push_back(static_cast<char>(tolower(static_cast<unsigned char>(ch))));
+            }
+            if (lowerTag.rfind("br", 0) == 0 ||
+                lowerTag.rfind("/p", 0) == 0 ||
+                lowerTag.rfind("/div", 0) == 0 ||
+                lowerTag.rfind("/h", 0) == 0 ||
+                lowerTag.rfind("li", 0) == 0 ||
+                lowerTag.rfind("/li", 0) == 0 ||
+                lowerTag.rfind("/tr", 0) == 0) {
+                appendBlockBreak(text);
+            }
+            i = tagEnd;
+            continue;
+        }
+
+        if (c == '&') {
+            size_t entityEnd = i + 1;
+            while (entityEnd < len && html[entityEnd] != ';' && entityEnd - i <= 10) {
+                entityEnd++;
+            }
+            if (entityEnd < len && html[entityEnd] == ';') {
+                std::string entity(html + i + 1, html + entityEnd);
+                appendNormalizedChar(text, decodeHtmlEntity(entity));
+                i = entityEnd;
+                continue;
+            }
+        }
+
+        appendNormalizedChar(text, c);
+    }
+
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\n')) {
+        text.pop_back();
+    }
+
+    outLen = text.size();
+#ifndef NATIVE_TESTING
+    char* out = (char*)ps_malloc(outLen + 1);
+    if (!out) out = (char*)malloc(outLen + 1);
+#else
+    char* out = (char*)malloc(outLen + 1);
+#endif
+    if (!out) {
         outLen = 0;
         return nullptr;
     }
+    memcpy(out, text.c_str(), outLen);
+    out[outLen] = '\0';
+    return out;
+}
 
-    size_t index = 0;
-    bool inTag = false;
+size_t countReadableChars(const char* text, size_t len) {
+    size_t count = 0;
     for (size_t i = 0; i < len; i++) {
-        char c = html[i];
-        if (c == '<') inTag = true;
-        else if (c == '>') inTag = false;
-        else if (!inTag) {
-            text[index++] = c;
+        if (!isspace(static_cast<unsigned char>(text[i]))) {
+            count++;
         }
     }
-    text[index] = '\0';
-    outLen = index;
-    return text;
+    return count;
+}
+
+bool isPreferredEpubChapter(const std::string& chapterPath) {
+    std::string lower = chapterPath;
+    for (char& c : lower) {
+        c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    }
+
+    if (lower.find("cover") != std::string::npos ||
+        lower.find("title") != std::string::npos ||
+        lower.find("toc") != std::string::npos ||
+        lower.find("contents") != std::string::npos ||
+        lower.find("copyright") != std::string::npos ||
+        lower.find("newsletter") != std::string::npos ||
+        lower.find("abouttheauthor") != std::string::npos ||
+        lower.find("acknowledg") != std::string::npos ||
+        lower.find("adcard") != std::string::npos ||
+        lower.find("torad") != std::string::npos ||
+        lower.find("mini_toc") != std::string::npos ||
+        lower.find("nav") != std::string::npos) {
+        return false;
+    }
+
+    return lower.find("chapter") != std::string::npos ||
+           lower.find("prologue") != std::string::npos ||
+           lower.find("part") != std::string::npos;
 }
 
 void drawReading() {
@@ -332,13 +457,40 @@ void openBook(int index) {
         }
     } else if (epubParser.open(path)) {
         auto chapters = epubParser.getChapterList();
-        if (!chapters.empty()) {
+        char* fallbackText = nullptr;
+        size_t fallbackLen = 0;
+        for (const auto& chapter : chapters) {
             size_t size = 0;
-            char* html = epubParser.getFileContent(chapters[0], size);
-            if (html) {
-                currentBookText = stripHTML(html, size, currentBookTextLen);
-                free(html);
+            char* html = epubParser.getFileContent(chapter, size);
+            if (!html) {
+                continue;
             }
+
+            size_t strippedLen = 0;
+            char* stripped = stripHTML(html, size, strippedLen);
+            free(html);
+            if (!stripped) {
+                continue;
+            }
+
+            size_t readableChars = countReadableChars(stripped, strippedLen);
+            if (isPreferredEpubChapter(chapter) && readableChars >= 40) {
+                currentBookText = stripped;
+                currentBookTextLen = strippedLen;
+                break;
+            }
+
+            if (!fallbackText && readableChars > 0) {
+                fallbackText = stripped;
+                fallbackLen = strippedLen;
+            } else {
+                free(stripped);
+            }
+        }
+
+        if (!currentBookText && fallbackText) {
+            currentBookText = fallbackText;
+            currentBookTextLen = fallbackLen;
         }
         epubParser.close();
     }

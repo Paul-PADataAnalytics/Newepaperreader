@@ -55,8 +55,7 @@ bool DisplayHAL::getTouch(int &x, int &y) {
 void DisplayHAL::init() {
     epd_init();
     
-    pinMode(TOUCH_INT, OUTPUT);
-    digitalWrite(TOUCH_INT, HIGH);
+    pinMode(TOUCH_INT, INPUT);
     
     Wire.begin(BOARD_SDA, BOARD_SCL);
     

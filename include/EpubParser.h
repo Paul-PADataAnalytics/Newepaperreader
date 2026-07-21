@@ -20,7 +20,7 @@ public:
     std::vector<std::string> getChapterList() const;
 
     // Extract a specific file's content from the EPUB archive into memory
-    std::string getFileContent(const std::string& internalPath);
+    char* getFileContent(const std::string& internalPath, size_t& outSize);
 
 private:
     std::string m_filepath;

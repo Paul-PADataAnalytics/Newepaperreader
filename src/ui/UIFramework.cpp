@@ -27,7 +27,7 @@ void UIFramework::drawProgressBar(uint8_t *framebuffer, float progress, const ch
 }
 
 void UIFramework::drawButton(uint8_t *framebuffer, int x, int y, int w, int h, const char* label, bool inverted) {
-    uint8_t bgColor = inverted ? 0x00 : 0xFF; // Black if inverted, White otherwise
+    uint8_t bgColor = inverted ? 0x00 : 0xBB; // Black if inverted, 2 steps darker than lightest grey (0xDD) otherwise
     uint8_t fgColor = inverted ? 0xFF : 0x00;
     
     // Background

@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+#include <esp_sleep.h>
+#include "utilities.h"
 #else
 #include <stdio.h>
 #include <unistd.h>
@@ -40,13 +42,47 @@ unsigned long lastTouchTime = 0;
 #endif
 
 std::vector<FileInfo> libraryFiles;
-std::string currentBookText = "";
+char* currentBookText = nullptr;
+size_t currentBookTextLen = 0;
 int currentReadingOffset = 0; // simplistic pagination
 std::string currentBookPath = ""; // to save bookmarks
+
+// Library UI Constants
+const int LIB_TOP_H = 54;
+const int LIB_SIDE_W = 144;
+const int LIB_SIDE_X = 960 - LIB_SIDE_W; // 816
+const int LIB_MAIN_W = 816;
+const int BOTTOM_MARGIN = 14; // ~2.5% of 540
+const int LIB_MAIN_H = 540 - LIB_TOP_H - BOTTOM_MARGIN; // 472
+const int LIB_MAIN_Y = 54;
+const int LIB_PAGING_W = 82;
+const int LIB_LIST_X = LIB_PAGING_W;
+const int LIB_LIST_W = LIB_MAIN_W - LIB_PAGING_W; // 734
+const int LIB_ROW_H = 68; // Height of each row (allowing 20% padding)
+
+int libraryPage = 0;
+int librarySidebarPage = 0;
+
+enum class LibrarySort { AUTHOR, GENRE, COMPLETION };
+LibrarySort currentLibrarySort = LibrarySort::COMPLETION;
+
+struct LibraryItem {
+    FileInfo file;
+    int completionPercent;
+    std::string author;
+    std::string title;
+};
+std::vector<LibraryItem> parsedLibraryItems;
+
+void updateLibraryItems();
+
 
 void saveBookmark(const std::string& path, int offset) {
 #ifndef NATIVE_TESTING
     std::string bmkPath = path + ".bmk";
+    if (bmkPath.find("/sd") == 0) {
+        bmkPath = bmkPath.substr(3);
+    }
     File f = SD.open(bmkPath.c_str(), FILE_WRITE);
     if (f) {
         f.printf("%d", offset);
@@ -65,6 +101,9 @@ void saveBookmark(const std::string& path, int offset) {
 int loadBookmark(const std::string& path) {
 #ifndef NATIVE_TESTING
     std::string bmkPath = path + ".bmk";
+    if (bmkPath.find("/sd") == 0) {
+        bmkPath = bmkPath.substr(3);
+    }
     File f = SD.open(bmkPath.c_str(), FILE_READ);
     if (f) {
         String s = f.readString();
@@ -84,47 +123,223 @@ int loadBookmark(const std::string& path) {
     return 0;
 }
 
-void drawLibrary() {
-    UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
-    UIFramework::drawTopBar(framebuffer, "Library - /books", 100);
-    typography.renderText("Library - /books", 10, 5, framebuffer);
-    
+void updateLibraryItems() {
+    parsedLibraryItems.clear();
     fileBrowser.setRoot("/books");
-    libraryFiles = fileBrowser.getFiles();
-    
-    if (libraryFiles.empty()) {
-        typography.renderText("No books found or SD Card error.", 40, 100, framebuffer);
+    std::vector<FileInfo> allFiles = fileBrowser.getFiles();
+    libraryFiles.clear();
+
+    for (auto& f : allFiles) {
+        if (f.isDirectory) continue;
+        
+        // Only allow .epub and .txt files
+        std::string lowerName = f.name;
+        for (char& c : lowerName) c = tolower(c);
+        if (lowerName.length() >= 5 && lowerName.substr(lowerName.length() - 5) == ".epub") {
+            // Valid
+        } else if (lowerName.length() >= 4 && lowerName.substr(lowerName.length() - 4) == ".txt") {
+            // Valid
+        } else {
+            continue;
+        }
+
+        libraryFiles.push_back(f);
+
+        LibraryItem item;
+        item.file = f;
+        item.title = f.name;
+        item.author = "Unknown Author";
+        
+        size_t dotPos = item.title.find_last_of('.');
+        if (dotPos != std::string::npos) {
+            item.title = item.title.substr(0, dotPos);
+        }
+        
+#ifndef NATIVE_TESTING
+        int offset = loadBookmark("/sd/books/" + f.name);
+#else
+        int offset = loadBookmark("/books/" + f.name);
+#endif
+
+        if (offset > 0 && f.size > 0) {
+            // Rough estimation
+            item.completionPercent = (offset * 100) / (f.size * 2); 
+            if (item.completionPercent > 100) item.completionPercent = 100;
+            if (item.completionPercent == 0) item.completionPercent = 1;
+        } else {
+            item.completionPercent = 0;
+        }
+        
+        if (item.completionPercent >= 97) {
+            item.completionPercent = -100;
+        }
+        
+        parsedLibraryItems.push_back(item);
     }
     
-    int y = 60;
-    for (size_t i = 0; i < libraryFiles.size(); i++) {
-        if (y > 540 - 130) break;
-        UIFramework::drawButton(framebuffer, 40, y, 880, 50, libraryFiles[i].name.c_str());
-        typography.renderText(libraryFiles[i].name.c_str(), 50, y + 10, framebuffer);
-        y += 60;
+    // Simple sort
+    for (size_t i = 0; i < parsedLibraryItems.size(); i++) {
+        for (size_t j = i + 1; j < parsedLibraryItems.size(); j++) {
+            bool swap = false;
+            if (currentLibrarySort == LibrarySort::COMPLETION) {
+                swap = parsedLibraryItems[j].completionPercent > parsedLibraryItems[i].completionPercent;
+            } else if (currentLibrarySort == LibrarySort::AUTHOR) {
+                swap = parsedLibraryItems[j].author < parsedLibraryItems[i].author;
+            } else {
+                swap = parsedLibraryItems[j].title < parsedLibraryItems[i].title;
+            }
+            if (swap) {
+                LibraryItem temp = parsedLibraryItems[i];
+                parsedLibraryItems[i] = parsedLibraryItems[j];
+                parsedLibraryItems[j] = temp;
+            }
+        }
     }
-    UIFramework::drawButton(framebuffer, 40, 540 - 60, 880, 50, "Enter WiFi Sync Mode");
-    typography.renderText("Enter WiFi Sync Mode", 50, 540 - 50, framebuffer);
+}
+
+void drawLibrary() {
+    // 1. Top Bar (10% Height)
+    UIFramework::clearArea(framebuffer, 0, 0, 960, LIB_TOP_H);
+    typography.renderText("Library", 20, 0, framebuffer);
+    
+    // Mock system info
+    std::string sysInfo = "10:00 AM | 80% | 12GB Free";
+    int sysInfoW = typography.measureText(sysInfo);
+    typography.renderText(sysInfo, 960 - sysInfoW, 0, framebuffer);
+    DisplayHAL::drawHLine(0, LIB_TOP_H - 1, 960, 0x00, framebuffer);
+
+    // 2. Right Sidebar (15% Width)
+    UIFramework::clearArea(framebuffer, LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H);
+    DisplayHAL::drawRect(LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H, 0x00, framebuffer);
+    
+    // Draw up to 4 buttons
+    std::vector<std::pair<std::string, std::string>> buttons = {
+        {"Sort:", "Author"},
+        {"Sort:", "Genre"},
+        {"Sort:", "Prog %"}
+    };
+    int btnH = LIB_MAIN_H / 4;
+    typography.setFontSize(24.0f); // Make text smaller for sidebar buttons
+    for (size_t i = 0; i < buttons.size() && i < 4; i++) {
+        int by = LIB_MAIN_Y + (i * btnH);
+        UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, by + 10, LIB_SIDE_W - 20, btnH - 20, "");
+        
+        // Fill from top, centered horizontally
+        int tw1 = typography.measureText(buttons[i].first);
+        int tw2 = typography.measureText(buttons[i].second);
+        int tx1 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw1) / 2;
+        int tx2 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw2) / 2;
+        int ty = by + 25; // 15px from button top boundary
+        typography.renderText(buttons[i].first, tx1, ty, framebuffer);
+        typography.renderText(buttons[i].second, tx2, ty + 30, framebuffer);
+    }
+    typography.setFontSize(32.0f); // Restore default
+
+    // 3. Main List Area (85% Width, 90% Height)
+    // Lightest greyscale background: 0xDD (or alternating pixels if 4-bit)
+    // EPD47 framebuffer uses 4-bit grayscale, 0xFF is white, 0x00 is black.
+    // Let's use 0xDD for very light grey (0xEE is often invisible).
+    UIFramework::clearArea(framebuffer, 0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H);
+    DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
+
+    // List Paging Area (Left 10% of main area)
+    int pBtnW = LIB_PAGING_W - 20;
+    int pBtnH = LIB_MAIN_H / 2 - 20;
+    int symbolHeight = 24;
+    
+    int upY = LIB_MAIN_Y + 10;
+    UIFramework::drawButton(framebuffer, 25, upY, pBtnW, pBtnH, "");
+    std::string upSymbol = "/\\";
+    int twUp = typography.measureText(upSymbol);
+    typography.renderText(upSymbol, 25 + (pBtnW - twUp) / 2, upY + (pBtnH - symbolHeight) / 2, framebuffer);
+    
+    int dnY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
+    UIFramework::drawButton(framebuffer, 25, dnY, pBtnW, pBtnH, "");
+    std::string dnSymbol = "\\/";
+    int twDn = typography.measureText(dnSymbol);
+    typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer);
+
+    // Render List Items
+    updateLibraryItems();
+    
+    int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
+    int startIndex = libraryPage * itemsPerPage;
+    int y = LIB_MAIN_Y;
+    typography.setFontSize(40.0f);
+    
+    for (int i = 0; i < itemsPerPage && (startIndex + i) < parsedLibraryItems.size(); i++) {
+        LibraryItem& item = parsedLibraryItems[startIndex + i];
+        
+        // Push down a bit so larger text is vertically centered
+        int rowY = y + 20;  
+        
+        std::string leftText = item.title + " - " + item.author;
+        
+        // Clamp leftText
+        int maxW = LIB_LIST_W - 100; // Leave 100px for percentage
+        while (leftText.length() > 3 && typography.measureText(leftText + "...") > maxW) {
+            leftText.pop_back();
+        }
+        if (leftText.length() < item.title.length() + item.author.length() + 3) {
+            leftText += "...";
+        }
+        
+        std::string rightText = item.completionPercent == -100 ? "100%" : std::to_string(item.completionPercent) + "%";
+        int rw = typography.measureText(rightText);
+        typography.renderText(leftText, LIB_LIST_X + 20, rowY, framebuffer);
+        typography.renderText(rightText, LIB_LIST_X + LIB_LIST_W - rw - 20, rowY, framebuffer);
+        
+        y += LIB_ROW_H;
+    }
+    
+    if (parsedLibraryItems.empty()) {
+        typography.renderText("No books found.", LIB_LIST_X + 20, LIB_MAIN_Y + 50, framebuffer);
+    }
+    typography.setFontSize(32.0f); // Restore after rendering the list
+    
     DisplayHAL::display(framebuffer);
 }
 
-std::string stripHTML(const std::string& html) {
-    std::string text;
+char* stripHTML(const char* html, size_t len, size_t& outLen) {
+    if (!html) {
+        outLen = 0;
+        return nullptr;
+    }
+    
+    // Allocate max possible size in PSRAM
+#ifndef NATIVE_TESTING
+    char* text = (char*)ps_malloc(len + 1);
+    if (!text) text = (char*)malloc(len + 1);
+#else
+    char* text = (char*)malloc(len + 1);
+#endif
+
+    if (!text) {
+        outLen = 0;
+        return nullptr;
+    }
+
+    size_t index = 0;
     bool inTag = false;
-    for (char c : html) {
+    for (size_t i = 0; i < len; i++) {
+        char c = html[i];
         if (c == '<') inTag = true;
         else if (c == '>') inTag = false;
         else if (!inTag) {
-            text += c;
+            text[index++] = c;
         }
     }
+    text[index] = '\0';
+    outLen = index;
     return text;
 }
 
 void drawReading() {
     UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
-    std::string textToRender = currentBookText.substr(currentReadingOffset);
-    typography.renderText(textToRender, 0, 0, framebuffer);
+    if (currentBookText) {
+        size_t remainingLen = currentBookTextLen - currentReadingOffset;
+        typography.renderText(currentBookText + currentReadingOffset, remainingLen, 20, 20, framebuffer);
+    }
     DisplayHAL::display(framebuffer);
 }
 
@@ -148,33 +363,71 @@ void openBook(int index) {
     if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
     if (path.length() >= 3 && path.substr(path.length() - 3) == ".md") isText = true;
 
+#ifndef NATIVE_TESTING
+    disableCore0WDT();
+    disableCore1WDT();
+#endif
+
+    if (currentBookText) {
+        free(currentBookText);
+        currentBookText = nullptr;
+        currentBookTextLen = 0;
+    }
+
     if (isText) {
-        if (textReader.openFile(path.c_str())) currentBookText = textReader.getPageText();
-        else currentBookText = "Failed to open text file.";
+        if (textReader.openFile(path.c_str())) {
+            std::string text = textReader.getPageText();
+            currentBookTextLen = text.length();
+#ifndef NATIVE_TESTING
+            currentBookText = (char*)ps_malloc(currentBookTextLen + 1);
+            if (!currentBookText) currentBookText = (char*)malloc(currentBookTextLen + 1);
+#else
+            currentBookText = (char*)malloc(currentBookTextLen + 1);
+#endif
+            if (currentBookText) {
+                memcpy(currentBookText, text.c_str(), currentBookTextLen + 1);
+            }
+        }
     } else if (epubParser.open(path)) {
         auto chapters = epubParser.getChapterList();
         if (!chapters.empty()) {
-            std::string html = epubParser.getFileContent(chapters[0]);
-            currentBookText = stripHTML(html);
-        } else {
-            currentBookText = "No chapters found in EPUB.";
+            size_t size = 0;
+            char* html = epubParser.getFileContent(chapters[0], size);
+            if (html) {
+                currentBookText = stripHTML(html, size, currentBookTextLen);
+                free(html);
+            }
         }
         epubParser.close();
-    } else {
-        currentBookText = "Failed to parse EPUB.";
     }
+
+#ifndef NATIVE_TESTING
+    enableCore0WDT();
+    enableCore1WDT();
+#endif
 
     currentBookPath = path;
     int savedOffset = loadBookmark(path);
 
     if (isText && textReader.isOpen()) {
         textReader.setPosition(savedOffset);
-        currentBookText = textReader.getPageText();
+        std::string text = textReader.getPageText();
+        if (currentBookText) free(currentBookText);
+        currentBookTextLen = text.length();
+#ifndef NATIVE_TESTING
+        currentBookText = (char*)ps_malloc(currentBookTextLen + 1);
+        if (!currentBookText) currentBookText = (char*)malloc(currentBookTextLen + 1);
+#else
+        currentBookText = (char*)malloc(currentBookTextLen + 1);
+#endif
+        if (currentBookText) {
+            memcpy(currentBookText, text.c_str(), currentBookTextLen + 1);
+        }
         currentReadingOffset = 0;
     } else {
         currentReadingOffset = savedOffset;
         if (currentReadingOffset < 0) currentReadingOffset = 0;
-        if (currentReadingOffset > currentBookText.length()) currentReadingOffset = 0;
+        if (currentReadingOffset > currentBookTextLen) currentReadingOffset = 0;
     }
 
     currentState = STATE_READING;
@@ -182,6 +435,7 @@ void openBook(int index) {
 }
 
 void drawWiFiSync() {
+    DisplayHAL::clear(); // Force hardware full refresh
     UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
     UIFramework::drawTopBar(framebuffer, "WiFi Sync Mode", 100);
     
@@ -195,15 +449,48 @@ void drawWiFiSync() {
 
 void handleTouch(int x, int y) {
     if (currentState == STATE_LIBRARY) {
-        if (y > 540 - 60) {
-            currentState = STATE_WIFI_SYNC;
-            startWiFiSync();
-            drawWiFiSync();
-            return;
-        }
-        int index = (y - 60) / 60;
-        if (index >= 0 && index < libraryFiles.size()) {
-            openBook(index);
+        if (x >= LIB_SIDE_X && y >= LIB_MAIN_Y) {
+            // Sidebar tapped
+            int btnIndex = (y - LIB_MAIN_Y) / (LIB_MAIN_H / 4);
+            if (btnIndex == 0) currentLibrarySort = LibrarySort::AUTHOR;
+            else if (btnIndex == 1) currentLibrarySort = LibrarySort::GENRE;
+            else if (btnIndex == 2) currentLibrarySort = LibrarySort::COMPLETION;
+            else if (btnIndex == 3) {
+                // 4th button: WiFi Sync
+                currentState = STATE_WIFI_SYNC;
+                startWiFiSync();
+                drawWiFiSync();
+                return;
+            }
+            libraryPage = 0; // Reset page on sort
+            drawLibrary();
+        } else if (x <= LIB_PAGING_W && y >= LIB_MAIN_Y) {
+            // Paging Area tapped
+            if (y < LIB_MAIN_Y + LIB_MAIN_H / 2) {
+                // UP
+                if (libraryPage > 0) libraryPage--;
+            } else {
+                // DOWN
+                int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
+                int maxPage = parsedLibraryItems.size() / itemsPerPage;
+                if (libraryPage < maxPage) libraryPage++;
+            }
+            drawLibrary();
+        } else if (x > LIB_PAGING_W && x < LIB_SIDE_X && y >= LIB_MAIN_Y) {
+            // List item tapped
+            int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
+            int itemIndex = (y - LIB_MAIN_Y) / LIB_ROW_H;
+            int globalIndex = libraryPage * itemsPerPage + itemIndex;
+            
+            if (globalIndex >= 0 && globalIndex < parsedLibraryItems.size()) {
+                std::string targetPath = parsedLibraryItems[globalIndex].file.path;
+                for (size_t i = 0; i < libraryFiles.size(); i++) {
+                    if (libraryFiles[i].path == targetPath) {
+                        openBook(i);
+                        break;
+                    }
+                }
+            }
         }
     } else if (currentState == STATE_READING) {
         if (y < 60 && x < 100) {
@@ -218,19 +505,37 @@ void handleTouch(int x, int y) {
         } else if (x > 960 / 2) {
             if (textReader.isOpen()) {
                 textReader.nextPage();
-                currentBookText = textReader.getPageText();
+                std::string text = textReader.getPageText();
+                if (currentBookText) free(currentBookText);
+                currentBookTextLen = text.length();
+#ifndef NATIVE_TESTING
+                currentBookText = (char*)ps_malloc(currentBookTextLen + 1);
+                if (!currentBookText) currentBookText = (char*)malloc(currentBookTextLen + 1);
+#else
+                currentBookText = (char*)malloc(currentBookTextLen + 1);
+#endif
+                if (currentBookText) memcpy(currentBookText, text.c_str(), currentBookTextLen + 1);
                 saveBookmark(currentBookPath, textReader.getPosition());
                 currentReadingOffset = 0;
             } else {
                 currentReadingOffset += 1200; // rough guess
-                if (currentReadingOffset > currentBookText.length()) currentReadingOffset = currentBookText.length();
+                if (currentReadingOffset > currentBookTextLen) currentReadingOffset = currentBookTextLen;
                 saveBookmark(currentBookPath, currentReadingOffset);
             }
             drawReading();
         } else {
             if (textReader.isOpen()) {
                 textReader.prevPage();
-                currentBookText = textReader.getPageText();
+                std::string text = textReader.getPageText();
+                if (currentBookText) free(currentBookText);
+                currentBookTextLen = text.length();
+#ifndef NATIVE_TESTING
+                currentBookText = (char*)ps_malloc(currentBookTextLen + 1);
+                if (!currentBookText) currentBookText = (char*)malloc(currentBookTextLen + 1);
+#else
+                currentBookText = (char*)malloc(currentBookTextLen + 1);
+#endif
+                if (currentBookText) memcpy(currentBookText, text.c_str(), currentBookTextLen + 1);
                 saveBookmark(currentBookPath, textReader.getPosition());
                 currentReadingOffset = 0;
             } else {
@@ -297,6 +602,19 @@ void setup() {
     DisplayHAL::clear();
     
 #ifndef NATIVE_TESTING
+    // Recover SD card from potential crash state by sending 80 dummy clock cycles
+    pinMode(SD_CS, OUTPUT);
+    digitalWrite(SD_CS, HIGH);
+    pinMode(SD_MOSI, OUTPUT);
+    digitalWrite(SD_MOSI, HIGH);
+    pinMode(SD_SCLK, OUTPUT);
+    for (int i = 0; i < 80; i++) {
+        digitalWrite(SD_SCLK, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(SD_SCLK, LOW);
+        delayMicroseconds(10);
+    }
+
     SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
     bool sdMounted = SD.begin(SD_CS, SPI, 4000000, "/sd", 5, false);
     if (!sdMounted) {
@@ -305,10 +623,24 @@ void setup() {
         sdMounted = SD.begin(SD_CS, SPI, 1000000, "/sd", 5, false);
     }
     if (!sdMounted) {
-        Serial.println("SD Card Mount Failed!");
+        Serial.println("SD Card Mount Failed! Cannot access SD card.");
     } else {
-        Serial.println("SD Card initialized.");
+        Serial.println("SD Card initialized successfully.");
         Serial.printf("SD Card Size: %lluMB\n", SD.cardSize() / (1024 * 1024));
+        
+        Serial.println("Testing SD root directory...");
+        File root = SD.open("/");
+        if (!root) {
+            Serial.println("Failed to open root directory '/'");
+        } else {
+            Serial.println("Root directory opened. Listing files:");
+            File file = root.openNextFile();
+            while(file) {
+                Serial.printf(" - %s (Dir: %d, Size: %d)\n", file.name(), file.isDirectory(), file.size());
+                file = root.openNextFile();
+            }
+            Serial.println("End of root directory listing.");
+        }
     }
 #endif
 
@@ -331,24 +663,39 @@ void setup() {
 void loop() {
     processSerialCommands();
 
+    static uint32_t touch_loop_interval = 0;
+
     int tx, ty;
-    if (DisplayHAL::getTouch(tx, ty)) {
 #ifndef NATIVE_TESTING
-        lastTouchTime = millis();
-        Serial.printf("Handling touch at %d, %d\n", tx, ty);
+    if (millis() > touch_loop_interval) {
+        touch_loop_interval = millis() + 300;
+        if (DisplayHAL::getTouch(tx, ty)) {
+            lastTouchTime = millis();
+            Serial.printf("Handling touch at %d, %d\n", tx, ty);
+            handleTouch(tx, ty);
+        }
+    }
 #else
+    if (DisplayHAL::getTouch(tx, ty)) {
         printf("Handling touch at %d, %d\n", tx, ty);
-#endif
         handleTouch(tx, ty);
     }
-
-#ifdef NATIVE_TESTING
+    
     DisplayHAL::handleEvents();
     if (DisplayHAL::windowShouldClose()) {
         exit(0);
     }
     usleep(100000); // 100ms
-#else
+#endif
+
+#ifndef NATIVE_TESTING
+    if (millis() - lastTouchTime > 15000) {
+        // Serial.println("Entering light sleep to save power...");
+        // esp_sleep_enable_ext0_wakeup((gpio_num_t)TOUCH_INT, 0); // Wake on touch (LOW)
+        // esp_light_sleep_start();
+        // Serial.println("Woke up from light sleep!");
+        lastTouchTime = millis(); // Reset timer so it doesn't spam
+    }
     delay(10);
 #endif
 }

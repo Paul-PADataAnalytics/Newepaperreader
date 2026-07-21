@@ -46,18 +46,19 @@ std::string FileBrowser::getCurrentPath() const {
 void FileBrowser::loadDirectory(const char* path) {
     files.clear();
     
+#ifndef NATIVE_TESTING
     File dir = SD.open(path);
     if (!dir || !dir.isDirectory()) {
-        Serial.printf("Failed to open directory: %s\n", path);
+        printf("FileBrowser::loadDirectory - Failed to open directory: %s\n", path);
         return;
     }
     
+    printf("FileBrowser::loadDirectory - Opened directory: %s\n", path);
     File file = dir.openNextFile();
     while (file) {
         FileInfo info;
         info.name = file.name();
         
-        // Ensure path correctly handles slashes
         std::string fullPath = currentPath;
         if (fullPath.back() != '/') {
             fullPath += "/";
@@ -68,11 +69,22 @@ void FileBrowser::loadDirectory(const char* path) {
         info.isDirectory = file.isDirectory();
         info.size = file.size();
         
-        // Skip hidden files (starting with dot)
         if (info.name.length() > 0 && info.name[0] != '.') {
             files.push_back(info);
         }
         
         file = dir.openNextFile();
     }
+#else
+    // Mock for native testing
+    FileInfo info1 = {"The Great Gatsby.epub", "/books/The Great Gatsby.epub", false, 1200000};
+    FileInfo info2 = {"Pride and Prejudice.epub", "/books/Pride and Prejudice.epub", false, 800000};
+    FileInfo info3 = {"1984.epub", "/books/1984.epub", false, 950000};
+    FileInfo info4 = {"To Kill a Mockingbird.epub", "/books/To Kill a Mockingbird.epub", false, 1100000};
+    
+    files.push_back(info1);
+    files.push_back(info2);
+    files.push_back(info3);
+    files.push_back(info4);
+#endif
 }

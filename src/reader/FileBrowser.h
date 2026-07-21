@@ -1,9 +1,12 @@
 #pragma once
 
+#ifndef NATIVE_TESTING
 #include <Arduino.h>
 #include <SD.h>
+#endif
 #include <vector>
 #include <string>
+
 
 struct FileInfo {
     std::string name;

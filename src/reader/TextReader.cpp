@@ -15,14 +15,22 @@ TextReader::~TextReader() {
 bool TextReader::openFile(const char* filepath) {
     closeFile();
 
+#ifndef NATIVE_TESTING
     file = SD.open(filepath, FILE_READ);
     if (!file) {
         Serial.printf("Failed to open text file: %s\n", filepath);
         return false;
     }
+#else
+    file = (void*)1;
+#endif
 
     currentFilePath = filepath;
+#ifndef NATIVE_TESTING
     fileSize = file.size();
+#else
+    fileSize = 10000;
+#endif
     currentPosition = 0;
 
     pageHistory.clear();
@@ -32,9 +40,11 @@ bool TextReader::openFile(const char* filepath) {
 }
 
 void TextReader::closeFile() {
+#ifndef NATIVE_TESTING
     if (file) {
         file.close();
     }
+#endif
     currentFilePath = "";
     fileSize = 0;
     currentPosition = 0;
@@ -43,12 +53,16 @@ void TextReader::closeFile() {
 std::string TextReader::getPageText() {
     if (!file) return "";
 
+#ifndef NATIVE_TESTING
     file.seek(currentPosition);
 
     // Read a chunk of text. In a real scenario, this would read until the
     // typography engine says the screen is full. For basic implementation,
     // we just read a fixed amount of bytes.
     size_t bytesRead = file.read((uint8_t*)pageBuffer, sizeof(pageBuffer) - 1);
+#else
+    size_t bytesRead = 100;
+#endif
     pageBuffer[bytesRead] = '\0'; // Null-terminate
 
     std::string text(pageBuffer);
@@ -94,7 +108,11 @@ float TextReader::getProgress() const {
 }
 
 bool TextReader::isOpen() const {
+#ifndef NATIVE_TESTING
     return file == true;
+#else
+    return file != nullptr;
+#endif
 }
 
 size_t TextReader::getPosition() const {

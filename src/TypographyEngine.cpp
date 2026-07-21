@@ -41,6 +41,22 @@ static void drawPixel(int x, int y, uint8_t color, uint8_t* framebuffer) {
 #endif
 }
 
+static uint8_t getPixel(int x, int y, uint8_t* framebuffer) {
+#ifdef NATIVE_TESTING
+    if (x < 0 || x >= EPD_WIDTH || y < 0 || y >= EPD_HEIGHT) return 15;
+    int index = (y * EPD_WIDTH + x) / 2;
+#else
+    if (x < 0 || x >= 960 || y < 0 || y >= 540) return 15;
+    int index = (y * 960 + x) / 2;
+#endif
+    bool isLower = (x % 2 != 0);
+    if (isLower) {
+        return framebuffer[index] & 0x0F;
+    } else {
+        return (framebuffer[index] & 0xF0) >> 4;
+    }
+}
+
 TypographyEngine::TypographyEngine() : fontBuffer(nullptr), isEmbeddedFont(false), fontSize(16.0f), fontInfo(nullptr) {
     fontInfo = malloc(sizeof(stbtt_fontinfo));
 }
@@ -108,41 +124,47 @@ bool TypographyEngine::loadFontFromMemory(const uint8_t* fontData, size_t size, 
     return true;
 }
 
-// Simple UTF-8 decoder
-static uint32_t decodeUTF8(const std::string& text, size_t& i) {
+uint32_t decodeUTF8(const char* text, size_t len, size_t& i) {
+    if (i >= len) return 0;
+    unsigned char c = text[i];
     uint32_t codepoint = 0;
-    uint8_t c = text[i];
-    if (c <= 0x7F) {
+    int bytes = 0;
+    
+    if (c < 0x80) {
         codepoint = c;
-        i++;
+        bytes = 1;
     } else if ((c & 0xE0) == 0xC0) {
         codepoint = c & 0x1F;
-        if (i + 1 < text.length()) {
-            codepoint = (codepoint << 6) | (text[i+1] & 0x3F);
-            i += 2;
-        } else i++;
+        bytes = 2;
     } else if ((c & 0xF0) == 0xE0) {
         codepoint = c & 0x0F;
-        if (i + 2 < text.length()) {
-            codepoint = (codepoint << 6) | (text[i+1] & 0x3F);
-            codepoint = (codepoint << 6) | (text[i+2] & 0x3F);
-            i += 3;
-        } else i++;
+        bytes = 3;
     } else if ((c & 0xF8) == 0xF0) {
         codepoint = c & 0x07;
-        if (i + 3 < text.length()) {
-            codepoint = (codepoint << 6) | (text[i+1] & 0x3F);
-            codepoint = (codepoint << 6) | (text[i+2] & 0x3F);
-            codepoint = (codepoint << 6) | (text[i+3] & 0x3F);
-            i += 4;
-        } else i++;
+        bytes = 4;
     } else {
+        i++;
+        return '?';
+    }
+    
+    i++;
+    for (int b = 1; b < bytes; b++) {
+        if (i >= len) break;
+        codepoint = (codepoint << 6) | (text[i] & 0x3F);
         i++;
     }
     return codepoint;
 }
 
+void TypographyEngine::setFontSize(float size) {
+    this->fontSize = size;
+}
+
 void TypographyEngine::renderText(const std::string& text, int startX, int startY, uint8_t* framebuffer) {
+    renderText(text.c_str(), text.length(), startX, startY, framebuffer);
+}
+
+void TypographyEngine::renderText(const char* text, size_t len, int startX, int startY, uint8_t* framebuffer) {
     if (!fontBuffer) return; // Font failed to load
     
     stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
@@ -156,8 +178,8 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
     descent = descent * scale;
     lineGap = lineGap * scale;
     
-    int x = startX + MARGIN_LEFT;
-    int y = startY + MARGIN_TOP + ascent;
+    int x = startX;
+    int y = startY + ascent;
     
 #ifdef NATIVE_TESTING
     int screenWidth = EPD_WIDTH;
@@ -167,11 +189,11 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
     int screenHeight = 540;
 #endif
 
-    for (size_t i = 0; i < text.length(); ) {
-        uint32_t codepoint = decodeUTF8(text, i);
+    for (size_t i = 0; i < len; ) {
+        uint32_t codepoint = decodeUTF8(text, len, i);
         
         if (codepoint == '\n') {
-            x = startX + MARGIN_LEFT;
+            x = startX;
             y += (ascent - descent + lineGap + LINE_SPACING);
             continue;
         }
@@ -182,7 +204,7 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
         int glyphWidth = advanceWidth * scale;
         
         if (x + glyphWidth > screenWidth - MARGIN_RIGHT) {
-            x = startX + MARGIN_LEFT;
+            x = startX;
             y += (ascent - descent + lineGap + LINE_SPACING);
         }
         
@@ -219,9 +241,12 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
                 for (int c = 0; c < w; ++c) {
                     uint8_t alpha = bitmap[r * w + c];
                     if (alpha > 0) {
-                        // Basic anti-aliasing approximation
-                        uint8_t gray = 15 - (alpha * 15 / 255);
-                        drawPixel(x + c_x1 + c, y + c_y1 + r, gray, framebuffer);
+                        int px = x + c_x1 + c;
+                        int py = y + c_y1 + r;
+                        uint8_t bg = getPixel(px, py, framebuffer);
+                        // Blend: bg * (255 - alpha) / 255 (since text is black/0)
+                        uint8_t gray = (bg * (255 - alpha)) / 255;
+                        drawPixel(px, py, gray, framebuffer);
                     }
                 }
             }
@@ -233,8 +258,11 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
 }
 
 size_t TypographyEngine::findPreviousPageStart(const std::string& text, size_t currentIndex) {
-    if (!fontBuffer) return 0; // Font failed to load
-    if (currentIndex == 0 || text.empty()) return 0;
+    return findPreviousPageStart(text.c_str(), text.length(), currentIndex);
+}
+
+size_t TypographyEngine::findPreviousPageStart(const char* text, size_t len, size_t currentIndex) {
+    if (!fontBuffer || currentIndex == 0) return 0;
     
     stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
     float scale = stbtt_ScaleForPixelHeight(info, fontSize);
@@ -254,8 +282,8 @@ size_t TypographyEngine::findPreviousPageStart(const std::string& text, size_t c
     int screenHeight = 540;
 #endif
 
-    int y = screenHeight - MARGIN_BOTTOM - descent; // Start from bottom
-    int x = screenWidth - MARGIN_RIGHT;
+    int y = screenHeight - descent; // Start from bottom
+    int x = screenWidth;
     
     size_t i = currentIndex;
     
@@ -276,7 +304,7 @@ size_t TypographyEngine::findPreviousPageStart(const std::string& text, size_t c
         }
         
         size_t tempI = i;
-        uint32_t codepoint = decodeUTF8(text, tempI);
+        uint32_t codepoint = decodeUTF8(text, len, tempI);
         
         if (codepoint == '\n') {
             x = screenWidth - MARGIN_RIGHT;
@@ -311,4 +339,24 @@ size_t TypographyEngine::findPreviousPageStart(const std::string& text, size_t c
     }
     
     return 0;
+}
+
+int TypographyEngine::measureText(const std::string& text) {
+    return measureText(text.c_str(), text.length());
+}
+
+int TypographyEngine::measureText(const char* text, size_t len) {
+    if (!fontBuffer) return 0;
+    stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
+    float scale = stbtt_ScaleForPixelHeight(info, fontSize);
+    
+    int width = 0;
+    for (size_t i = 0; i < len; ) {
+        uint32_t codepoint = decodeUTF8(text, len, i);
+        if (codepoint == '\n') continue;
+        int advanceWidth, leftSideBearing;
+        stbtt_GetCodepointHMetrics(info, codepoint, &advanceWidth, &leftSideBearing);
+        width += (int)(advanceWidth * scale);
+    }
+    return width;
 }

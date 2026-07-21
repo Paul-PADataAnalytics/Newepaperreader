@@ -42,49 +42,64 @@ std::vector<std::string> EpubParser::getChapterList() const {
     return m_spine;
 }
 
-std::string EpubParser::getFileContent(const std::string& internalPath) {
-    mz_zip_archive zip_archive;
-    memset(&zip_archive, 0, sizeof(zip_archive));
+char* EpubParser::getFileContent(const std::string& internalPath, size_t& outSize) {
+    mz_zip_archive* zip_archive = (mz_zip_archive*)malloc(sizeof(mz_zip_archive));
+    if (!zip_archive) {
+        outSize = 0;
+        return nullptr;
+    }
+    memset(zip_archive, 0, sizeof(mz_zip_archive));
 
-    if (!mz_zip_reader_init_file(&zip_archive, m_filepath.c_str(), 0)) {
+    if (!mz_zip_reader_init_file(zip_archive, m_filepath.c_str(), MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY)) {
         std::cerr << "Failed to open zip file: " << m_filepath << std::endl;
-        return "";
+        outSize = 0;
+        free(zip_archive);
+        return nullptr;
     }
 
-    size_t uncomp_size = 0;
-    void* p = mz_zip_reader_extract_file_to_heap(&zip_archive, internalPath.c_str(), &uncomp_size, 0);
+    printf("MINIZ DEBUG: Total files = %u\n", zip_archive->m_total_files);
+    for (mz_uint i = 0; i < zip_archive->m_total_files; i++) {
+        char namebuf[256];
+        if (mz_zip_reader_get_filename(zip_archive, i, namebuf, sizeof(namebuf))) {
+            printf("MINIZ DEBUG: File %u = '%s'\n", i, namebuf);
+        }
+    }
+
+    void* p = mz_zip_reader_extract_file_to_heap(zip_archive, internalPath.c_str(), &outSize, 0);
     
-    std::string content;
-    if (p) {
-        content.assign(static_cast<const char*>(p), uncomp_size);
-        mz_free(p);
-    } else {
+    if (!p) {
         std::cerr << "Failed to extract file: " << internalPath << std::endl;
+        outSize = 0;
     }
 
-    mz_zip_reader_end(&zip_archive);
-    return content;
+    mz_zip_reader_end(zip_archive);
+    free(zip_archive);
+    return static_cast<char*>(p);
 }
 
 bool EpubParser::parseContainer() {
-    std::string containerContent = getFileContent("META-INF/container.xml");
-    if (containerContent.empty()) {
+    size_t size = 0;
+    char* containerBuffer = getFileContent("META-INF/container.xml", size);
+    if (!containerBuffer) {
         std::cerr << "META-INF/container.xml not found or empty." << std::endl;
         return false;
     }
+    std::string containerContent(containerBuffer, size);
+    free(containerBuffer); // or mz_free depending on macro, free works since we mapped MZ_FREE
 
-    XMLDocument doc;
-    XMLError err = doc.Parse(containerContent.c_str(), containerContent.size());
+    XMLDocument* doc = new XMLDocument();
+    XMLError err = doc->Parse(containerContent.c_str(), containerContent.size());
     if (err != XML_SUCCESS) {
         std::cerr << "Failed to parse container.xml" << std::endl;
+        delete doc;
         return false;
     }
 
-    XMLElement* container = doc.FirstChildElement("container");
-    if (!container) return false;
+    XMLElement* container = doc->FirstChildElement("container");
+    if (!container) { delete doc; return false; }
 
     XMLElement* rootfiles = container->FirstChildElement("rootfiles");
-    if (!rootfiles) return false;
+    if (!rootfiles) { delete doc; return false; }
 
     XMLElement* rootfile = rootfiles->FirstChildElement("rootfile");
     while (rootfile) {
@@ -99,6 +114,7 @@ bool EpubParser::parseContainer() {
                 } else {
                     m_opfDir = "";
                 }
+                delete doc;
                 return true;
             }
         }
@@ -106,27 +122,32 @@ bool EpubParser::parseContainer() {
     }
 
     std::cerr << "No valid OPF rootfile found in container.xml." << std::endl;
+    delete doc;
     return false;
 }
 
 bool EpubParser::parseOpf() {
     if (m_opfPath.empty()) return false;
 
-    std::string opfContent = getFileContent(m_opfPath);
-    if (opfContent.empty()) {
+    size_t size = 0;
+    char* opfBuffer = getFileContent(m_opfPath, size);
+    if (!opfBuffer) {
         std::cerr << "OPF file not found: " << m_opfPath << std::endl;
         return false;
     }
+    std::string opfContent(opfBuffer, size);
+    free(opfBuffer);
 
-    XMLDocument doc;
-    XMLError err = doc.Parse(opfContent.c_str(), opfContent.size());
+    XMLDocument* doc = new XMLDocument();
+    XMLError err = doc->Parse(opfContent.c_str(), opfContent.size());
     if (err != XML_SUCCESS) {
         std::cerr << "Failed to parse OPF file." << std::endl;
+        delete doc;
         return false;
     }
 
-    XMLElement* package = doc.FirstChildElement("package");
-    if (!package) return false;
+    XMLElement* package = doc->FirstChildElement("package");
+    if (!package) { delete doc; return false; }
 
     XMLElement* manifest = package->FirstChildElement("manifest");
     if (manifest) {
@@ -142,6 +163,7 @@ bool EpubParser::parseOpf() {
         }
     } else {
         std::cerr << "No manifest found in OPF." << std::endl;
+        delete doc;
         return false;
     }
 
@@ -160,9 +182,11 @@ bool EpubParser::parseOpf() {
         }
     } else {
         std::cerr << "No spine found in OPF." << std::endl;
+        delete doc;
         return false;
     }
 
+    delete doc;
     return true;
 }
 

@@ -1,7 +1,9 @@
 #pragma once
 
+#ifndef NATIVE_TESTING
 #include <Arduino.h>
 #include <SD.h>
+#endif
 #include <string>
 #include <vector>
 
@@ -36,7 +38,11 @@ public:
 
 
 private:
+#ifndef NATIVE_TESTING
     File file;
+#else
+    void* file;
+#endif
     std::string currentFilePath;
     
     // Pagination state

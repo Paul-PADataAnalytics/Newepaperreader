@@ -585,7 +585,7 @@ typedef struct mz_dummy_time_t_tag
 #define MZ_MALLOC(x) NULL
 #define MZ_FREE(x) (void)x, ((void)0)
 #define MZ_REALLOC(p, x) NULL
-#else
+#elif !defined(MZ_MALLOC)
 #define MZ_MALLOC(x) malloc(x)
 #define MZ_FREE(x) free(x)
 #define MZ_REALLOC(p, x) realloc(p, x)
@@ -964,6 +964,7 @@ struct tinfl_decompressor_tag
     mz_uint8 m_code_size_1[TINFL_MAX_HUFF_SYMBOLS_1];
     mz_uint8 m_code_size_2[TINFL_MAX_HUFF_SYMBOLS_2];
     mz_uint8 m_raw_header[4], m_len_codes[TINFL_MAX_HUFF_SYMBOLS_0 + TINFL_MAX_HUFF_SYMBOLS_1 + 137];
+    mz_uint8 m_overflow_padding[1024]; // Pad to prevent buffer overflow from crashing the ESP32
 };
 
 #ifdef __cplusplus

@@ -17,9 +17,11 @@
 #include "TypographyEngine.h"
 #include "EpubParser.h"
 #include "embedded_font.h"
+#include "reader/AppStorage.h"
 #include "reader/FileBrowser.h"
 #include "reader/TextReader.h"
 #include "comm/WiFiSync.h"
+#include "ui/AppScreens.h"
 
 // SD Pins are defined in LilyGo-EPD47 utilities.h
 
@@ -77,52 +79,6 @@ std::vector<LibraryItem> parsedLibraryItems;
 void updateLibraryItems();
 
 
-void saveBookmark(const std::string& path, int offset) {
-#ifndef NATIVE_TESTING
-    std::string bmkPath = path + ".bmk";
-    if (bmkPath.find("/sd") == 0) {
-        bmkPath = bmkPath.substr(3);
-    }
-    File f = SD.open(bmkPath.c_str(), FILE_WRITE);
-    if (f) {
-        f.printf("%d", offset);
-        f.close();
-    }
-#else
-    std::string bmkPath = path + ".bmk";
-    FILE* f = fopen(bmkPath.c_str(), "w");
-    if (f) {
-        fprintf(f, "%d", offset);
-        fclose(f);
-    }
-#endif
-}
-
-int loadBookmark(const std::string& path) {
-#ifndef NATIVE_TESTING
-    std::string bmkPath = path + ".bmk";
-    if (bmkPath.find("/sd") == 0) {
-        bmkPath = bmkPath.substr(3);
-    }
-    File f = SD.open(bmkPath.c_str(), FILE_READ);
-    if (f) {
-        String s = f.readString();
-        f.close();
-        return s.toInt();
-    }
-#else
-    std::string bmkPath = path + ".bmk";
-    FILE* f = fopen(bmkPath.c_str(), "r");
-    if (f) {
-        int offset = 0;
-        fscanf(f, "%d", &offset);
-        fclose(f);
-        return offset;
-    }
-#endif
-    return 0;
-}
-
 void updateLibraryItems() {
     parsedLibraryItems.clear();
     fileBrowser.setRoot("/books");
@@ -155,11 +111,7 @@ void updateLibraryItems() {
             item.title = item.title.substr(0, dotPos);
         }
         
-#ifndef NATIVE_TESTING
-        int offset = loadBookmark("/sd/books/" + f.name);
-#else
-        int offset = loadBookmark("/books/" + f.name);
-#endif
+    int offset = AppStorage::loadBookmark(AppStorage::toRuntimePath("/books/" + f.name));
 
         if (offset > 0 && f.size > 0) {
             // Rough estimation
@@ -346,27 +298,17 @@ void drawReading() {
 void openBook(int index) {
     if (index < 0 || index >= libraryFiles.size()) return;
     
-    std::string path = libraryFiles[index].path;
-#ifndef NATIVE_TESTING
-    path = "/sd" + path;
-#endif
+    std::string path = AppStorage::toRuntimePath(libraryFiles[index].path);
 
 #ifndef NATIVE_TESTING
     Serial.printf("Opening book: %s\n", path.c_str());
 #endif
 
-    UIFramework::clearArea(framebuffer, 0, 0, 960, 540);
-    UIFramework::drawTopBar(framebuffer, "Loading...", 100);
-    DisplayHAL::display(framebuffer);
+    AppScreens::drawLoading(framebuffer, "Loading...");
 
     bool isText = false;
     if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
     if (path.length() >= 3 && path.substr(path.length() - 3) == ".md") isText = true;
-
-#ifndef NATIVE_TESTING
-    disableCore0WDT();
-    disableCore1WDT();
-#endif
 
     if (currentBookText) {
         free(currentBookText);
@@ -401,13 +343,8 @@ void openBook(int index) {
         epubParser.close();
     }
 
-#ifndef NATIVE_TESTING
-    enableCore0WDT();
-    enableCore1WDT();
-#endif
-
     currentBookPath = path;
-    int savedOffset = loadBookmark(path);
+    int savedOffset = AppStorage::loadBookmark(path);
 
     if (isText && textReader.isOpen()) {
         textReader.setPosition(savedOffset);
@@ -495,10 +432,10 @@ void handleTouch(int x, int y) {
     } else if (currentState == STATE_READING) {
         if (y < 60 && x < 100) {
             if (textReader.isOpen()) {
-                saveBookmark(currentBookPath, textReader.getPosition());
+                AppStorage::saveBookmark(currentBookPath, textReader.getPosition());
                 textReader.closeFile();
             } else {
-                saveBookmark(currentBookPath, currentReadingOffset);
+                AppStorage::saveBookmark(currentBookPath, currentReadingOffset);
             }
             currentState = STATE_LIBRARY;
             drawLibrary();
@@ -515,12 +452,12 @@ void handleTouch(int x, int y) {
                 currentBookText = (char*)malloc(currentBookTextLen + 1);
 #endif
                 if (currentBookText) memcpy(currentBookText, text.c_str(), currentBookTextLen + 1);
-                saveBookmark(currentBookPath, textReader.getPosition());
+                AppStorage::saveBookmark(currentBookPath, textReader.getPosition());
                 currentReadingOffset = 0;
             } else {
                 currentReadingOffset += 1200; // rough guess
                 if (currentReadingOffset > currentBookTextLen) currentReadingOffset = currentBookTextLen;
-                saveBookmark(currentBookPath, currentReadingOffset);
+                AppStorage::saveBookmark(currentBookPath, currentReadingOffset);
             }
             drawReading();
         } else {
@@ -536,12 +473,12 @@ void handleTouch(int x, int y) {
                 currentBookText = (char*)malloc(currentBookTextLen + 1);
 #endif
                 if (currentBookText) memcpy(currentBookText, text.c_str(), currentBookTextLen + 1);
-                saveBookmark(currentBookPath, textReader.getPosition());
+                AppStorage::saveBookmark(currentBookPath, textReader.getPosition());
                 currentReadingOffset = 0;
             } else {
                 currentReadingOffset -= 1200;
                 if (currentReadingOffset < 0) currentReadingOffset = 0;
-                saveBookmark(currentBookPath, currentReadingOffset);
+                AppStorage::saveBookmark(currentBookPath, currentReadingOffset);
             }
             drawReading();
         }
@@ -601,48 +538,7 @@ void setup() {
     DisplayHAL::powerOn();
     DisplayHAL::clear();
     
-#ifndef NATIVE_TESTING
-    // Recover SD card from potential crash state by sending 80 dummy clock cycles
-    pinMode(SD_CS, OUTPUT);
-    digitalWrite(SD_CS, HIGH);
-    pinMode(SD_MOSI, OUTPUT);
-    digitalWrite(SD_MOSI, HIGH);
-    pinMode(SD_SCLK, OUTPUT);
-    for (int i = 0; i < 80; i++) {
-        digitalWrite(SD_SCLK, HIGH);
-        delayMicroseconds(10);
-        digitalWrite(SD_SCLK, LOW);
-        delayMicroseconds(10);
-    }
-
-    SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
-    bool sdMounted = SD.begin(SD_CS, SPI, 4000000, "/sd", 5, false);
-    if (!sdMounted) {
-        Serial.println("Retrying SD Card Mount at 1MHz...");
-        delay(100);
-        sdMounted = SD.begin(SD_CS, SPI, 1000000, "/sd", 5, false);
-    }
-    if (!sdMounted) {
-        Serial.println("SD Card Mount Failed! Cannot access SD card.");
-    } else {
-        Serial.println("SD Card initialized successfully.");
-        Serial.printf("SD Card Size: %lluMB\n", SD.cardSize() / (1024 * 1024));
-        
-        Serial.println("Testing SD root directory...");
-        File root = SD.open("/");
-        if (!root) {
-            Serial.println("Failed to open root directory '/'");
-        } else {
-            Serial.println("Root directory opened. Listing files:");
-            File file = root.openNextFile();
-            while(file) {
-                Serial.printf(" - %s (Dir: %d, Size: %d)\n", file.name(), file.isDirectory(), file.size());
-                file = root.openNextFile();
-            }
-            Serial.println("End of root directory listing.");
-        }
-    }
-#endif
+    AppStorage::initialize();
 
     UIFramework::init();
     

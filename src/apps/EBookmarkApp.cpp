@@ -265,107 +265,108 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
     if (fullRefresh) {
         DisplayHAL::clear();
         UIFramework::clearArea(framebuffer, 0, 0, w, h);
-    } else {
-        // Step 1: Localized clear pass - wipe area in memory & flush to E-Ink display to reset microspheres
-        UIFramework::clearArea(framebuffer, 0, 60, w, h - 60);
-        DisplayHAL::display(framebuffer);
     }
 
-    int backX = w - 120;
-    int backY = 10;
-    int backW = 100;
-    int backH = 40;
-    UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
-    typography.setFontSize(24.0f);
-    int backTextW = typography.measureText("Back");
-    typography.renderText("Back", backX + (backW - backTextW) / 2, backY + 8, framebuffer);
+    auto renderDetailContent = [this, &book, w, h]() {
+        int backX = w - 120;
+        int backY = 10;
+        int backW = 100;
+        int backH = 40;
+        UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
+        typography.setFontSize(24.0f);
+        int backTextW = typography.measureText("Back");
+        typography.renderText("Back", backX + (backW - backTextW) / 2, backY + 8, framebuffer);
 
-    typography.setFontSize(28.0f);
-    std::string topText = "eBookmark - " + book.title;
-    if (!book.author.empty() && book.author != "Unknown Author") {
-        topText += " by " + book.author;
-    }
-    int maxTopW = backX - 40;
-    if (typography.measureText(topText) > maxTopW) {
-        while (topText.length() > 3 && typography.measureText(topText + "...") > maxTopW) {
-            topText.pop_back();
+        typography.setFontSize(28.0f);
+        std::string topText = "eBookmark - " + book.title;
+        if (!book.author.empty() && book.author != "Unknown Author") {
+            topText += " by " + book.author;
         }
-        topText += "...";
+        int maxTopW = backX - 40;
+        if (typography.measureText(topText) > maxTopW) {
+            while (topText.length() > 3 && typography.measureText(topText + "...") > maxTopW) {
+                topText.pop_back();
+            }
+            topText += "...";
+        }
+        typography.renderText(topText, 20, 15, framebuffer, 0x05);
+
+        DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
+
+        std::string pageStr = std::to_string(book.currentPage) + " / " + std::to_string(book.totalPages);
+        typography.setFontSize(80.0f);
+        int pW = typography.measureText(pageStr);
+        int pX = (w - pW) / 2;
+        int pY = 180;
+        typography.renderText(pageStr, pX, pY, framebuffer);
+
+        int btnY1 = 185;
+        int btnW1 = 70;
+        int btnH1 = 70;
+        int minusX = pX - 90;
+        int plusX = pX + pW + 20;
+
+        UIFramework::drawButton(framebuffer, minusX, btnY1, btnW1, btnH1, "");
+        UIFramework::drawButton(framebuffer, plusX, btnY1, btnW1, btnH1, "");
+        
+        typography.setFontSize(36.0f);
+        int signW1 = typography.measureText("-");
+        int signW2 = typography.measureText("+");
+        typography.renderText("-", minusX + (btnW1 - signW1) / 2, btnY1 + 16, framebuffer);
+        typography.renderText("+", plusX + (btnW1 - signW2) / 2, btnY1 + 16, framebuffer);
+
+        int btnY2 = 270;
+        int btnW2 = 70;
+        int btnH2 = 50;
+
+        UIFramework::drawButton(framebuffer, minusX, btnY2, btnW2, btnH2, "");
+        UIFramework::drawButton(framebuffer, plusX, btnY2, btnW2, btnH2, "");
+        
+        typography.setFontSize(24.0f);
+        int signW3 = typography.measureText("-5");
+        int signW4 = typography.measureText("+5");
+        typography.renderText("-5", minusX + (btnW2 - signW3) / 2, btnY2 + 12, framebuffer);
+        typography.renderText("+5", plusX + (btnW2 - signW4) / 2, btnY2 + 12, framebuffer);
+
+        int days = EBookmarkManager::getInstance().getDaysReading(book);
+        float avg = EBookmarkManager::getInstance().getAvgPagesPerSitting(book);
+        
+        char daysStr[32];
+        snprintf(daysStr, sizeof(daysStr), "Days Reading: %d", days);
+        
+        char avgStr[32];
+        snprintf(avgStr, sizeof(avgStr), "Pages/Sit Avg: %.1f", avg);
+        
+        std::string genreStr = "Genre: " + (book.genre.empty() ? "None" : book.genre);
+        
+        typography.setFontSize(24.0f);
+        typography.renderText(genreStr, 50, 395, framebuffer, 0x03);
+        typography.renderText(daysStr, 380, 395, framebuffer, 0x03);
+        typography.renderText(avgStr, 700, 395, framebuffer, 0x03);
+
+        int barY = 460;
+        int barH = 16;
+        int barX = 50;
+        int barW = w - 100;
+        
+        float progress = book.totalPages > 0 ? (float)book.currentPage / book.totalPages : 0.0f;
+        if (progress > 1.0f) progress = 1.0f;
+        
+        DisplayHAL::drawRect(barX, barY, barW, barH, 0x00, framebuffer);
+        DisplayHAL::fillRect(barX, barY, (int)(barW * progress), barH, 0x00, framebuffer);
+
+        char percentStr[32];
+        snprintf(percentStr, sizeof(percentStr), "%d%% Complete", (int)(progress * 100));
+        int percentW = typography.measureText(percentStr);
+        typography.renderText(percentStr, (w - percentW) / 2, barY + 25, framebuffer, 0x05);
+    };
+
+    if (fullRefresh) {
+        renderDetailContent();
+        DisplayHAL::display(framebuffer);
+    } else {
+        UIFramework::perform2PassPartialUpdate(framebuffer, 0, 60, w, h - 60, renderDetailContent);
     }
-    typography.renderText(topText, 20, 15, framebuffer, 0x05);
-
-    DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
-
-    std::string pageStr = std::to_string(book.currentPage) + " / " + std::to_string(book.totalPages);
-    typography.setFontSize(80.0f);
-    int pW = typography.measureText(pageStr);
-    int pX = (w - pW) / 2;
-    int pY = 180;
-    typography.renderText(pageStr, pX, pY, framebuffer);
-
-    int btnY1 = 185;
-    int btnW1 = 70;
-    int btnH1 = 70;
-    int minusX = pX - 90;
-    int plusX = pX + pW + 20;
-
-    UIFramework::drawButton(framebuffer, minusX, btnY1, btnW1, btnH1, "");
-    UIFramework::drawButton(framebuffer, plusX, btnY1, btnW1, btnH1, "");
-    
-    typography.setFontSize(36.0f);
-    int signW1 = typography.measureText("-");
-    int signW2 = typography.measureText("+");
-    typography.renderText("-", minusX + (btnW1 - signW1) / 2, btnY1 + 16, framebuffer);
-    typography.renderText("+", plusX + (btnW1 - signW2) / 2, btnY1 + 16, framebuffer);
-
-    int btnY2 = 270;
-    int btnW2 = 70;
-    int btnH2 = 50;
-
-    UIFramework::drawButton(framebuffer, minusX, btnY2, btnW2, btnH2, "");
-    UIFramework::drawButton(framebuffer, plusX, btnY2, btnW2, btnH2, "");
-    
-    typography.setFontSize(24.0f);
-    int signW3 = typography.measureText("-5");
-    int signW4 = typography.measureText("+5");
-    typography.renderText("-5", minusX + (btnW2 - signW3) / 2, btnY2 + 12, framebuffer);
-    typography.renderText("+5", plusX + (btnW2 - signW4) / 2, btnY2 + 12, framebuffer);
-
-    DisplayHAL::drawHLine(0, 370, w, 0x00, framebuffer);
-    
-    int days = EBookmarkManager::getInstance().getDaysReading(book);
-    float avg = EBookmarkManager::getInstance().getAvgPagesPerSitting(book);
-    
-    char daysStr[32];
-    snprintf(daysStr, sizeof(daysStr), "Days Reading: %d", days);
-    
-    char avgStr[32];
-    snprintf(avgStr, sizeof(avgStr), "Pages/Sit Avg: %.1f", avg);
-    
-    std::string genreStr = "Genre: " + (book.genre.empty() ? "None" : book.genre);
-    
-    typography.setFontSize(24.0f);
-    typography.renderText(genreStr, 50, 395, framebuffer, 0x03);
-    typography.renderText(daysStr, 380, 395, framebuffer, 0x03);
-    typography.renderText(avgStr, 700, 395, framebuffer, 0x03);
-
-    int barY = 460;
-    int barH = 16;
-    int barX = 50;
-    int barW = w - 100;
-    
-    float progress = book.totalPages > 0 ? (float)book.currentPage / book.totalPages : 0.0f;
-    if (progress > 1.0f) progress = 1.0f;
-    
-    DisplayHAL::drawRect(barX, barY, barW, barH, 0x00, framebuffer);
-    DisplayHAL::fillRect(barX, barY, (int)(barW * progress), barH, 0x00, framebuffer);
-
-    char percentStr[32];
-    snprintf(percentStr, sizeof(percentStr), "%d%% Complete", (int)(progress * 100));
-    int percentW = typography.measureText(percentStr);
-    typography.renderText(percentStr, (w - percentW) / 2, barY + 25, framebuffer, 0x05);
-
-    DisplayHAL::display(framebuffer);
 }
 
 void EBookmarkApp::handleTouch(int x, int y) {

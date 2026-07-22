@@ -104,22 +104,19 @@ void TimerApp::draw() {
         DisplayHAL::clear();
     }
 
-    // Pass 1: Localized clear pass - wipe time display area in memory & flush to E-Ink panel to reset microspheres
-    UIFramework::clearArea(framebuffer, 0, 80, w, h - 80);
-    DisplayHAL::display(framebuffer);
-
-    // Pass 2: Draw mode selector and timer digit displays, then flush to hardware panel
-    drawModeSelector();
-    
-    if (activeMode == TimerMode::CLOCK) {
-        drawClockMode();
-    } else if (activeMode == TimerMode::STOPWATCH) {
-        drawStopwatchMode();
-    } else if (activeMode == TimerMode::COUNTDOWN) {
-        drawCountdownMode();
-    }
-    
-    DisplayHAL::display(framebuffer);
+    // Unified 2-pass localized partial update sequence:
+    // Pass 1: Wipes region to background & flushes to E-Ink display to reset microspheres.
+    // Pass 2: Renders mode tabs and active timer digits & flushes crisp new content to display.
+    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 0, w, h, [this]() {
+        drawModeSelector();
+        if (activeMode == TimerMode::CLOCK) {
+            drawClockMode();
+        } else if (activeMode == TimerMode::STOPWATCH) {
+            drawStopwatchMode();
+        } else if (activeMode == TimerMode::COUNTDOWN) {
+            drawCountdownMode();
+        }
+    });
 }
 
 void TimerApp::drawButtonWithText(int x, int y, int w, int h, const char* label, bool active) {

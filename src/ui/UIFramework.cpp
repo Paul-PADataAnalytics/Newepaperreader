@@ -42,6 +42,20 @@ void UIFramework::clearArea(uint8_t *framebuffer, int x, int y, int w, int h) {
     DisplayHAL::fillRect(x, y, w, h, 0xFF, framebuffer); // 0xFF is white
 }
 
+void UIFramework::perform2PassPartialUpdate(uint8_t *framebuffer, int x, int y, int w, int h, std::function<void()> renderContent) {
+    if (!framebuffer) return;
+
+    // Pass 1: Clear localized bounding box in memory & flush white background to physical E-Ink panel to reset microspheres
+    clearArea(framebuffer, x, y, w, h);
+    DisplayHAL::display(framebuffer);
+
+    // Pass 2: Render new content into cleared region & flush crisp content to physical E-Ink panel
+    if (renderContent) {
+        renderContent();
+    }
+    DisplayHAL::display(framebuffer);
+}
+
 void UIFramework::drawIcon16x16(uint8_t *framebuffer, int x, int y, const uint8_t *bitmap, uint8_t color) {
     for (int r = 0; r < 16; r++) {
         uint16_t rowData = (bitmap[r * 2] << 8) | bitmap[r * 2 + 1];

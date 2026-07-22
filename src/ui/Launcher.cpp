@@ -116,6 +116,9 @@ void Launcher::drawMenu() {
     // The launcher is always landscape. If an app left portrait mode on, reset it.
     DisplayHAL::setPortrait(false);
 
+    // Mandatory full hardware screen clear for Launcher to protect screen and prevent partial artifacts
+    DisplayHAL::clear();
+
     int w = DisplayHAL::getWidth();
     int h = DisplayHAL::getHeight();
 

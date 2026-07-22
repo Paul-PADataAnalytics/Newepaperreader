@@ -6,6 +6,7 @@
 #include <stdint.h>
 #endif
 #include "DisplayHAL.h"
+#include <functional>
 
 class UIFramework {
 public:
@@ -23,6 +24,11 @@ public:
     
     // Clears a specific area of the screen
     static void clearArea(uint8_t *framebuffer, int x, int y, int w, int h);
+
+    // Performs a unified 2-pass localized partial update:
+    // Pass 1: Wipes target bounding box (x,y,w,h) to background color & flushes to E-Ink display to reset microspheres.
+    // Pass 2: Executes renderContent callback & flushes crisp new content to E-Ink display.
+    static void perform2PassPartialUpdate(uint8_t *framebuffer, int x, int y, int w, int h, std::function<void()> renderContent);
 
     // Draws a 16x16 monotone icon on the screen
     static void drawIcon16x16(uint8_t *framebuffer, int x, int y, const uint8_t *bitmap, uint8_t color);

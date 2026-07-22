@@ -95,29 +95,27 @@ void CalculatorApp::draw() {
 void CalculatorApp::drawDisplay() {
     int w = DisplayHAL::getWidth();
 
-    // Step 1: Localized clear pass - wipe display area in memory & flush to E-Ink panel to reset microspheres
-    UIFramework::clearArea(framebuffer, 0, 0, w, 199);
-    DisplayHAL::display(framebuffer);
+    // Unified 2-pass localized partial update sequence for top calculation display area (y=0..199):
+    // Pass 1: Wipes display area to background & flushes to E-Ink display to reset microspheres.
+    // Pass 2: Renders horizontal separator line and updated values, then flushes to display.
+    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 0, w, 199, [this, w]() {
+        DisplayHAL::drawHLine(0, 199, w, 0x00, framebuffer);
 
-    // Step 2: Draw horizontal separator and render updated values
-    DisplayHAL::drawHLine(0, 199, w, 0x00, framebuffer);
+        if (!expression.empty()) {
+            typography.setFontSize(24.0f);
+            int exprW = typography.measureText(expression);
+            int exprX = w - 20 - exprW;
+            if (exprX < 20) exprX = 20;
+            typography.renderText(expression, exprX, 40, framebuffer, 0x04);
+        }
 
-    // Render expression (smaller font size, top-right aligned)
-    if (!expression.empty()) {
-        typography.setFontSize(24.0f);
-        int exprW = typography.measureText(expression);
-        int exprX = w - 20 - exprW;
-        if (exprX < 20) exprX = 20; // Bound to left margin if too long
-        typography.renderText(expression, exprX, 40, framebuffer, 0x04); // Dark grey text
-    }
-
-    // Render current value (larger font size, bottom-right aligned)
-    typography.setFontSize(54.0f);
-    std::string valToDraw = currentValue.empty() ? "0" : currentValue;
-    int valW = typography.measureText(valToDraw);
-    int valX = w - 20 - valW;
-    if (valX < 20) valX = 20; // Bound to left margin if too long
-    typography.renderText(valToDraw, valX, 115, framebuffer, 0x00); // Solid black text
+        typography.setFontSize(54.0f);
+        std::string valToDraw = currentValue.empty() ? "0" : currentValue;
+        int valW = typography.measureText(valToDraw);
+        int valX = w - 20 - valW;
+        if (valX < 20) valX = 20;
+        typography.renderText(valToDraw, valX, 115, framebuffer, 0x00);
+    });
 }
 
 void CalculatorApp::handleTouch(int x, int y) {

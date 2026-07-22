@@ -114,6 +114,13 @@
   - [x] Version labeled firmware (`v1.02a`) and Android companion app (`1.0.2+3` / `v1.02a`).
   - [x] Updated `README.md` and project documentation.
   - [x] Staged and committed release v1.02a to Git repository.
+- [x] **Unified 2-Pass Localized Partial Refresh API**:
+  - [x] Added `UIFramework::perform2PassPartialUpdate(framebuffer, x, y, w, h, drawFunc)` to centralize the 2-pass sequence (Pass 1: clear area to background & flush to hardware; Pass 2: draw content & flush to hardware).
+  - [x] Refactored `TimerApp`, `CalculatorApp`, `EBookmarkApp`, and `SettingsApp` to use the unified API.
+- [x] **Launcher Mandatory Full Refresh Rule**:
+  - [x] Enforced mandatory full hardware clear (`DisplayHAL::clear()`) in `Launcher::drawMenu()` to protect the screen and eliminate any launcher partial update artifacts.
+- [x] **Waking Responsiveness & Sleep Polish**:
+  - [x] Reset `lastTouchTime = 0` on sleep wakeup so the very next touch input is processed immediately without any debounce delay.
 - [x] **Continuous Handover Maintenance**: Ensure `TODO.md` is updated before ending turns or committing major feature blocks.
 
 ---

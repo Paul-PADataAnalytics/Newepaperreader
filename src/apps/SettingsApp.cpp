@@ -99,15 +99,13 @@ void SettingsApp::draw() {
 
 void SettingsApp::drawLogLineOnly() {
     int w = DisplayHAL::getWidth();
-    UIFramework::clearArea(framebuffer, 0, 280, w, 80);
-
-    typography.setFontSize(20.0f);
-    if (m_bleActive) {
-        typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
-    }
-    typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, 0x04);
-
-    DisplayHAL::display(framebuffer);
+    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 280, w, 80, [this]() {
+        typography.setFontSize(20.0f);
+        if (m_bleActive) {
+            typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
+        }
+        typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, 0x04);
+    });
 }
 
 void SettingsApp::update() {

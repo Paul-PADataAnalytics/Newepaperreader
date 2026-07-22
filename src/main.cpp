@@ -159,7 +159,7 @@ void loop() {
             // Wake up from sleep on touch!
             isSystemSleeping = false;
             lastTouchActivityTime = now;
-            lastTouchTime = now; // Update debounce timer
+            lastTouchTime = 0; // Reset debounce timer to zero for instant waking touch responsiveness
 
             DisplayHAL::clear();
             if (Launcher::getInstance().getActiveApp()) {

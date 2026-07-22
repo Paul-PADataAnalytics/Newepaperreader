@@ -440,3 +440,50 @@ void AppComm::cancelFileUpload() {
 bool AppComm::isInitialized() {
     return is_comm_init;
 }
+
+bool AppComm::isConnected() {
+#ifndef NATIVE_TESTING
+    extern bool deviceConnected;
+    return is_comm_init && deviceConnected;
+#else
+    extern int client_socket;
+    return is_comm_init && client_socket >= 0;
+#endif
+}
+
+void AppComm::sendDeltaSync(const std::string& jsonMessage) {
+    if (!isInitialized()) return;
+#ifndef NATIVE_TESTING
+    if (pReadChar && isConnected()) {
+        pReadChar->setValue(jsonMessage);
+        pReadChar->notify();
+    }
+#else
+    sendData(jsonMessage);
+#endif
+}
+
+void AppComm::sendBookDelta(const std::string& isbn, const std::string& title, const std::string& author, int page, int total) {
+    if (!isInitialized()) return;
+    uint32_t ts = 0;
+#ifndef NATIVE_TESTING
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    ts = tv.tv_sec;
+#else
+    ts = (uint32_t)time(NULL);
+#endif
+
+    JsonDocument doc;
+    doc["t"] = "BOOK";
+    doc["isbn"] = isbn;
+    doc["title"] = title;
+    doc["author"] = author;
+    doc["page"] = page;
+    doc["total"] = total;
+    doc["ts"] = ts;
+
+    std::string payload;
+    serializeJson(doc, payload);
+    sendDeltaSync(payload);
+}

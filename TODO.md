@@ -99,6 +99,10 @@
 - [x] **Settings App Single Clear & Dark Mode Full Refresh**:
   - [x] Removed duplicate `DisplayHAL::clear()` on initial entry into `SettingsApp` (`Launcher::switchToApp` performs primary hardware clear).
   - [x] Added `DisplayHAL::clear()` hardware flash and full clean redraw in `SettingsApp::handleTouch()` when toggling Light/Dark mode to visually indicate mode change.
+- [x] **Immediate Localized Minor Delta Sync Architecture**:
+  - [x] Implemented `AppComm::sendDeltaSync()` and `AppComm::sendBookDelta()` on firmware for instant single-item JSON transmission over BLE notifications.
+  - [x] Subscribed Flutter `BleService` to BLE notifications (`_readCharacteristic!.setNotifyValue(true)`), auto-parsing incoming `{"t": "<TYPE>", ...}` delta frames to update `BookStorageService` instantly for *only* the changed item.
+  - [x] Established extensible architectural framework for all future syncable items.
 - [x] **Continuous Handover Maintenance**: Ensure `TODO.md` is updated before ending turns or committing major feature blocks.
 
 ---

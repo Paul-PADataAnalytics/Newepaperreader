@@ -5,6 +5,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../main.dart';
 import '../models/book_record.dart';
+import 'book_storage_service.dart';
 
 class BleService {
   static final BleService _instance = BleService._internal();
@@ -14,6 +15,10 @@ class BleService {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _writeCharacteristic;
   BluetoothCharacteristic? _readCharacteristic;
+  StreamSubscription? _readSubscription;
+
+  /// Optional callback triggered immediately whenever a localized minor delta sync frame arrives from the device.
+  void Function(BookRecord book)? onSingleBookUpdated;
 
   /// Reports true only when we have a device that is currently connected.
   bool get isConnected {
@@ -96,12 +101,47 @@ class BleService {
 
     await _storeDeviceId(device.remoteId.toString());
 
+    // Subscribe to BLE notifications for immediate localized minor delta syncs
+    try {
+      await _readCharacteristic!.setNotifyValue(true);
+      _readSubscription?.cancel();
+      _readSubscription = _readCharacteristic!.lastValueStream.listen((value) {
+        if (value.isNotEmpty) {
+          try {
+            final str = utf8.decode(value);
+            _handleIncomingDeltaSync(str);
+          } catch (e) {
+            // Ignore parse issues
+          }
+        }
+      });
+    } catch (e) {
+      // Notification setup optional
+    }
+
     // Sync Android's clock to the device immediately on connect so that
     // last-change-wins bookmark comparisons use the correct time.
     try {
       await sendTimeSync();
     } catch (e) {
       // Don't fail the connection if the time sync write doesn't land.
+    }
+  }
+
+  void _handleIncomingDeltaSync(String jsonStr) {
+    if (jsonStr.isEmpty) return;
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is Map<String, dynamic>) {
+        final type = decoded['t'] ?? '';
+        if (type == 'BOOK') {
+          final book = BookRecord.fromJson(decoded);
+          BookStorageService().addOrUpdateBook(book);
+          onSingleBookUpdated?.call(book);
+        }
+      }
+    } catch (e) {
+      // Ignore non-JSON or invalid delta frames
     }
   }
 
@@ -145,6 +185,8 @@ class BleService {
 
   void disconnect() {
     stopBackgroundSync();
+    _readSubscription?.cancel();
+    _readSubscription = null;
     _device?.disconnect();
     _device = null;
     _writeCharacteristic = null;

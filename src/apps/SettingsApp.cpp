@@ -69,8 +69,11 @@ void SettingsApp::draw() {
     bool statusChanged = (m_syncStatus != m_lastDrawnStatus);
     bool pageChanged = (m_page != m_lastDrawnPage);
 
-    if (pageChanged || !m_hasDrawn) {
+    if (pageChanged) {
         DisplayHAL::clear();
+    }
+
+    if (pageChanged || !m_hasDrawn) {
         if (m_page == PAGE_MAIN) {
             drawMainSettings();
         } else if (m_page == PAGE_BLE) {
@@ -340,7 +343,8 @@ void SettingsApp::handleTouch(int x, int y) {
         // Row 2: Toggle Mode button (x=600..880, y=240..290)
         if (x >= 600 && x <= 880 && y >= 240 && y <= 290) {
             DisplayHAL::setDarkMode(!DisplayHAL::isDarkMode());
-            draw();
+            DisplayHAL::clear();
+            drawMainSettings();
             return;
         }
 

@@ -93,6 +93,12 @@
   - [x] Version labeled both ESP32 firmware (`v1.01a`) and Android companion app (`1.0.1+2` / `v1.01a`).
   - [x] Created comprehensive `README.md` documentation covering system architecture, features, and build instructions.
   - [x] Staged and committed all changes in repository.
+- [x] **E-Ink Localized Clear Before Update (Anti-Ghosting)**:
+  - [x] Implemented 2-step localized clear pass in `EBookmarkApp::drawEBookmarkDetail()` (flushes cleared background area to E-Ink display to reset microspheres before rendering updated page numbers).
+  - [x] Implemented 2-step localized clear pass in `CalculatorApp::drawDisplay()` (flushes cleared display area to E-Ink display before rendering updated expression and calculation values).
+- [x] **Settings App Single Clear & Dark Mode Full Refresh**:
+  - [x] Removed duplicate `DisplayHAL::clear()` on initial entry into `SettingsApp` (`Launcher::switchToApp` performs primary hardware clear).
+  - [x] Added `DisplayHAL::clear()` hardware flash and full clean redraw in `SettingsApp::handleTouch()` when toggling Light/Dark mode to visually indicate mode change.
 - [x] **Continuous Handover Maintenance**: Ensure `TODO.md` is updated before ending turns or committing major feature blocks.
 
 ---

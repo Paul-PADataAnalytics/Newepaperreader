@@ -95,10 +95,11 @@ void CalculatorApp::draw() {
 void CalculatorApp::drawDisplay() {
     int w = DisplayHAL::getWidth();
 
-    // Clear display area (y=0 to 200)
-    UIFramework::clearArea(framebuffer, 0, 0, w, 200);
+    // Step 1: Localized clear pass - wipe display area in memory & flush to E-Ink panel to reset microspheres
+    UIFramework::clearArea(framebuffer, 0, 0, w, 199);
+    DisplayHAL::display(framebuffer);
 
-    // Draw horizontal separator
+    // Step 2: Draw horizontal separator and render updated values
     DisplayHAL::drawHLine(0, 199, w, 0x00, framebuffer);
 
     // Render expression (smaller font size, top-right aligned)

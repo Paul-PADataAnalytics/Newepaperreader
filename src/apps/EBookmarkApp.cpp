@@ -266,8 +266,9 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
         DisplayHAL::clear();
         UIFramework::clearArea(framebuffer, 0, 0, w, h);
     } else {
-        // Fast partial update: clear main content area below header line without full E-Ink flash
+        // Step 1: Localized clear pass - wipe area in memory & flush to E-Ink display to reset microspheres
         UIFramework::clearArea(framebuffer, 0, 60, w, h - 60);
+        DisplayHAL::display(framebuffer);
     }
 
     int backX = w - 120;

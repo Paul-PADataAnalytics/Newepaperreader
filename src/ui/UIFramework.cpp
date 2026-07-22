@@ -27,7 +27,7 @@ void UIFramework::drawProgressBar(uint8_t *framebuffer, float progress, const ch
 }
 
 void UIFramework::drawButton(uint8_t *framebuffer, int x, int y, int w, int h, const char* label, bool inverted) {
-    uint8_t bgColor = inverted ? 0x00 : 0xBB; // Black if inverted, 2 steps darker than lightest grey (0xDD) otherwise
+    uint8_t bgColor = inverted ? 0x00 : 0xEE; // Black if inverted, very light grey (masks to 0x0E) otherwise
     uint8_t fgColor = inverted ? 0xFF : 0x00;
     
     // Background
@@ -41,3 +41,33 @@ void UIFramework::drawButton(uint8_t *framebuffer, int x, int y, int w, int h, c
 void UIFramework::clearArea(uint8_t *framebuffer, int x, int y, int w, int h) {
     DisplayHAL::fillRect(x, y, w, h, 0xFF, framebuffer); // 0xFF is white
 }
+
+void UIFramework::drawIcon16x16(uint8_t *framebuffer, int x, int y, const uint8_t *bitmap, uint8_t color) {
+    for (int r = 0; r < 16; r++) {
+        uint16_t rowData = (bitmap[r * 2] << 8) | bitmap[r * 2 + 1];
+        for (int c = 0; c < 16; c++) {
+            if ((rowData & (1 << (15 - c))) != 0) {
+                DisplayHAL::setPixel(x + c, y + r, color, framebuffer);
+            }
+        }
+    }
+}
+
+const uint8_t COG_ICON[32] = {
+    0x06, 0x60, //    ##   ##
+    0x0f, 0xf0, //   ########
+    0x1f, 0xf8, //  ##########
+    0x37, 0xec, //  ## ## ## ##
+    0x77, 0xee, // ### ## ## ###
+    0xff, 0xff, // ############
+    0xdb, 0xdb, // ## ##  ## ##
+    0x99, 0x99, // #  ##  ##  #
+    0x99, 0x99, // #  ##  ##  #
+    0xdb, 0xdb, // ## ##  ## ##
+    0xff, 0xff, // ############
+    0x77, 0xee, // ### ## ## ###
+    0x37, 0xec, //  ## ## ## ##
+    0x1f, 0xf8, //  ##########
+    0x0f, 0xf0, //   ########
+    0x06, 0x60  //    ##   ##
+};

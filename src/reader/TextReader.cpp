@@ -21,16 +21,20 @@ bool TextReader::openFile(const char* filepath) {
         Serial.printf("Failed to open text file: %s\n", filepath);
         return false;
     }
+    fileSize = file.size();
 #else
-    file = (void*)1;
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        printf("Failed to open text file natively: %s\n", filepath);
+        return false;
+    }
+    file = (void*)f;
+    fseek(f, 0, SEEK_END);
+    fileSize = ftell(f);
+    fseek(f, 0, SEEK_SET);
 #endif
 
     currentFilePath = filepath;
-#ifndef NATIVE_TESTING
-    fileSize = file.size();
-#else
-    fileSize = 10000;
-#endif
     currentPosition = 0;
 
     pageHistory.clear();
@@ -43,6 +47,11 @@ void TextReader::closeFile() {
 #ifndef NATIVE_TESTING
     if (file) {
         file.close();
+    }
+#else
+    if (file) {
+        fclose((FILE*)file);
+        file = nullptr;
     }
 #endif
     currentFilePath = "";
@@ -61,7 +70,8 @@ std::string TextReader::getPageText() {
     // we just read a fixed amount of bytes.
     size_t bytesRead = file.read((uint8_t*)pageBuffer, sizeof(pageBuffer) - 1);
 #else
-    size_t bytesRead = 100;
+    fseek((FILE*)file, currentPosition, SEEK_SET);
+    size_t bytesRead = fread(pageBuffer, 1, sizeof(pageBuffer) - 1, (FILE*)file);
 #endif
     pageBuffer[bytesRead] = '\0'; // Null-terminate
 

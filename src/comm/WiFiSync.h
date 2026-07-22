@@ -1,16 +1,11 @@
 #pragma once
 
-#ifndef NATIVE_TESTING
+// ============================================================
+// WiFiSync — DISABLED
+// This feature is preserved for future use.
+// To re-enable: add #include "comm/WiFiSync.h" back to main.cpp,
+// add STATE_WIFI_SYNC to the AppState enum, restore drawWiFiSync(),
+// and add the WiFi Sync sidebar button in drawLibrary().
+// ============================================================
 
-void startWiFiSync();
-void stopWiFiSync();
-void processWiFiSync(); // If needed for yielding or looping
-
-#else
-
-// Mock for native testing
-inline void startWiFiSync() {}
-inline void stopWiFiSync() {}
-inline void processWiFiSync() {}
-
-#endif
+// No symbols exported while disabled.

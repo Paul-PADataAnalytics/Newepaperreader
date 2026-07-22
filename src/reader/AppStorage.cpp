@@ -75,17 +75,40 @@ bool initialize() {
 
 std::string toRuntimePath(const std::string& browserPath) {
 #ifdef NATIVE_TESTING
+    // On native: FileBrowser gives paths like /books/test.md; strip leading /
+    // so fopen() uses a relative path from the working directory (data/)
+    if (browserPath.length() > 0 && browserPath[0] == '/') {
+        return browserPath.substr(1);
+    }
     return browserPath;
 #else
+    // On device: SD.open() paths are relative to the SD mount root.
+    // FileBrowser already produces paths like /books/test.md — use them directly.
+    // Strip any accidental /sd prefix if present.
     if (browserPath.rfind("/sd", 0) == 0) {
-        return browserPath;
+        return browserPath.substr(3); // strip /sd, keep /books/...
     }
-    return "/sd" + browserPath;
+    return browserPath;
+#endif
+}
+
+std::string toVfsPath(const std::string& runtimePath) {
+#ifdef NATIVE_TESTING
+    return runtimePath;
+#else
+    // SD.open() uses relative paths (e.g., /books/test.md)
+    // C standard library fopen() needs the absolute VFS mount path.
+    if (runtimePath.rfind("/sd", 0) == 0) {
+        return runtimePath;
+    }
+    return "/sd" + runtimePath;
 #endif
 }
 
 std::string toBookmarkPath(const std::string& runtimeBookPath) {
-    return stripSdPrefix(runtimeBookPath) + ".bmk";
+    // runtimeBookPath is already SD-relative (e.g. /books/test.md)
+    // Bookmark lives alongside the book: /books/test.md.bmk
+    return runtimeBookPath + ".bmk";
 }
 
 bool saveBookmark(const std::string& runtimeBookPath, int offset) {
@@ -123,6 +146,8 @@ int loadBookmark(const std::string& runtimeBookPath) {
     return offset;
 #else
     std::string path = toBookmarkPath(runtimeBookPath);
+    // Only attempt to open if the file exists — avoids VFS error spam
+    if (!SD.exists(path.c_str())) return 0;
     File f = SD.open(path.c_str(), FILE_READ);
     if (!f) {
         return 0;

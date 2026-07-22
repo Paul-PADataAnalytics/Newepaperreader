@@ -4,42 +4,57 @@ std::string RTFParser::stripRTF(const std::string& rtf) {
     std::string out;
     size_t i = 0;
     int groupDepth = 0;
-    // We will just do a very crude parsing: 
-    // Ignore control words. 
+    int skipGroupDepth = -1;
+    
     while (i < rtf.length()) {
         char c = rtf[i];
         if (c == '{') {
             groupDepth++;
             i++;
         } else if (c == '}') {
+            if (skipGroupDepth != -1 && groupDepth == skipGroupDepth) {
+                skipGroupDepth = -1;
+            }
             if (groupDepth > 0) groupDepth--;
             i++;
         } else if (c == '\\') {
             i++;
             if (i < rtf.length()) {
                 if (rtf[i] == '\\' || rtf[i] == '{' || rtf[i] == '}') {
-                    out += rtf[i]; // escaped character
+                    if (skipGroupDepth == -1) out += rtf[i];
                     i++;
                 } else if (rtf[i] == '\'') {
-                    // Hex character
                     i += 3;
                 } else {
-                    // Control word: read letters, then maybe digits, then maybe a space
-                    while (i < rtf.length() && isalpha(rtf[i])) {
+                    std::string ctrl = "";
+                    if (i < rtf.length() && !isalpha(rtf[i])) {
+                        ctrl += rtf[i];
                         i++;
+                    } else {
+                        while (i < rtf.length() && isalpha(rtf[i])) {
+                            ctrl += rtf[i];
+                            i++;
+                        }
+                        while (i < rtf.length() && (isdigit(rtf[i]) || rtf[i] == '-')) {
+                            i++;
+                        }
+                        if (i < rtf.length() && rtf[i] == ' ') {
+                            i++;
+                        }
                     }
-                    while (i < rtf.length() && (isdigit(rtf[i]) || rtf[i] == '-')) {
-                        i++;
-                    }
-                    if (i < rtf.length() && rtf[i] == ' ') {
-                        i++; // space after control word is part of it
+                    if (ctrl == "*" || ctrl == "fonttbl" || ctrl == "colortbl" || ctrl == "stylesheet" || ctrl == "info") {
+                        if (skipGroupDepth == -1) skipGroupDepth = groupDepth;
+                    } else if (ctrl == "par" || ctrl == "line") {
+                        if (skipGroupDepth == -1) out += '\n';
                     }
                 }
             }
         } else if (c == '\r' || c == '\n') {
-            i++; // RTF ignores newlines in code
+            i++;
         } else {
-            out += c;
+            if (skipGroupDepth == -1) {
+                out += c;
+            }
             i++;
         }
     }

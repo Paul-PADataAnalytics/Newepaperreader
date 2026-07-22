@@ -10,6 +10,9 @@ bool initialize();
 // Converts a browser path (e.g. /books/foo.epub) into a runtime path.
 std::string toRuntimePath(const std::string& browserPath);
 
+// Converts a runtime path into an absolute VFS path suitable for standard C file I/O (fopen, miniz).
+std::string toVfsPath(const std::string& runtimePath);
+
 // Returns the bookmark file path for a given runtime book path.
 std::string toBookmarkPath(const std::string& runtimeBookPath);
 

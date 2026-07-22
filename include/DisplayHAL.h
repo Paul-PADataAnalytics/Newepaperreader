@@ -24,13 +24,26 @@ public:
     static void drawHLine(int x, int y, int length, uint8_t color, uint8_t* framebuffer);
     static void drawRect(int x, int y, int width, int height, uint8_t color, uint8_t* framebuffer);
     static void fillRect(int x, int y, int width, int height, uint8_t color, uint8_t* framebuffer);
+    static void setPixel(int x, int y, uint8_t color, uint8_t* framebuffer);
+    static uint8_t getPixel(int x, int y, uint8_t* framebuffer);
 
     static void dumpFramebuffer(const char* filepath, uint8_t* framebuffer);
     static bool getTouch(int &x, int &y);
 
     static void injectTouch(int x, int y);
+    
+    static void setDarkMode(bool enable);
+    static bool isDarkMode();
+
+    static void setPortrait(bool portrait);
+    static bool isPortrait();
+    static int getWidth();
+    static int getHeight();
+
 #ifdef NATIVE_TESTING
     static void handleEvents();
     static bool windowShouldClose();
 #endif
+private:
+    static bool s_darkMode;
 };

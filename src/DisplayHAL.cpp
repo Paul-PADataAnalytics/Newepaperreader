@@ -13,6 +13,41 @@ static TouchDrvGT911 touch;
 
 static int simulatedTouchX = -1;
 static int simulatedTouchY = -1;
+static bool _isPortrait = false;
+
+bool DisplayHAL::s_darkMode = false;
+
+void DisplayHAL::setDarkMode(bool enable) {
+    s_darkMode = enable;
+}
+
+bool DisplayHAL::isDarkMode() {
+    return s_darkMode;
+}
+
+void DisplayHAL::setPortrait(bool portrait) {
+    _isPortrait = portrait;
+}
+
+bool DisplayHAL::isPortrait() {
+    return _isPortrait;
+}
+
+int DisplayHAL::getWidth() {
+#ifndef NATIVE_TESTING
+    return _isPortrait ? 540 : 960;
+#else
+    return _isPortrait ? EPD_HEIGHT : EPD_WIDTH;
+#endif
+}
+
+int DisplayHAL::getHeight() {
+#ifndef NATIVE_TESTING
+    return _isPortrait ? 960 : 540;
+#else
+    return _isPortrait ? EPD_WIDTH : EPD_HEIGHT;
+#endif
+}
 
 void DisplayHAL::dumpFramebuffer(const char* filepath, uint8_t* framebuffer) {
     FILE* f = fopen(filepath, "wb");
@@ -30,21 +65,41 @@ void DisplayHAL::dumpFramebuffer(const char* filepath, uint8_t* framebuffer) {
 }
 
 bool DisplayHAL::getTouch(int &x, int &y) {
+    int tx = -1, ty = -1;
     if (simulatedTouchX >= 0 && simulatedTouchY >= 0) {
-        x = simulatedTouchX;
-        y = simulatedTouchY;
+        tx = simulatedTouchX;
+        ty = simulatedTouchY;
         simulatedTouchX = -1;
         simulatedTouchY = -1;
-        return true;
-    }
+    } else {
 #ifndef NATIVE_TESTING
-    int16_t tx, ty;
-    if (touch.getPoint(&tx, &ty, 1)) {
-        x = tx;
-        y = ty;
+        int16_t _tx, _ty;
+        if (touch.getPoint(&_tx, &_ty, 1)) {
+            tx = _tx;
+            ty = _ty;
+        } else {
+            return false;
+        }
+#else
+        return false;
+#endif
+    }
+    
+    if (tx >= 0 && ty >= 0) {
+        if (_isPortrait) {
+#ifndef NATIVE_TESTING
+            x = 539 - ty;
+            y = tx;
+#else
+            x = (EPD_HEIGHT - 1) - ty;
+            y = tx;
+#endif
+        } else {
+            x = tx;
+            y = ty;
+        }
         return true;
     }
-#endif
     return false;
 }
 
@@ -88,7 +143,56 @@ void DisplayHAL::clear() {
 }
 
 void DisplayHAL::display(uint8_t* framebuffer) {
-    epd_draw_grayscale_image(epd_full_screen(), framebuffer);
+    uint8_t* targetFb = framebuffer;
+    uint8_t* invertedFb = nullptr;
+    int fbSize = getWidth() * getHeight() / 2;
+
+    if (s_darkMode) {
+        invertedFb = (uint8_t*)allocateFramebuffer();
+        if (invertedFb) {
+            for (int i = 0; i < fbSize; i++) {
+                invertedFb[i] = ~framebuffer[i];
+            }
+            targetFb = invertedFb;
+        }
+    }
+
+    if (_isPortrait) {
+        uint8_t* rotated = allocateFramebuffer();
+        if (rotated) {
+            memset(rotated, 0xFF, 960 * 540 / 2);
+            for (int ly = 0; ly < 960; ly++) {
+                for (int lx = 0; lx < 540; lx++) {
+                    int l_idx = (ly * 540 + lx) / 2;
+                    bool l_isOdd = (lx % 2 != 0);
+                    uint8_t color;
+                    // Hardware expects even pixels (x=0) in the LOWER nibble, odd in UPPER nibble
+                    if (l_isOdd) {
+                        color = (targetFb[l_idx] & 0xF0) >> 4;
+                    } else {
+                        color = targetFb[l_idx] & 0x0F;
+                    }
+                    
+                    int tx = ly;
+                    int ty = 539 - lx;
+                    int t_idx = (ty * 960 + tx) / 2;
+                    bool t_isOdd = (tx % 2 != 0);
+                    
+                    if (t_isOdd) {
+                        rotated[t_idx] = (rotated[t_idx] & 0x0F) | (color << 4);
+                    } else {
+                        rotated[t_idx] = (rotated[t_idx] & 0xF0) | color;
+                    }
+                }
+            }
+            epd_draw_grayscale_image(epd_full_screen(), rotated);
+            freeFramebuffer(rotated);
+            if (invertedFb) freeFramebuffer(invertedFb);
+            return;
+        }
+    }
+    epd_draw_grayscale_image(epd_full_screen(), targetFb);
+    if (invertedFb) freeFramebuffer(invertedFb);
 }
 
 uint8_t* DisplayHAL::allocateFramebuffer() {
@@ -99,17 +203,8 @@ void DisplayHAL::freeFramebuffer(uint8_t* framebuffer) {
     heap_caps_free(framebuffer);
 }
 
-void DisplayHAL::drawHLine(int x, int y, int length, uint8_t color, uint8_t* framebuffer) {
-    epd_draw_hline(x, y, length, color, framebuffer);
-}
 
-void DisplayHAL::drawRect(int x, int y, int width, int height, uint8_t color, uint8_t* framebuffer) {
-    epd_draw_rect(x, y, width, height, color, framebuffer);
-}
 
-void DisplayHAL::fillRect(int x, int y, int width, int height, uint8_t color, uint8_t* framebuffer) {
-    epd_fill_rect(x, y, width, height, color, framebuffer);
-}
 
 #else
 
@@ -175,18 +270,26 @@ void DisplayHAL::display(uint8_t* framebuffer) {
     if (!texture || !renderer) return;
     
     uint32_t* pixels = new uint32_t[EPD_WIDTH * EPD_HEIGHT];
-    for (int i = 0; i < EPD_WIDTH * EPD_HEIGHT / 2; i++) {
-        uint8_t pair = framebuffer[i];
-        // 0xFF -> white, 0x00 -> black.
-        // Assuming 4-bit grayscale, upper nibble = pixel 0, lower nibble = pixel 1? Let's treat byte as 2 pixels.
-        // If color was 0x00, both are 0. If 0xFF, both are 255.
-        // Let's just expand each nibble to 8-bit.
-        uint8_t p1 = (pair & 0xF0) | (pair >> 4);
-        uint8_t p2 = ((pair & 0x0F) << 4) | (pair & 0x0F);
-        
-        // However, the epd_driver often treats 0xFF as white and 0x00 as black.
-        pixels[i * 2] = (0xFF << 24) | (p1 << 16) | (p1 << 8) | p1;
-        pixels[i * 2 + 1] = (0xFF << 24) | (p2 << 16) | (p2 << 8) | p2;
+    for (int ly = 0; ly < (_isPortrait ? EPD_WIDTH : EPD_HEIGHT); ly++) {
+        for (int lx = 0; lx < (_isPortrait ? EPD_HEIGHT : EPD_WIDTH); lx++) {
+            int l_idx = (ly * (_isPortrait ? EPD_HEIGHT : EPD_WIDTH) + lx) / 2;
+            bool l_isLower = (lx % 2 != 0);
+            uint8_t byteVal = s_darkMode ? ~framebuffer[l_idx] : framebuffer[l_idx];
+            uint8_t color;
+            if (l_isLower) {
+                color = byteVal & 0x0F;
+            } else {
+                color = (byteVal & 0xF0) >> 4;
+            }
+            
+            // Expand to 8-bit
+            uint8_t p = (color << 4) | color;
+            uint32_t argb = (0xFF << 24) | (p << 16) | (p << 8) | p;
+            
+            int tx = _isPortrait ? ly : lx;
+            int ty = _isPortrait ? (EPD_HEIGHT - 1 - lx) : ly;
+            pixels[ty * EPD_WIDTH + tx] = argb;
+        }
     }
     
     SDL_UpdateTexture(texture, nullptr, pixels, EPD_WIDTH * sizeof(uint32_t));
@@ -222,6 +325,72 @@ static void setPixel(int x, int y, uint8_t color, uint8_t* framebuffer) {
     }
 }
 
+
+
+
+void DisplayHAL::handleEvents() {
+#ifdef HAS_SDL
+    SDL_Event e;
+    while (SDL_PollEvent(&e)) {
+        if (e.type == SDL_QUIT) {
+            shouldClose = true;
+        }
+    }
+#endif
+}
+
+bool DisplayHAL::windowShouldClose() {
+#ifdef HAS_SDL
+    return shouldClose;
+#else
+    return false;
+#endif
+}
+
+#endif
+
+
+void DisplayHAL::setPixel(int x, int y, uint8_t color, uint8_t* framebuffer) {
+    if (x < 0 || x >= getWidth() || y < 0 || y >= getHeight()) return;
+    int index = (y * getWidth() + x) / 2;
+    bool isOdd = (x % 2 != 0);
+    uint8_t c = color & 0x0F;
+#ifndef NATIVE_TESTING
+    // EPD47 Hardware expects even pixels (x=0) in the LOWER nibble, and odd pixels (x=1) in the UPPER nibble.
+    if (isOdd) {
+        framebuffer[index] = (framebuffer[index] & 0x0F) | (c << 4);
+    } else {
+        framebuffer[index] = (framebuffer[index] & 0xF0) | c;
+    }
+#else
+    // Native mock originally used even pixels in UPPER nibble, odd in LOWER nibble.
+    if (isOdd) {
+        framebuffer[index] = (framebuffer[index] & 0xF0) | c;
+    } else {
+        framebuffer[index] = (framebuffer[index] & 0x0F) | (c << 4);
+    }
+#endif
+}
+
+uint8_t DisplayHAL::getPixel(int x, int y, uint8_t* framebuffer) {
+    if (x < 0 || x >= getWidth() || y < 0 || y >= getHeight()) return 15;
+    int index = (y * getWidth() + x) / 2;
+    bool isOdd = (x % 2 != 0);
+#ifndef NATIVE_TESTING
+    if (isOdd) {
+        return (framebuffer[index] & 0xF0) >> 4;
+    } else {
+        return framebuffer[index] & 0x0F;
+    }
+#else
+    if (isOdd) {
+        return framebuffer[index] & 0x0F;
+    } else {
+        return (framebuffer[index] & 0xF0) >> 4;
+    }
+#endif
+}
+
 void DisplayHAL::drawHLine(int x, int y, int length, uint8_t color, uint8_t* framebuffer) {
     for (int i = 0; i < length; i++) {
         setPixel(x + i, y, color, framebuffer);
@@ -246,27 +415,6 @@ void DisplayHAL::fillRect(int x, int y, int width, int height, uint8_t color, ui
         }
     }
 }
-
-void DisplayHAL::handleEvents() {
-#ifdef HAS_SDL
-    SDL_Event e;
-    while (SDL_PollEvent(&e)) {
-        if (e.type == SDL_QUIT) {
-            shouldClose = true;
-        }
-    }
-#endif
-}
-
-bool DisplayHAL::windowShouldClose() {
-#ifdef HAS_SDL
-    return shouldClose;
-#else
-    return false;
-#endif
-}
-
-#endif
 
 void DisplayHAL::injectTouch(int x, int y) {
     simulatedTouchX = x;

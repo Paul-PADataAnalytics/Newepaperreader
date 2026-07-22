@@ -1,5 +1,8 @@
 #include "EpubParser.h"
+#include "AppStorage.h"
+#ifndef NATIVE_TESTING
 #include <Arduino.h>
+#endif
 #include <miniz.h>
 #include <tinyxml2.h>
 #include <iostream>
@@ -16,7 +19,7 @@ EpubParser::~EpubParser() {
 }
 
 bool EpubParser::open(const std::string& filepath) {
-    m_filepath = filepath;
+    m_filepath = AppStorage::toVfsPath(filepath);
     m_manifest.clear();
     m_spine.clear();
     m_opfPath.clear();

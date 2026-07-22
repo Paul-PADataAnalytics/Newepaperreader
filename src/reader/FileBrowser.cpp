@@ -1,5 +1,10 @@
 #include "FileBrowser.h"
 
+#ifdef NATIVE_TESTING
+#include <dirent.h>
+#include <sys/types.h>
+#endif
+
 FileBrowser::FileBrowser() : currentPath("/") {
 }
 
@@ -76,15 +81,46 @@ void FileBrowser::loadDirectory(const char* path) {
         file = dir.openNextFile();
     }
 #else
-    // Mock for native testing
-    FileInfo info1 = {"The Great Gatsby.epub", "/books/The Great Gatsby.epub", false, 1200000};
-    FileInfo info2 = {"Pride and Prejudice.epub", "/books/Pride and Prejudice.epub", false, 800000};
-    FileInfo info3 = {"1984.epub", "/books/1984.epub", false, 950000};
-    FileInfo info4 = {"To Kill a Mockingbird.epub", "/books/To Kill a Mockingbird.epub", false, 1100000};
+    // Use opendir for native testing
+    std::string nativePath = path;
+    if (nativePath.length() > 0 && nativePath[0] == '/') {
+        nativePath = nativePath.substr(1);
+    }
+    if (nativePath.empty()) {
+        nativePath = ".";
+    }
     
-    files.push_back(info1);
-    files.push_back(info2);
-    files.push_back(info3);
-    files.push_back(info4);
+    DIR* d = opendir(nativePath.c_str());
+    if (d) {
+        struct dirent* entry;
+        while ((entry = readdir(d)) != nullptr) {
+            std::string name = entry->d_name;
+            if (name == "." || name == "..") continue;
+            if (name.length() > 0 && name[0] == '.') continue;
+            
+            FileInfo info;
+            info.name = name;
+            
+            std::string fullPath = currentPath;
+            if (fullPath.back() != '/') {
+                fullPath += "/";
+            }
+            fullPath += info.name;
+            info.path = fullPath;
+            info.isDirectory = (entry->d_type == DT_DIR);
+            
+            std::string realFilePath = nativePath + "/" + name;
+            FILE* f = fopen(realFilePath.c_str(), "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                info.size = ftell(f);
+                fclose(f);
+            } else {
+                info.size = 0;
+            }
+            files.push_back(info);
+        }
+        closedir(d);
+    }
 #endif
 }

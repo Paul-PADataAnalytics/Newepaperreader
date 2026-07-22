@@ -28,6 +28,7 @@ public:
     
     // Gets the current progress (0.0 to 1.0)
     float getProgress() const;
+    size_t getFileSize() const { return fileSize; }
     
     // Check if a file is open
     bool isOpen() const;

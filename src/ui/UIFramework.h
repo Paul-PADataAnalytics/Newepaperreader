@@ -23,4 +23,9 @@ public:
     
     // Clears a specific area of the screen
     static void clearArea(uint8_t *framebuffer, int x, int y, int w, int h);
+
+    // Draws a 16x16 monotone icon on the screen
+    static void drawIcon16x16(uint8_t *framebuffer, int x, int y, const uint8_t *bitmap, uint8_t color);
 };
+
+extern const uint8_t COG_ICON[32];

@@ -103,6 +103,17 @@
   - [x] Implemented `AppComm::sendDeltaSync()` and `AppComm::sendBookDelta()` on firmware for instant single-item JSON transmission over BLE notifications.
   - [x] Subscribed Flutter `BleService` to BLE notifications (`_readCharacteristic!.setNotifyValue(true)`), auto-parsing incoming `{"t": "<TYPE>", ...}` delta frames to update `BookStorageService` instantly for *only* the changed item.
   - [x] Established extensible architectural framework for all future syncable items.
+- [x] **2-Pass System-wide Localized Refresh Audit (Anti-Burn-In & Anti-Ghosting)**:
+  - [x] Implemented 2-pass partial update sequence (Pass 1: wipe target bounding box to background & flush to hardware display to reset microspheres; Pass 2: draw new content & flush to hardware display) across all localized UI updates.
+  - [x] Audited `EBookmarkApp`, `CalculatorApp`, `TimerApp`, `SettingsApp`, and `Launcher` status bar.
+- [x] **30-Second System Inactivity Sleep & "Sleeping zzzz" Screen**:
+  - [x] Implemented 30-second user touch inactivity timer in `main.cpp`.
+  - [x] On sleep: full hardware E-Ink clear (`DisplayHAL::clear()`), render blank screen with centered `"Sleeping zzzz"`, and enter low power standby to prevent screen burn-in.
+  - [x] On touch: wake up, full hardware clear, and cleanly redraw active application screen.
+- [x] **Release v1.02a & Code Cleanup**:
+  - [x] Version labeled firmware (`v1.02a`) and Android companion app (`1.0.2+3` / `v1.02a`).
+  - [x] Updated `README.md` and project documentation.
+  - [x] Staged and committed release v1.02a to Git repository.
 - [x] **Continuous Handover Maintenance**: Ensure `TODO.md` is updated before ending turns or committing major feature blocks.
 
 ---

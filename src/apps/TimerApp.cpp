@@ -104,13 +104,13 @@ void TimerApp::draw() {
         DisplayHAL::clear();
     }
 
-    // Clear the entire framebuffer
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
-    
-    // Draw mode selector tabs
+    // Pass 1: Localized clear pass - wipe time display area in memory & flush to E-Ink panel to reset microspheres
+    UIFramework::clearArea(framebuffer, 0, 80, w, h - 80);
+    DisplayHAL::display(framebuffer);
+
+    // Pass 2: Draw mode selector and timer digit displays, then flush to hardware panel
     drawModeSelector();
     
-    // Draw content of the active mode
     if (activeMode == TimerMode::CLOCK) {
         drawClockMode();
     } else if (activeMode == TimerMode::STOPWATCH) {
@@ -119,7 +119,6 @@ void TimerApp::draw() {
         drawCountdownMode();
     }
     
-    // Refresh display
     DisplayHAL::display(framebuffer);
 }
 

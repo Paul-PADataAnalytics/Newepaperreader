@@ -20,12 +20,14 @@ public:
     void launchApp(int index);
     void switchToApp(int index);
     void exitCurrentApp();
+    void returnToPreviousApp();
 
     void drawMenu();
     void handleTouch(int x, int y);
 
     bool isAppRunning() const { return m_activeApp != nullptr; }
     Application* getActiveApp() { return m_activeApp; }
+    int getActiveAppIndex() const { return m_activeAppIndex; }
 
 private:
     Launcher() = default;
@@ -36,4 +38,6 @@ private:
     std::vector<AppDescriptor> m_apps;
     Application* m_activeApp = nullptr;
     int m_activeAppIndex = -1;
+    int m_previousAppIndex = -1;
 };
+

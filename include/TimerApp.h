@@ -50,6 +50,7 @@ private:
     void drawClockMode();
     void drawStopwatchMode();
     void drawCountdownMode();
+    void drawFast();
     uint32_t get_current_ms() const;
 
 public:

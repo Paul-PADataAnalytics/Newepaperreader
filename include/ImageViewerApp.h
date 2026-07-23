@@ -51,7 +51,7 @@ private:
 
     void updateFileList();
     void drawBrowser();
-    void drawConverting();
+    void drawConverting(bool fullRefresh = true);
     void drawView();
 
     void startConversion(const std::string& path);

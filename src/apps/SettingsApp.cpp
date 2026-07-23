@@ -5,6 +5,10 @@
 #include "ui/UIFramework.h"
 #include "AppComm.h"
 #include "EBookmarkManager.h"
+#include "Launcher.h"
+#include "NavigationManager.h"
+
+
 #include <ArduinoJson.h>
 
 #ifndef NATIVE_TESTING
@@ -69,9 +73,8 @@ void SettingsApp::draw() {
     bool statusChanged = (m_syncStatus != m_lastDrawnStatus);
     bool pageChanged = (m_page != m_lastDrawnPage);
 
-    if (pageChanged) {
-        DisplayHAL::clear();
-    }
+    // Page changes are handled by the destination page's performFullScreenDraw,
+    // which includes a mandatory hardware clear. No direct clear needed here.
 
     if (pageChanged || !m_hasDrawn) {
         if (m_page == PAGE_MAIN) {
@@ -99,12 +102,13 @@ void SettingsApp::draw() {
 
 void SettingsApp::drawLogLineOnly() {
     int w = DisplayHAL::getWidth();
-    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 280, w, 80, [this]() {
+    uint8_t fg = UIFramework::getForegroundColor();
+    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 280, w, 80, [this, fg]() {
         typography.setFontSize(20.0f);
         if (m_bleActive) {
             typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
         }
-        typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, 0x04);
+        typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, fg);
     });
 }
 
@@ -116,215 +120,204 @@ void SettingsApp::update() {
 }
 
 void SettingsApp::drawMainSettings() {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
+    UIFramework::performFullScreenDraw(framebuffer, [&]() {
+        int w = DisplayHAL::getWidth();
+        uint8_t fg = UIFramework::getForegroundColor();
 
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
+        // 1. Header Title
+        typography.setFontSize(40.0f);
+        typography.renderText("System Settings", 70, 10, framebuffer, fg);
+        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
 
-    // 1. Header Title
-    typography.setFontSize(40.0f);
-    typography.renderText("System Settings", 70, 10, framebuffer);
-    DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
+        // 2. Line 1: BLE Settings: Connected/Disconnected  [Open BLE Settings]
+        int line1Y = 130;
+        std::string bleStateStr = m_bleActive ? "Connected" : "Disconnected";
+        uint8_t bleColor = m_bleActive ? fg : 0x06;
 
-    // 2. Line 1: BLE Settings: Connected/Disconnected  [Open BLE Settings]
-    int line1Y = 130;
-    std::string bleStateStr = m_bleActive ? "Connected" : "Disconnected";
-    uint8_t bleColor = m_bleActive ? 0x00 : 0x06;
-    
-    typography.setFontSize(26.0f);
-    typography.renderText("BLE Settings:", 70, line1Y + 10, framebuffer);
-    typography.renderText(bleStateStr, 250, line1Y + 10, framebuffer, bleColor);
+        typography.setFontSize(26.0f);
+        typography.renderText("BLE Settings:", 70, line1Y + 10, framebuffer, fg);
+        typography.renderText(bleStateStr, 250, line1Y + 10, framebuffer, bleColor);
 
-    int btnW = 280;
-    int btnH = 50;
-    int btn1X = 600;
-    int btn1Y = line1Y;
+        int btnW = 280;
+        int btnH = 50;
+        int btn1X = 600;
+        int btn1Y = line1Y;
 
-    UIFramework::drawButton(framebuffer, btn1X, btn1Y, btnW, btnH, "");
-    typography.setFontSize(22.0f);
-    int tw1 = typography.measureText("Open BLE Settings");
-    typography.renderText("Open BLE Settings", btn1X + (btnW - tw1) / 2, btn1Y + 14, framebuffer);
+        UIFramework::drawButton(framebuffer, btn1X, btn1Y, btnW, btnH, "");
+        typography.setFontSize(22.0f);
+        int tw1 = typography.measureText("Open BLE Settings");
+        typography.renderText("Open BLE Settings", btn1X + (btnW - tw1) / 2, btn1Y + 14, framebuffer, fg);
 
-    DisplayHAL::drawHLine(50, 210, w - 100, 0x03, framebuffer);
+        DisplayHAL::drawHLine(50, 210, w - 100, 0x03, framebuffer);
 
-    // 3. Line 2: Light/Dark Mode: Light Mode / Dark Mode  [Toggle Mode]
-    int line2Y = 240;
-    std::string modeStateStr = DisplayHAL::isDarkMode() ? "Dark Mode" : "Light Mode";
+        // 3. Line 2: Light/Dark Mode: Light Mode / Dark Mode  [Toggle Mode]
+        int line2Y = 240;
+        std::string modeStateStr = DisplayHAL::isDarkMode() ? "Dark Mode" : "Light Mode";
 
-    typography.setFontSize(26.0f);
-    typography.renderText("Light/Dark Mode:", 70, line2Y + 10, framebuffer);
-    typography.renderText(modeStateStr, 310, line2Y + 10, framebuffer);
+        typography.setFontSize(26.0f);
+        typography.renderText("Light/Dark Mode:", 70, line2Y + 10, framebuffer, fg);
+        typography.renderText(modeStateStr, 310, line2Y + 10, framebuffer, fg);
 
-    int btn2X = 600;
-    int btn2Y = line2Y;
+        int btn2X = 600;
+        int btn2Y = line2Y;
 
-    UIFramework::drawButton(framebuffer, btn2X, btn2Y, btnW, btnH, "");
-    typography.setFontSize(22.0f);
-    int tw2 = typography.measureText("Toggle Mode");
-    typography.renderText("Toggle Mode", btn2X + (btnW - tw2) / 2, btn2Y + 14, framebuffer);
+        UIFramework::drawButton(framebuffer, btn2X, btn2Y, btnW, btnH, "");
+        typography.setFontSize(22.0f);
+        int tw2 = typography.measureText("Toggle Mode");
+        typography.renderText("Toggle Mode", btn2X + (btnW - tw2) / 2, btn2Y + 14, framebuffer, fg);
 
-    DisplayHAL::drawHLine(50, 310, w - 100, 0x03, framebuffer);
+        DisplayHAL::drawHLine(50, 310, w - 100, 0x03, framebuffer);
 
-    // 4. Line 3: E-Reader Settings: Font Size XXpt  [Open E-Reader Settings]
-    int line3Y = 350;
-    int currentFontSize = (int)EReaderApp::getReadingFontSize();
-    std::string ereaderText = "E-Reader Settings: Font Size " + std::to_string(currentFontSize) + "pt";
+        // 4. Line 3: E-Reader Settings: Font Size XXpt  [Open E-Reader Settings]
+        int line3Y = 350;
+        int currentFontSize = (int)EReaderApp::getReadingFontSize();
+        std::string ereaderText = "E-Reader Settings: Font Size " + std::to_string(currentFontSize) + "pt";
 
-    typography.setFontSize(26.0f);
-    typography.renderText(ereaderText, 70, line3Y + 10, framebuffer);
+        typography.setFontSize(26.0f);
+        typography.renderText(ereaderText, 70, line3Y + 10, framebuffer, fg);
 
-    int btn3X = 600;
-    int btn3Y = line3Y;
+        int btn3X = 600;
+        int btn3Y = line3Y;
 
-    UIFramework::drawButton(framebuffer, btn3X, btn3Y, btnW, btnH, "");
-    typography.setFontSize(22.0f);
-    int tw3 = typography.measureText("Open E-Reader Settings");
-    typography.renderText("Open E-Reader Settings", btn3X + (btnW - tw3) / 2, btn3Y + 14, framebuffer);
+        UIFramework::drawButton(framebuffer, btn3X, btn3Y, btnW, btnH, "");
+        typography.setFontSize(22.0f);
+        int tw3 = typography.measureText("Open E-Reader Settings");
+        typography.renderText("Open E-Reader Settings", btn3X + (btnW - tw3) / 2, btn3Y + 14, framebuffer, fg);
 
-    DisplayHAL::drawHLine(50, 420, w - 100, 0x03, framebuffer);
+        DisplayHAL::drawHLine(50, 420, w - 100, 0x03, framebuffer);
 
-    // 5. Exit Settings Button
-    int exitX = (w - 240) / 2;
-    int exitY = 445;
-    int exitW = 240;
-    int exitH = 50;
-    UIFramework::drawButton(framebuffer, exitX, exitY, exitW, exitH, "");
-    typography.setFontSize(24.0f);
-    int btw = typography.measureText("Exit Settings");
-    typography.renderText("Exit Settings", exitX + (exitW - btw) / 2, exitY + 12, framebuffer);
-
-    DisplayHAL::display(framebuffer);
+        // 5. Exit Settings Button
+        int exitX = (w - 240) / 2;
+        int exitY = 445;
+        int exitW = 240;
+        int exitH = 50;
+        UIFramework::drawButton(framebuffer, exitX, exitY, exitW, exitH, "");
+        typography.setFontSize(24.0f);
+        int btw = typography.measureText("Exit Settings");
+        typography.renderText("Exit Settings", exitX + (exitW - btw) / 2, exitY + 12, framebuffer, fg);
+    });
 }
 
 void SettingsApp::drawBleSettings(bool forceFullRefresh) {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
+    (void)forceFullRefresh;
+    UIFramework::performFullScreenDraw(framebuffer, [&]() {
+        int w = DisplayHAL::getWidth();
+        uint8_t fg = UIFramework::getForegroundColor();
 
-    if (forceFullRefresh) {
-        DisplayHAL::clear();
-    }
+        // Header Title & Back Button
+        typography.setFontSize(40.0f);
+        typography.renderText("BLE Settings", 70, 10, framebuffer, fg);
 
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
+        int backX = w - 120;
+        int backY = 10;
+        int backW = 100;
+        int backH = 40;
+        UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
+        typography.setFontSize(24.0f);
+        int btw = typography.measureText("Back");
+        typography.renderText("Back", backX + (backW - btw) / 2, backY + 8, framebuffer, fg);
 
-    // Header Title & Back Button
-    typography.setFontSize(40.0f);
-    typography.renderText("BLE Settings", 70, 10, framebuffer);
+        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
 
-    int backX = w - 120;
-    int backY = 10;
-    int backW = 100;
-    int backH = 40;
-    UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
-    typography.setFontSize(24.0f);
-    int btw = typography.measureText("Back");
-    typography.renderText("Back", backX + (backW - btw) / 2, backY + 8, framebuffer);
+        // BLE Toggle Card
+        int cardX = 100;
+        int cardY = 110;
+        int cardW = w - 200;
+        int cardH = 160;
 
-    DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
+        UIFramework::drawButton(framebuffer, cardX, cardY, cardW, cardH, "");
 
-    // BLE Toggle Card
-    int cardX = 100;
-    int cardY = 110;
-    int cardW = w - 200;
-    int cardH = 160;
+        typography.setFontSize(28.0f);
+        typography.renderText("BLE Sync Server Broadcast", cardX + 30, cardY + 30, framebuffer, fg);
 
-    UIFramework::drawButton(framebuffer, cardX, cardY, cardW, cardH, "");
+        std::string stateStr = m_bleActive ? "ENABLED (ON)" : "DISABLED (OFF)";
+        uint8_t stateColor = m_bleActive ? fg : 0x06;
+        typography.setFontSize(24.0f);
+        typography.renderText("Status: " + stateStr, cardX + 30, cardY + 90, framebuffer, stateColor);
 
-    typography.setFontSize(28.0f);
-    typography.renderText("BLE Sync Server Broadcast", cardX + 30, cardY + 30, framebuffer);
+        int btnW = 160;
+        int btnH = 60;
+        int btnX = cardX + cardW - btnW - 30;
+        int btnY = cardY + (cardH - btnH) / 2;
 
-    std::string stateStr = m_bleActive ? "ENABLED (ON)" : "DISABLED (OFF)";
-    uint8_t stateColor = m_bleActive ? 0x00 : 0x06;
-    typography.setFontSize(24.0f);
-    typography.renderText("Status: " + stateStr, cardX + 30, cardY + 90, framebuffer, stateColor);
+        UIFramework::drawButton(framebuffer, btnX, btnY, btnW, btnH, "", m_bleActive);
 
-    int btnW = 160;
-    int btnH = 60;
-    int btnX = cardX + cardW - btnW - 30;
-    int btnY = cardY + (cardH - btnH) / 2;
+        typography.setFontSize(22.0f);
+        std::string btnText = m_bleActive ? "Turn OFF" : "Turn ON";
+        int tw = typography.measureText(btnText);
+        typography.renderText(btnText, btnX + (btnW - tw) / 2, btnY + 18, framebuffer, m_bleActive ? 0xFF : fg);
 
-    UIFramework::drawButton(framebuffer, btnX, btnY, btnW, btnH, "", m_bleActive);
-    
-    typography.setFontSize(22.0f);
-    std::string btnText = m_bleActive ? "Turn OFF" : "Turn ON";
-    int tw = typography.measureText(btnText);
-    typography.renderText(btnText, btnX + (btnW - tw) / 2, btnY + 18, framebuffer, m_bleActive ? 0xFF : 0x00);
-
-    // Broadcast info & Log output
-    typography.setFontSize(20.0f);
-    if (m_bleActive) {
-        typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
-    }
-    typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, 0x04);
-
-    DisplayHAL::display(framebuffer);
+        // Broadcast info & Log output
+        typography.setFontSize(20.0f);
+        if (m_bleActive) {
+            typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
+        }
+        typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, fg);
+    });
 }
 
 void SettingsApp::drawEReaderSettings() {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
+    UIFramework::performFullScreenDraw(framebuffer, [&]() {
+        int w = DisplayHAL::getWidth();
+        uint8_t fg = UIFramework::getForegroundColor();
 
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
+        // Header Title & Back Button
+        typography.setFontSize(40.0f);
+        typography.renderText("E-Reader Settings", 70, 10, framebuffer, fg);
 
-    // Header Title & Back Button
-    typography.setFontSize(40.0f);
-    typography.renderText("E-Reader Settings", 70, 10, framebuffer);
-
-    int backX = 820;
-    int backY = 10;
-    int backW = 100;
-    int backH = 40;
-    UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
-    typography.setFontSize(24.0f);
-    int btw = typography.measureText("Back");
-    typography.renderText("Back", backX + (backW - btw) / 2, backY + 8, framebuffer);
-
-    DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
-
-    // Current Font Size Display
-    float curSize = EReaderApp::getReadingFontSize();
-    typography.setFontSize(28.0f);
-    std::string currentStr = "Reading Font Size: " + std::to_string((int)curSize) + "pt";
-    typography.renderText(currentStr, 70, 100, framebuffer);
-
-    // Controls Row 1: [-] and [+] Step Buttons
-    // [-] button at x=70, y=160, w=100, h=60
-    // [+] button at x=200, y=160, w=100, h=60
-    UIFramework::drawButton(framebuffer, 70, 160, 100, 60, "");
-    typography.setFontSize(36.0f);
-    int minusW = typography.measureText("-");
-    typography.renderText("-", 70 + (100 - minusW) / 2, 160 + 10, framebuffer);
-
-    UIFramework::drawButton(framebuffer, 200, 160, 100, 60, "");
-    int plusW = typography.measureText("+");
-    typography.renderText("+", 200 + (100 - plusW) / 2, 160 + 10, framebuffer);
-
-    // Section Label: Preset Font Sizes
-    typography.setFontSize(26.0f);
-    typography.renderText("Presets:", 70, 260, framebuffer);
-
-    // Controls Row 2: Preset buttons (20pt, 24pt, 28pt, 32pt, 36pt, 40pt)
-    static const int presets[] = {20, 24, 28, 32, 36, 40};
-    int presetBtnW = 110;
-    int presetBtnH = 55;
-    int startX = 70;
-    int startY = 310;
-    int gapX = 25;
-
-    for (int i = 0; i < 6; i++) {
-        int px = startX + i * (presetBtnW + gapX);
-        int py = startY;
-        bool isSelected = ((int)curSize == presets[i]);
-
-        UIFramework::drawButton(framebuffer, px, py, presetBtnW, presetBtnH, "", isSelected);
-
+        int backX = 820;
+        int backY = 10;
+        int backW = 100;
+        int backH = 40;
+        UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
         typography.setFontSize(24.0f);
-        std::string pStr = std::to_string(presets[i]) + "pt";
-        int pw = typography.measureText(pStr);
-        uint8_t fontColor = isSelected ? 0xFF : 0x00;
-        typography.renderText(pStr, px + (presetBtnW - pw) / 2, py + 14, framebuffer, fontColor);
-    }
+        int btw = typography.measureText("Back");
+        typography.renderText("Back", backX + (backW - btw) / 2, backY + 8, framebuffer, fg);
 
-    DisplayHAL::display(framebuffer);
+        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
+
+        // Current Font Size Display
+        float curSize = EReaderApp::getReadingFontSize();
+        typography.setFontSize(28.0f);
+        std::string currentStr = "Reading Font Size: " + std::to_string((int)curSize) + "pt";
+        typography.renderText(currentStr, 70, 100, framebuffer, fg);
+
+        // Controls Row 1: [-] and [+] Step Buttons
+        UIFramework::drawButton(framebuffer, 70, 160, 100, 60, "");
+        typography.setFontSize(36.0f);
+        int minusW = typography.measureText("-");
+        typography.renderText("-", 70 + (100 - minusW) / 2, 160 + 10, framebuffer, fg);
+
+        UIFramework::drawButton(framebuffer, 200, 160, 100, 60, "");
+        int plusW = typography.measureText("+");
+        typography.renderText("+", 200 + (100 - plusW) / 2, 160 + 10, framebuffer, fg);
+
+        // Section Label: Preset Font Sizes
+        typography.setFontSize(26.0f);
+        typography.renderText("Presets:", 70, 260, framebuffer, fg);
+
+        // Controls Row 2: Preset buttons (20pt, 24pt, 28pt, 32pt, 36pt, 40pt)
+        static const int presets[] = {20, 24, 28, 32, 36, 40};
+        int presetBtnW = 110;
+        int presetBtnH = 55;
+        int startX = 70;
+        int startY = 310;
+        int gapX = 25;
+
+        for (int i = 0; i < 6; i++) {
+            int px = startX + i * (presetBtnW + gapX);
+            int py = startY;
+            bool isSelected = ((int)curSize == presets[i]);
+
+            UIFramework::drawButton(framebuffer, px, py, presetBtnW, presetBtnH, "", isSelected);
+
+            typography.setFontSize(24.0f);
+            std::string pStr = std::to_string(presets[i]) + "pt";
+            int pw = typography.measureText(pStr);
+            uint8_t fontColor = isSelected ? 0xFF : fg;
+            typography.renderText(pStr, px + (presetBtnW - pw) / 2, py + 14, framebuffer, fontColor);
+        }
+    });
 }
 
 void SettingsApp::handleTouch(int x, int y) {
@@ -341,7 +334,6 @@ void SettingsApp::handleTouch(int x, int y) {
         // Row 2: Toggle Mode button (x=600..880, y=240..290)
         if (x >= 600 && x <= 880 && y >= 240 && y <= 290) {
             DisplayHAL::setDarkMode(!DisplayHAL::isDarkMode());
-            DisplayHAL::clear();
             drawMainSettings();
             return;
         }
@@ -359,8 +351,7 @@ void SettingsApp::handleTouch(int x, int y) {
         int exitW = 240;
         int exitH = 50;
         if (x >= exitX && x <= exitX + exitW && y >= exitY && y <= exitY + exitH) {
-            extern void exitToSystemLauncher();
-            exitToSystemLauncher();
+            NavigationManager::getInstance().goBack();
             return;
         }
     } else if (m_page == PAGE_BLE) {

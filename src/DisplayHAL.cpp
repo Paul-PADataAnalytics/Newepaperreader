@@ -9,6 +9,8 @@ static TouchDrvGT911 touch;
 #include <Arduino.h>
 #include <Wire.h>
 #include "utilities.h"
+#else
+#include <unistd.h>
 #endif
 
 static int simulatedTouchX = -1;
@@ -16,6 +18,17 @@ static int simulatedTouchY = -1;
 static bool _isPortrait = false;
 
 bool DisplayHAL::s_darkMode = false;
+bool DisplayHAL::s_debugScreen = false;
+uint8_t* DisplayHAL::frontBuffer = nullptr;
+uint8_t* DisplayHAL::backBuffer = nullptr;
+
+void DisplayHAL::setDebugScreen(bool enable) {
+    s_debugScreen = enable;
+}
+
+bool DisplayHAL::isDebugScreen() {
+    return s_debugScreen;
+}
 
 void DisplayHAL::setDarkMode(bool enable) {
     s_darkMode = enable;
@@ -91,6 +104,12 @@ bool DisplayHAL::getTouch(int &x, int &y) {
             x = 539 - ty;
             y = tx;
 #else
+            // In SDL rendering: window pixel (tx, ty) maps to buffer pixel (lx, ly):
+            // tx = ly => ly = tx
+            // ty = EPD_HEIGHT - 1 - lx => lx = (EPD_HEIGHT - 1) - ty
+            // In portrait mode, app width is 540 (EPD_HEIGHT) and app height is 960 (EPD_WIDTH).
+            // App coordinate x = lx = (EPD_HEIGHT - 1) - ty
+            // App coordinate y = ly = tx
             x = (EPD_HEIGHT - 1) - ty;
             y = tx;
 #endif
@@ -138,9 +157,40 @@ void DisplayHAL::powerOff() {
     epd_poweroff();
 }
 
+float DisplayHAL::getBatteryVoltage() {
+    // LilyGo T5 EPD47 S3 battery ADC voltage divider configuration
+    // Battery ADC pin is GPIO 14 (or BATT_PIN / BATT_ADC_PIN depending on board revision)
+    #ifndef BATT_PIN
+    #define BATT_PIN 14
+    #endif
+    
+    // Read raw ADC value (12-bit ADC: 0..4095)
+    uint32_t raw = analogRead(BATT_PIN);
+    
+    // Voltage divider: 2 * (raw / 4095.0) * 3.3V (with 1.1V attenuation factor / divider)
+    float voltage = (float)raw / 4095.0f * 2.0f * 3.3f * 1.1f;
+    return voltage;
+}
+
+int DisplayHAL::getBatteryPercent() {
+    float v = getBatteryVoltage();
+    // LiPo cell discharge curve mapping: 4.2V = 100%, 3.3V = 0%
+    if (v >= 4.2f) return 100;
+    if (v <= 3.3f) return 0;
+    int pct = (int)(((v - 3.3f) / (4.2f - 3.3f)) * 100.0f);
+    return pct;
+}
+
+bool DisplayHAL::isCharging() {
+    // Returns true if battery voltage is at/near charging cutoff threshold (>= 4.25V)
+    return getBatteryVoltage() >= 4.25f;
+}
+
+
 void DisplayHAL::clear() {
     epd_clear();
 }
+
 
 void DisplayHAL::display(uint8_t* framebuffer) {
     uint8_t* targetFb = framebuffer;
@@ -212,13 +262,8 @@ void DisplayHAL::freeFramebuffer(uint8_t* framebuffer) {
 #include <string.h>
 #include <stdio.h>
 
-#if __has_include(<SDL2/SDL.h>) || __has_include(<SDL.h>)
-#define HAS_SDL
-#ifdef __APPLE__
-#include <SDL.h>
-#else
+#ifdef HAS_SDL
 #include <SDL2/SDL.h>
-#endif
 #endif
 
 #ifdef HAS_SDL
@@ -252,6 +297,19 @@ void DisplayHAL::powerOn() {
 void DisplayHAL::powerOff() {
     printf("Native DisplayHAL: powerOff()\n");
 }
+
+float DisplayHAL::getBatteryVoltage() {
+    return 4.15f; // Mock nominal 4.15V LiPo battery
+}
+
+int DisplayHAL::getBatteryPercent() {
+    return 95; // Mock 95% battery capacity
+}
+
+bool DisplayHAL::isCharging() {
+    return false; // Mock not charging
+}
+
 
 void DisplayHAL::clear() {
     printf("Native DisplayHAL: clear()\n");
@@ -334,6 +392,9 @@ void DisplayHAL::handleEvents() {
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) {
             shouldClose = true;
+        } else if (e.type == SDL_MOUSEBUTTONDOWN) {
+            simulatedTouchX = e.button.x;
+            simulatedTouchY = e.button.y;
         }
     }
 #endif
@@ -414,6 +475,240 @@ void DisplayHAL::fillRect(int x, int y, int width, int height, uint8_t color, ui
             setPixel(x + i, y + j, color, framebuffer);
         }
     }
+}
+
+void DisplayHAL::updateScreenFull() {
+    if (!frontBuffer || !backBuffer) return;
+    
+#ifdef NATIVE_TESTING
+    if (s_debugScreen) {
+        printf("[DEBUG-SCREEN] updateScreenFull() requested.\n");
+        uint8_t* temp = allocateFramebuffer();
+        memset(temp, 0x00, getWidth() * getHeight() / 2); // Black flash
+        display(temp);
+        usleep(150000);
+        memset(temp, 0xFF, getWidth() * getHeight() / 2); // White flash
+        display(temp);
+        usleep(150000);
+        freeFramebuffer(temp);
+    }
+#endif
+
+    clear();
+    display(frontBuffer);
+    memcpy(backBuffer, frontBuffer, getWidth() * getHeight() / 2);
+}
+
+void DisplayHAL::updateScreenPartial() {
+    if (!frontBuffer || !backBuffer) return;
+    int w = getWidth();
+    int h = getHeight();
+    
+    int minX = w, minY = h, maxX = -1, maxY = -1;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            if (getPixel(x, y, frontBuffer) != getPixel(x, y, backBuffer)) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) {
+#ifdef NATIVE_TESTING
+        if (s_debugScreen) {
+            printf("[DEBUG-SCREEN] updateScreenPartial() ignored (no changes).\n");
+        }
+#endif
+        return; 
+    }
+
+#ifdef NATIVE_TESTING
+    if (s_debugScreen) {
+        printf("[DEBUG-SCREEN] updateScreenPartial() Diff Bounds: x=%d, y=%d, w=%d, h=%d\n", 
+               minX, minY, (maxX - minX + 1), (maxY - minY + 1));
+    }
+#endif
+    
+#ifdef NATIVE_TESTING
+    uint8_t* tempFb = allocateFramebuffer();
+    if (tempFb) {
+        memcpy(tempFb, backBuffer, w * h / 2);
+        fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0xFF, tempFb);
+        
+        if (s_debugScreen) {
+            // Flash bounded clear region to white
+            display(tempFb);
+            usleep(100000);
+            // Flash it black to highlight the bounding box
+            fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0x00, tempFb);
+            display(tempFb);
+            usleep(100000);
+            // Flash back to white
+            fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0xFF, tempFb);
+            display(tempFb);
+            usleep(100000);
+        } else {
+            display(tempFb);
+        }
+        freeFramebuffer(tempFb);
+    }
+#else
+    // Hardware E-ink physical clear waveform for the bounding box area
+    int physical_minX, physical_minY, physical_w, physical_h;
+    if (_isPortrait) {
+        physical_minX = minY;
+        physical_minY = EPD_HEIGHT - 1 - maxX;
+        physical_w = (maxY - minY + 1);
+        physical_h = (maxX - minX + 1);
+    } else {
+        physical_minX = minX;
+        physical_minY = minY;
+        physical_w = (maxX - minX + 1);
+        physical_h = (maxY - minY + 1);
+    }
+
+    Rect_t area = { 
+        .x = physical_minX, 
+        .y = physical_minY, 
+        .width = physical_w, 
+        .height = physical_h 
+    };
+    epd_clear_area(area);
+#endif
+
+    display(frontBuffer);
+    
+    memcpy(backBuffer, frontBuffer, w * h / 2);
+}
+
+void DisplayHAL::updateScreenFast() {
+    if (!frontBuffer || !backBuffer) return;
+    int w = getWidth();
+    int h = getHeight();
+    
+    int minX = w, minY = h, maxX = -1, maxY = -1;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            if (getPixel(x, y, frontBuffer) != getPixel(x, y, backBuffer)) {
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    if (maxX < minX || maxY < minY) return; 
+    
+    int physical_minX, physical_minY, physical_w, physical_h;
+    if (_isPortrait) {
+        physical_minX = minY;
+        physical_minY = EPD_HEIGHT - 1 - maxX;
+        physical_w = (maxY - minY + 1);
+        physical_h = (maxX - minX + 1);
+    } else {
+        physical_minX = minX;
+        physical_minY = minY;
+        physical_w = (maxX - minX + 1);
+        physical_h = (maxY - minY + 1);
+    }
+    
+#ifndef NATIVE_TESTING
+    // Align physical_minX to 16-pixel boundary to avoid epd_draw_frame_1bit shifting bugs
+    int original_maxX = physical_minX + physical_w;
+    physical_minX = physical_minX & ~15;
+    physical_w = original_maxX - physical_minX;
+    if (physical_w % 16 != 0) {
+        physical_w = (physical_w + 15) & ~15;
+    }
+
+    Rect_t area = { 
+        .x = physical_minX, 
+        .y = physical_minY, 
+        .width = physical_w, 
+        .height = physical_h 
+    };
+
+    // Hardware 1-bit fast update
+    int stride = physical_w / 8;
+    int monoStride = stride;
+    uint8_t* monoBuf = (uint8_t*)calloc(1, monoStride * physical_h);
+    if (monoBuf) {
+        for (int py = 0; py < physical_h; py++) {
+            for (int px = 0; px < physical_w; px++) {
+                int physical_abs_x = physical_minX + px;
+                int physical_abs_y = physical_minY + py;
+                
+                int lx, ly;
+                if (_isPortrait) {
+                    ly = physical_abs_x;
+                    lx = EPD_HEIGHT - 1 - physical_abs_y;
+                } else {
+                    lx = physical_abs_x;
+                    ly = physical_abs_y;
+                }
+
+                if (lx < 0 || lx >= DisplayHAL::getWidth() || ly < 0 || ly >= DisplayHAL::getHeight()) {
+                    continue;
+                }
+
+                uint8_t color = getPixel(lx, ly, frontBuffer);
+                // 1bpp driver ONLY draws black pixels and skips 0s. 
+                // We want to draw the dark pixels as black.
+                bool isBlack = (color < 0x08);
+                if (isBlack) {
+                    monoBuf[py * stride + (px / 8)] |= (1 << (px % 8));
+                }
+            }
+        }
+
+        // FIX: The LilyGo calc_epd_input_1bpp has a byte-swap bug!
+        // It maps line_data[0] to the upper 16-bits of the 32-bit DMA word, and line_data[1] to the lower 16-bits.
+        // Because ESP32 is little-endian, the DMA transmits the lower 16-bits FIRST.
+        // So line_data[1] (pixels 8-15) is drawn BEFORE line_data[0] (pixels 0-7)!
+        // We must swap every adjacent pair of bytes in monoBuf to compensate.
+        for (int i = 0; i < monoStride * physical_h; i += 2) {
+            if (i + 1 < monoStride * physical_h) {
+                uint8_t temp = monoBuf[i];
+                monoBuf[i] = monoBuf[i + 1];
+                monoBuf[i + 1] = temp;
+            }
+        }
+
+        // Cleanly erase the bounding box area with multiple white pulses.
+        // Pulsing is required for E-ink to overcome particle inertia.
+        // 8 pulses of 500 ticks (50 * 10) = 4000 ticks of white to fully erase deep black.
+        for (int i = 0; i < 8; i++) {
+            epd_push_pixels(area, 50, 1);
+        }
+
+        // Push 1-bit frame of black pixels in multiple pulses.
+        // 4 pulses of 500 ticks = 2000 ticks for deep, high-contrast black.
+        for (int i = 0; i < 4; i++) {
+            epd_draw_frame_1bit(area, monoBuf, BLACK_ON_WHITE, 500);
+        }
+
+        free(monoBuf);
+    }
+#else
+    if (s_debugScreen) {
+        printf("[DEBUG-SCREEN] updateScreenFast() Fast Mono Bounding Box: x=%d, y=%d, w=%d, h=%d\n", 
+               minX, minY, (maxX - minX + 1), (maxY - minY + 1));
+        // Visually flash it very quickly
+        uint8_t* tempFb = allocateFramebuffer();
+        if (tempFb) {
+            memcpy(tempFb, backBuffer, w * h / 2);
+            fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0x00, tempFb);
+            display(tempFb);
+            usleep(20000); // 20ms
+            freeFramebuffer(tempFb);
+        }
+    }
+    display(frontBuffer);
+#endif
+
+    memcpy(backBuffer, frontBuffer, w * h / 2);
 }
 
 void DisplayHAL::injectTouch(int x, int y) {

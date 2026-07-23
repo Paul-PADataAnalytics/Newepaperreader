@@ -38,22 +38,69 @@ void UIFramework::drawButton(uint8_t *framebuffer, int x, int y, int w, int h, c
     // Text placeholder...
 }
 
+uint8_t UIFramework::getBackgroundColor() {
+    return 0xFF; // Always white in memory, DisplayHAL handles dark mode inversion
+}
+
+uint8_t UIFramework::getForegroundColor() {
+    return 0x00; // Always black in memory
+}
+
 void UIFramework::clearArea(uint8_t *framebuffer, int x, int y, int w, int h) {
-    DisplayHAL::fillRect(x, y, w, h, 0xFF, framebuffer); // 0xFF is white
+    DisplayHAL::fillRect(x, y, w, h, getBackgroundColor(), framebuffer);
+}
+
+void UIFramework::clearToBackground(uint8_t *framebuffer) {
+    if (!framebuffer) return;
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+    clearArea(framebuffer, 0, 0, w, h);
 }
 
 void UIFramework::perform2PassPartialUpdate(uint8_t *framebuffer, int x, int y, int w, int h, std::function<void()> renderContent) {
     if (!framebuffer) return;
 
-    // Pass 1: Clear localized bounding box in memory & flush white background to physical E-Ink panel to reset microspheres
+    // Clear localized bounding box in memory
     clearArea(framebuffer, x, y, w, h);
-    DisplayHAL::display(framebuffer);
 
-    // Pass 2: Render new content into cleared region & flush crisp content to physical E-Ink panel
+    // Render new content into cleared region
     if (renderContent) {
         renderContent();
     }
-    DisplayHAL::display(framebuffer);
+    
+    // Let DisplayHAL perform diff-based partial update with auto-clear
+    DisplayHAL::updateScreenPartial();
+}
+
+void UIFramework::performFastPartialUpdate(uint8_t* framebuffer, int x, int y, int w, int h, std::function<void()> drawFunc) {
+    if (!framebuffer) return;
+
+    // Clear localized bounding box in memory
+    clearArea(framebuffer, x, y, w, h);
+
+    if (drawFunc) {
+        drawFunc();
+    }
+    
+    DisplayHAL::updateScreenFast();
+}
+
+void UIFramework::performFullScreenDraw(uint8_t *framebuffer, std::function<void()> renderContent) {
+    if (!framebuffer) return;
+
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+
+    // 1. Clear entire framebuffer to background color in memory
+    clearArea(framebuffer, 0, 0, w, h);
+
+    // 2. Render new screen content into the clean framebuffer
+    if (renderContent) {
+        renderContent();
+    }
+
+    // 3. Delegate to DisplayHAL for a full hardware clear and buffer swap
+    DisplayHAL::updateScreenFull();
 }
 
 void UIFramework::drawIcon16x16(uint8_t *framebuffer, int x, int y, const uint8_t *bitmap, uint8_t color) {

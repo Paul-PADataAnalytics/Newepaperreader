@@ -159,100 +159,106 @@ void EBookmarkApp::updateEBookmarkItems() {
 void EBookmarkApp::drawEBookmarkLibrary() {
     int w = DisplayHAL::getWidth();
     int h = DisplayHAL::getHeight();
+    UIFramework::performFullScreenDraw(framebuffer, [this, w]() {
+        uint8_t fg = UIFramework::getForegroundColor();
 
-    typography.setFontSize(32.0f);
-    
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
-    
-    typography.setFontSize(48.0f);
-    typography.renderText("eBookmark Library", 70, 2, framebuffer);
-    
-    typography.setFontSize(28.0f);
-    std::string sysInfo = "10:00 AM | 80% | 12GB Free";
-    int sysInfoW = typography.measureText(sysInfo);
-    typography.renderText(sysInfo, 960 - sysInfoW - 60, 12, framebuffer);
-    UIFramework::drawIcon16x16(framebuffer, 920, 18, COG_ICON, 0x00);
-    DisplayHAL::drawHLine(0, LIB_TOP_H - 1, 960, 0x00, framebuffer);
+        typography.setFontSize(48.0f);
+        typography.renderText("eBookmark Library", 70, 2, framebuffer, fg);
 
-    UIFramework::clearArea(framebuffer, LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H);
-    DisplayHAL::drawRect(LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H, 0x00, framebuffer);
-    
-    std::vector<std::pair<std::string, std::string>> buttons = {
-        {"Sort:", "Author"},
-        {"Sort:", "Genre"},
-        {"Sort:", "Prog %"},
-        {"Exit to", "Launcher"}
-    };
-    int btnH = LIB_MAIN_H / 4;
-    typography.setFontSize(24.0f);
-    for (size_t i = 0; i < buttons.size(); i++) {
-        int by = LIB_MAIN_Y + (i * btnH);
-        UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, by + 10, LIB_SIDE_W - 20, btnH - 20, "");
-        
-        int tw1 = typography.measureText(buttons[i].first);
-        int tw2 = typography.measureText(buttons[i].second);
-        int tx1 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw1) / 2;
-        int tx2 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw2) / 2;
-        int ty = by + 25;
-        typography.renderText(buttons[i].first, tx1, ty, framebuffer);
-        typography.renderText(buttons[i].second, tx2, ty + 30, framebuffer);
-    }
-    typography.setFontSize(32.0f);
+        typography.setFontSize(28.0f);
 
-    UIFramework::clearArea(framebuffer, 0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H);
-    DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
-
-    int pBtnW = LIB_PAGING_W - 20;
-    int pBtnH = LIB_MAIN_H / 2 - 20;
-    int symbolHeight = 24;
-    
-    int upY = LIB_MAIN_Y + 10;
-    UIFramework::drawButton(framebuffer, 25, upY, pBtnW, pBtnH, "");
-    std::string upSymbol = "/\\";
-    int twUp = typography.measureText(upSymbol);
-    typography.renderText(upSymbol, 25 + (pBtnW - twUp) / 2, upY + (pBtnH - symbolHeight) / 2, framebuffer);
-    
-    int dnY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
-    UIFramework::drawButton(framebuffer, 25, dnY, pBtnW, pBtnH, "");
-    std::string dnSymbol = "\\/";
-    int twDn = typography.measureText(dnSymbol);
-    typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer);
-
-    updateEBookmarkItems();
-    
-    int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
-    int startIndex = m_ebookmarkPage * itemsPerPage;
-    int y = LIB_MAIN_Y;
-    typography.setFontSize(40.0f);
-    
-    for (int i = 0; i < itemsPerPage && (startIndex + i) < m_sortedEBookmarks.size(); i++) {
-        const EBookmark& book = m_sortedEBookmarks[startIndex + i];
-        int rowY = y + 20;
-        
-        std::string leftText = book.title + " - " + book.author;
-        int maxW = LIB_LIST_W - 120;
-        while (leftText.length() > 3 && typography.measureText(leftText + "...") > maxW) {
-            leftText.pop_back();
+        time_t rawtime;
+        time(&rawtime);
+        struct tm* timeinfo = localtime(&rawtime);
+        char timeStr[32];
+        if (timeinfo) {
+            strftime(timeStr, sizeof(timeStr), "%I:%M %p", timeinfo);
+        } else {
+            snprintf(timeStr, sizeof(timeStr), "--:--");
         }
-        if (leftText.length() < book.title.length() + book.author.length() + 3) {
-            leftText += "...";
+        std::string sysInfo = std::string(timeStr) + " | 80% | 12GB Free";
+
+        int sysInfoW = typography.measureText(sysInfo);
+        typography.renderText(sysInfo, w - sysInfoW - 60, 12, framebuffer, fg);
+        UIFramework::drawIcon16x16(framebuffer, 920, 18, COG_ICON, fg);
+        DisplayHAL::drawHLine(0, LIB_TOP_H - 1, w, fg, framebuffer);
+
+        // Side panel buttons
+        DisplayHAL::drawRect(LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H, fg, framebuffer);
+        std::vector<std::pair<std::string, std::string>> buttons = {
+            {"Sort:", "Author"},
+            {"Sort:", "Genre"},
+            {"Sort:", "Prog %"},
+            {"Exit to", "Launcher"}
+        };
+        int btnH = LIB_MAIN_H / 4;
+        typography.setFontSize(24.0f);
+        for (size_t i = 0; i < buttons.size(); i++) {
+            int by = LIB_MAIN_Y + (i * btnH);
+            UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, by + 10, LIB_SIDE_W - 20, btnH - 20, "");
+            int tw1 = typography.measureText(buttons[i].first);
+            int tw2 = typography.measureText(buttons[i].second);
+            int tx1 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw1) / 2;
+            int tx2 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw2) / 2;
+            int ty = by + 25;
+            typography.renderText(buttons[i].first, tx1, ty, framebuffer, fg);
+            typography.renderText(buttons[i].second, tx2, ty + 30, framebuffer, fg);
         }
-        
-        float progress = book.totalPages > 0 ? (float)book.currentPage / book.totalPages : 0.0f;
-        std::string rightText = std::to_string((int)(progress * 100)) + "%";
-        int rw = typography.measureText(rightText);
-        
-        typography.renderText(leftText, LIB_LIST_X + 20, rowY, framebuffer);
-        typography.renderText(rightText, LIB_LIST_X + LIB_LIST_W - rw - 20, rowY, framebuffer);
-        y += LIB_ROW_H;
-    }
-    
-    if (m_sortedEBookmarks.empty()) {
-        typography.renderText("No eBookmarks found.", LIB_LIST_X + 20, LIB_MAIN_Y + 50, framebuffer);
-    }
-    typography.setFontSize(32.0f);
-    
-    DisplayHAL::display(framebuffer);
+        typography.setFontSize(32.0f);
+
+        // Main list background
+        DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
+
+        int pBtnW = LIB_PAGING_W - 20;
+        int pBtnH = LIB_MAIN_H / 2 - 20;
+        int symbolHeight = 24;
+
+        int upY = LIB_MAIN_Y + 10;
+        UIFramework::drawButton(framebuffer, 25, upY, pBtnW, pBtnH, "");
+        std::string upSymbol = "/\\";
+        int twUp = typography.measureText(upSymbol);
+        typography.renderText(upSymbol, 25 + (pBtnW - twUp) / 2, upY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
+
+        int dnY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
+        UIFramework::drawButton(framebuffer, 25, dnY, pBtnW, pBtnH, "");
+        std::string dnSymbol = "\\/";
+        int twDn = typography.measureText(dnSymbol);
+        typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
+
+        updateEBookmarkItems();
+
+        int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
+        int startIndex = m_ebookmarkPage * itemsPerPage;
+        int y = LIB_MAIN_Y;
+        typography.setFontSize(40.0f);
+
+        for (int i = 0; i < itemsPerPage && (startIndex + i) < m_sortedEBookmarks.size(); i++) {
+            const EBookmark& book = m_sortedEBookmarks[startIndex + i];
+            int rowY = y + 20;
+
+            std::string leftText = book.title + " - " + book.author;
+            int maxW = LIB_LIST_W - 120;
+            while (leftText.length() > 3 && typography.measureText(leftText + "...") > maxW) {
+                leftText.pop_back();
+            }
+            if (leftText.length() < book.title.length() + book.author.length() + 3) {
+                leftText += "...";
+            }
+
+            float progress = book.totalPages > 0 ? (float)book.currentPage / book.totalPages : 0.0f;
+            std::string rightText = std::to_string((int)(progress * 100)) + "%";
+            int rw = typography.measureText(rightText);
+
+            typography.renderText(leftText, LIB_LIST_X + 20, rowY, framebuffer, fg);
+            typography.renderText(rightText, LIB_LIST_X + LIB_LIST_W - rw - 20, rowY, framebuffer, fg);
+            y += LIB_ROW_H;
+        }
+
+        if (m_sortedEBookmarks.empty()) {
+            typography.renderText("No eBookmarks found.", LIB_LIST_X + 20, LIB_MAIN_Y + 50, framebuffer, fg);
+        }
+        typography.setFontSize(32.0f);
+    });
 }
 
 void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
@@ -262,12 +268,9 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
     int w = DisplayHAL::getWidth();
     int h = DisplayHAL::getHeight();
 
-    if (fullRefresh) {
-        DisplayHAL::clear();
-        UIFramework::clearArea(framebuffer, 0, 0, w, h);
-    }
-
     auto renderDetailContent = [this, &book, w, h]() {
+        uint8_t fg = UIFramework::getForegroundColor();
+
         int backX = w - 120;
         int backY = 10;
         int backW = 100;
@@ -275,7 +278,7 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
         UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
         typography.setFontSize(24.0f);
         int backTextW = typography.measureText("Back");
-        typography.renderText("Back", backX + (backW - backTextW) / 2, backY + 8, framebuffer);
+        typography.renderText("Back", backX + (backW - backTextW) / 2, backY + 8, framebuffer, fg);
 
         typography.setFontSize(28.0f);
         std::string topText = "eBookmark - " + book.title;
@@ -291,14 +294,14 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
         }
         typography.renderText(topText, 20, 15, framebuffer, 0x05);
 
-        DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
+        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
 
         std::string pageStr = std::to_string(book.currentPage) + " / " + std::to_string(book.totalPages);
         typography.setFontSize(80.0f);
         int pW = typography.measureText(pageStr);
         int pX = (w - pW) / 2;
         int pY = 180;
-        typography.renderText(pageStr, pX, pY, framebuffer);
+        typography.renderText(pageStr, pX, pY, framebuffer, fg);
 
         int btnY1 = 185;
         int btnW1 = 70;
@@ -308,12 +311,12 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
 
         UIFramework::drawButton(framebuffer, minusX, btnY1, btnW1, btnH1, "");
         UIFramework::drawButton(framebuffer, plusX, btnY1, btnW1, btnH1, "");
-        
+
         typography.setFontSize(36.0f);
         int signW1 = typography.measureText("-");
         int signW2 = typography.measureText("+");
-        typography.renderText("-", minusX + (btnW1 - signW1) / 2, btnY1 + 16, framebuffer);
-        typography.renderText("+", plusX + (btnW1 - signW2) / 2, btnY1 + 16, framebuffer);
+        typography.renderText("-", minusX + (btnW1 - signW1) / 2, btnY1 + 16, framebuffer, fg);
+        typography.renderText("+", plusX + (btnW1 - signW2) / 2, btnY1 + 16, framebuffer, fg);
 
         int btnY2 = 270;
         int btnW2 = 70;
@@ -321,24 +324,24 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
 
         UIFramework::drawButton(framebuffer, minusX, btnY2, btnW2, btnH2, "");
         UIFramework::drawButton(framebuffer, plusX, btnY2, btnW2, btnH2, "");
-        
+
         typography.setFontSize(24.0f);
         int signW3 = typography.measureText("-5");
         int signW4 = typography.measureText("+5");
-        typography.renderText("-5", minusX + (btnW2 - signW3) / 2, btnY2 + 12, framebuffer);
-        typography.renderText("+5", plusX + (btnW2 - signW4) / 2, btnY2 + 12, framebuffer);
+        typography.renderText("-5", minusX + (btnW2 - signW3) / 2, btnY2 + 12, framebuffer, fg);
+        typography.renderText("+5", plusX + (btnW2 - signW4) / 2, btnY2 + 12, framebuffer, fg);
 
         int days = EBookmarkManager::getInstance().getDaysReading(book);
         float avg = EBookmarkManager::getInstance().getAvgPagesPerSitting(book);
-        
+
         char daysStr[32];
         snprintf(daysStr, sizeof(daysStr), "Days Reading: %d", days);
-        
+
         char avgStr[32];
         snprintf(avgStr, sizeof(avgStr), "Pages/Sit Avg: %.1f", avg);
-        
+
         std::string genreStr = "Genre: " + (book.genre.empty() ? "None" : book.genre);
-        
+
         typography.setFontSize(24.0f);
         typography.renderText(genreStr, 50, 395, framebuffer, 0x03);
         typography.renderText(daysStr, 380, 395, framebuffer, 0x03);
@@ -348,12 +351,12 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
         int barH = 16;
         int barX = 50;
         int barW = w - 100;
-        
+
         float progress = book.totalPages > 0 ? (float)book.currentPage / book.totalPages : 0.0f;
         if (progress > 1.0f) progress = 1.0f;
-        
-        DisplayHAL::drawRect(barX, barY, barW, barH, 0x00, framebuffer);
-        DisplayHAL::fillRect(barX, barY, (int)(barW * progress), barH, 0x00, framebuffer);
+
+        DisplayHAL::drawRect(barX, barY, barW, barH, fg, framebuffer);
+        DisplayHAL::fillRect(barX, barY, (int)(barW * progress), barH, fg, framebuffer);
 
         char percentStr[32];
         snprintf(percentStr, sizeof(percentStr), "%d%% Complete", (int)(progress * 100));
@@ -362,12 +365,13 @@ void EBookmarkApp::drawEBookmarkDetail(bool fullRefresh) {
     };
 
     if (fullRefresh) {
-        renderDetailContent();
-        DisplayHAL::display(framebuffer);
+        UIFramework::performFullScreenDraw(framebuffer, renderDetailContent);
     } else {
-        UIFramework::perform2PassPartialUpdate(framebuffer, 0, 60, w, h - 60, renderDetailContent);
+        UIFramework::performFastPartialUpdate(framebuffer, 0, 60, w, h - 60, renderDetailContent);
     }
 }
+
+
 
 void EBookmarkApp::handleTouch(int x, int y) {
     if (m_state == STATE_LIST) {
@@ -435,8 +439,6 @@ void EBookmarkApp::handleTouch(int x, int y) {
 
         if (x >= w - 120 && x <= w - 20 && y >= 10 && y <= 50) {
             m_state = STATE_LIST;
-            DisplayHAL::clear(); // Full screen clear to prevent ghosting when returning to library
-            memset(framebuffer, 0xFF, w * h / 2);
             drawEBookmarkLibrary();
         } else if (x >= minusX && x <= minusX + 70 && y >= 185 && y <= 255) {
             if (book.currentPage > 0) {

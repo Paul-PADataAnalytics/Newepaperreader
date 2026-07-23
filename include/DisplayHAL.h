@@ -16,6 +16,13 @@ public:
     static void clear();
     static void display(uint8_t* framebuffer);
     
+    static void updateScreenFull();
+    static void updateScreenPartial();
+    static void updateScreenFast();
+    
+    static uint8_t* frontBuffer;
+    static uint8_t* backBuffer;
+    
     // Memory
     static uint8_t* allocateFramebuffer();
     static void freeFramebuffer(uint8_t* framebuffer);
@@ -32,6 +39,9 @@ public:
 
     static void injectTouch(int x, int y);
     
+    static void setDebugScreen(bool enable);
+    static bool isDebugScreen();
+    
     static void setDarkMode(bool enable);
     static bool isDarkMode();
 
@@ -40,10 +50,16 @@ public:
     static int getWidth();
     static int getHeight();
 
+    // Battery & Power Management Hardware Interface
+    static float getBatteryVoltage();
+    static int getBatteryPercent();
+    static bool isCharging();
+
 #ifdef NATIVE_TESTING
     static void handleEvents();
     static bool windowShouldClose();
 #endif
 private:
     static bool s_darkMode;
+    static bool s_debugScreen;
 };

@@ -74,23 +74,26 @@ void Launcher::launchApp(int index) {
     if (index < 0 || index >= (int)m_apps.size()) return;
     exitCurrentApp();
     
+    m_previousAppIndex = -1; // Launched directly from main launcher menu
     m_activeAppIndex = index;
     m_activeApp = m_apps[index].factory();
     m_activeApp->onCreate();
     
-    // Clear screen for app launch
-    DisplayHAL::clear();
+    // Let the app perform a unified full-screen draw (includes hardware clear).
     m_activeApp->draw();
 }
 
 void Launcher::switchToApp(int index) {
     if (index < 0 || index >= (int)m_apps.size()) return;
+    int prevIndex = m_activeAppIndex;
+
     if (m_activeApp) {
         m_activeApp->onDestroy();
         delete m_activeApp;
         m_activeApp = nullptr;
     }
     
+    m_previousAppIndex = prevIndex;
     m_activeAppIndex = index;
     m_activeApp = m_apps[index].factory();
     m_activeApp->onCreate();
@@ -99,102 +102,113 @@ void Launcher::switchToApp(int index) {
     m_activeApp->draw();
 }
 
+void Launcher::returnToPreviousApp() {
+    int prevIndex = m_previousAppIndex;
+    if (prevIndex >= 0 && prevIndex < (int)m_apps.size()) {
+        switchToApp(prevIndex);
+        m_previousAppIndex = -1; // Reset after returning
+    } else {
+        exitCurrentApp();
+    }
+}
+
 void Launcher::exitCurrentApp() {
     if (m_activeApp) {
         m_activeApp->onDestroy();
         delete m_activeApp;
         m_activeApp = nullptr;
         m_activeAppIndex = -1;
+        m_previousAppIndex = -1;
         
-        // Return to launcher menu
-        DisplayHAL::clear();
+        // Return to launcher menu; drawMenu uses performFullScreenDraw which clears.
         drawMenu();
     }
 }
+
 
 void Launcher::drawMenu() {
     // The launcher is always landscape. If an app left portrait mode on, reset it.
     DisplayHAL::setPortrait(false);
 
-    // Mandatory full hardware screen clear for Launcher to protect screen and prevent partial artifacts
-    DisplayHAL::clear();
+    // Unified full-screen draw with mandatory hardware clear — protects E-Ink screen
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        int w = DisplayHAL::getWidth();
+        int h = DisplayHAL::getHeight();
 
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
+        // 1. Top Status Bar: Title + Date & Time
+        typography.setFontSize(34.0f);
+        typography.renderText("LilyGo System v1.02a", 30, 10, framebuffer);
 
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
+        // Format current date and time
+        time_t rawtime;
+        time(&rawtime);
+        struct tm* timeinfo = localtime(&rawtime);
+        char timeStr[64];
+        if (timeinfo && timeinfo->tm_year > 70) {
+            strftime(timeStr, sizeof(timeStr), "%a %b %d | %I:%M %p", timeinfo);
+        } else {
+            snprintf(timeStr, sizeof(timeStr), "No Time Set");
+        }
 
-    // 1. Top Status Bar: Title + Date & Time
-    typography.setFontSize(34.0f);
-    typography.renderText("LilyGo System v1.02a", 30, 10, framebuffer);
+        typography.setFontSize(24.0f);
+        typography.renderText(timeStr, 290, 18, framebuffer, 0x03);
 
-    // Format current date and time
-    time_t rawtime;
-    time(&rawtime);
-    struct tm* timeinfo = localtime(&rawtime);
-    char timeStr[64];
-    if (timeinfo && timeinfo->tm_year > 70) {
-        strftime(timeStr, sizeof(timeStr), "%a %b %d | %I:%M %p", timeinfo);
-    } else {
-        snprintf(timeStr, sizeof(timeStr), "No Time Set");
-    }
-
-    typography.setFontSize(24.0f);
-    typography.renderText(timeStr, 290, 18, framebuffer, 0x03);
-
-    // Render RAM / System stats on far right
-    char statsStr[128];
+        // Render Battery & RAM / System stats on far right
+        char statsStr[128];
+        int battPct = DisplayHAL::getBatteryPercent();
+        const char* chargeIcon = DisplayHAL::isCharging() ? "+" : "";
 #ifndef NATIVE_TESTING
-    snprintf(statsStr, sizeof(statsStr), "Heap:%dKB | PSRAM:%dKB", 
-             (int)(ESP.getFreeHeap() / 1024), (int)(ESP.getFreePsram() / 1024));
+        snprintf(statsStr, sizeof(statsStr), "Batt:%d%%%s | Heap:%dKB", 
+                 battPct, chargeIcon, (int)(ESP.getFreeHeap() / 1024));
 #else
-    snprintf(statsStr, sizeof(statsStr), "Native Mock");
+        snprintf(statsStr, sizeof(statsStr), "Batt:%d%%%s | Native", battPct, chargeIcon);
 #endif
-    typography.setFontSize(18.0f);
-    int statsW = typography.measureText(statsStr);
-    typography.renderText(statsStr, w - statsW - 20, 22, framebuffer, 0x05); // Grey color
-
-    DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
-
-    // 2. Six Card-style app shortcuts in a 3x2 grid
-    struct Card {
-        int x, y;
-        const char* title;
-        const char* desc;
-    };
-
-    Card cards[6] = {
-        {30, 100, "E-Reader App", "Read EPUB & Text library"},
-        {340, 100, "eBookmark", "Track physical reads & stats"},
-        {650, 100, "Calculator", "Pocket math & arithmetic"},
-        {30, 300, "Timer App", "Clock, Stopwatch, Countdown"},
-        {340, 300, "Image Viewer", "Browse & convert JPG images"},
-        {650, 300, "Settings App", "Configure wireless settings"}
-    };
-
-    int cardW = 280;
-    int cardH = 170;
-
-    for (int i = 0; i < 6; i++) {
-        UIFramework::drawButton(framebuffer, cards[i].x, cards[i].y, cardW, cardH, "");
-        
-        typography.setFontSize(30.0f);
-        int titleW = typography.measureText(cards[i].title);
-        typography.renderText(cards[i].title, cards[i].x + (cardW - titleW) / 2, cards[i].y + 30, framebuffer);
-        
         typography.setFontSize(18.0f);
-        int descW = typography.measureText(cards[i].desc);
-        typography.renderText(cards[i].desc, cards[i].x + (cardW - descW) / 2, cards[i].y + 100, framebuffer, 0x03);
-    }
+        int statsW = typography.measureText(statsStr);
+        typography.renderText(statsStr, w - statsW - 20, 22, framebuffer, 0x05); // Grey color
 
-    // Draw bottom helper message
-    typography.setFontSize(20.0f);
-    std::string help = "Tap the top-left corner (x<=60, y<=60) from any app to return here.";
-    int helpW = typography.measureText(help);
-    typography.renderText(help, (w - helpW) / 2, h - 35, framebuffer, 0x06);
 
-    DisplayHAL::display(framebuffer);
+        DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
+
+        // 2. Six Card-style app shortcuts in a 3x2 grid
+        struct Card {
+            int x, y;
+            const char* title;
+            const char* desc;
+        };
+
+        Card cards[6] = {
+            {30, 100, "E-Reader App", "Read EPUB & Text library"},
+            {340, 100, "eBookmark", "Track physical reads & stats"},
+            {650, 100, "Calculator", "Pocket math & arithmetic"},
+            {30, 300, "Timer App", "Clock, Stopwatch, Countdown"},
+            {340, 300, "Image Viewer", "Browse & convert JPG images"},
+            {650, 300, "Settings App", "Configure wireless settings"}
+        };
+
+        int cardW = 280;
+        int cardH = 170;
+
+        for (int i = 0; i < 6; i++) {
+            UIFramework::drawButton(framebuffer, cards[i].x, cards[i].y, cardW, cardH, "");
+            
+            typography.setFontSize(30.0f);
+            int titleW = typography.measureText(cards[i].title);
+            typography.renderText(cards[i].title, cards[i].x + (cardW - titleW) / 2, cards[i].y + 30, framebuffer);
+            
+            typography.setFontSize(18.0f);
+            int descW = typography.measureText(cards[i].desc);
+            typography.renderText(cards[i].desc, cards[i].x + (cardW - descW) / 2, cards[i].y + 100, framebuffer, 0x03);
+        }
+
+        // Draw bottom helper message
+        typography.setFontSize(20.0f);
+        std::string help = "Tap the top-left corner (x<=60, y<=60) from any app to return here.";
+        int helpW = typography.measureText(help);
+        typography.renderText(help, (w - helpW) / 2, h - 35, framebuffer, 0x06);
+    });
 }
+
 
 void Launcher::handleTouch(int x, int y) {
     int w = DisplayHAL::getWidth();

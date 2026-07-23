@@ -67,39 +67,38 @@ void CalculatorApp::onDestroy() {
 }
 
 void CalculatorApp::draw() {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        int w = DisplayHAL::getWidth();
+        uint8_t fg = UIFramework::getForegroundColor();
 
-    // 1. Clear whole screen
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
+        // Draw separator line and initial display value
+        DisplayHAL::drawHLine(0, 199, w, fg, framebuffer);
+        typography.setFontSize(54.0f);
+        std::string valToDraw = currentValue.empty() ? "0" : currentValue;
+        int valW = typography.measureText(valToDraw);
+        int valX = w - 20 - valW;
+        if (valX < 20) valX = 20;
+        typography.renderText(valToDraw, valX, 115, framebuffer, fg);
 
-    // 2. Draw display value and expression
-    drawDisplay();
-
-    // 3. Draw buttons
-    for (const auto& btn : buttons) {
-        UIFramework::drawButton(framebuffer, btn.x, btn.y, btn.w, btn.h, "");
-        
-        // Render text label centered
-        typography.setFontSize(36.0f);
-        int labelW = typography.measureText(btn.label);
-        int textX = btn.x + (btn.w - labelW) / 2;
-        int textY = btn.y + (btn.h - 36) / 2;
-        typography.renderText(btn.label, textX, textY, framebuffer, 0x00);
-    }
-
-    // 4. Update the screen
-    DisplayHAL::display(framebuffer);
+        // Draw buttons
+        for (const auto& btn : buttons) {
+            UIFramework::drawButton(framebuffer, btn.x, btn.y, btn.w, btn.h, "");
+            typography.setFontSize(36.0f);
+            int labelW = typography.measureText(btn.label);
+            int textX = btn.x + (btn.w - labelW) / 2;
+            int textY = btn.y + (btn.h - 36) / 2;
+            typography.renderText(btn.label, textX, textY, framebuffer, fg);
+        }
+    });
 }
 
 void CalculatorApp::drawDisplay() {
     int w = DisplayHAL::getWidth();
+    uint8_t bg = UIFramework::getBackgroundColor();
+    uint8_t fg = UIFramework::getForegroundColor();
 
-    // Unified 2-pass localized partial update sequence for top calculation display area (y=0..199):
-    // Pass 1: Wipes display area to background & flushes to E-Ink display to reset microspheres.
-    // Pass 2: Renders horizontal separator line and updated values, then flushes to display.
-    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 0, w, 199, [this, w]() {
-        DisplayHAL::drawHLine(0, 199, w, 0x00, framebuffer);
+    UIFramework::performFastPartialUpdate(framebuffer, 0, 0, w, 199, [this, w, bg, fg]() {
+        DisplayHAL::drawHLine(0, 199, w, fg, framebuffer);
 
         if (!expression.empty()) {
             typography.setFontSize(24.0f);
@@ -114,7 +113,7 @@ void CalculatorApp::drawDisplay() {
         int valW = typography.measureText(valToDraw);
         int valX = w - 20 - valW;
         if (valX < 20) valX = 20;
-        typography.renderText(valToDraw, valX, 115, framebuffer, 0x00);
+        typography.renderText(valToDraw, valX, 115, framebuffer, fg);
     });
 }
 
@@ -134,11 +133,15 @@ void CalculatorApp::handleButtonPress(const std::string& label) {
         return;
     }
     
+    bool isFullRefresh = false;
+
     if (label == "C") {
         currentValue = "0";
         expression = "";
         afterEquals = false;
+        isFullRefresh = true;
     } else if (label == "+" || label == "-" || label == "*" || label == "/") {
+        isFullRefresh = true;
         if (afterEquals) {
             expression = currentValue + " " + label + " ";
             currentValue = "";
@@ -155,6 +158,7 @@ void CalculatorApp::handleButtonPress(const std::string& label) {
             }
         }
     } else if (label == "=") {
+        isFullRefresh = true;
         if (!afterEquals) {
             if (!currentValue.empty()) {
                 expression += currentValue;
@@ -195,8 +199,12 @@ void CalculatorApp::handleButtonPress(const std::string& label) {
             }
         }
     }
-    
-    draw();
+
+    if (isFullRefresh) {
+        draw();
+    } else {
+        drawDisplay();
+    }
 }
 
 std::vector<CalculatorApp::Token> CalculatorApp::tokenize(const std::string& exprStr) {

@@ -38,8 +38,8 @@ void TimerApp::onCreate() {
 }
 
 void TimerApp::onDestroy() {
-    DisplayHAL::clear();
-    memset(framebuffer, 0xFF, DisplayHAL::getWidth() * DisplayHAL::getHeight() / 2);
+    // No direct display access here; the launcher performs a unified full-screen
+    // draw after destroying the app, which scrubs the panel properly.
 }
 
 uint32_t TimerApp::get_current_ms() const {
@@ -59,7 +59,8 @@ void TimerApp::update() {
         int currentSec = timeinfo ? timeinfo->tm_sec : 0;
         if (currentSec != lastClockSec) {
             lastClockSec = currentSec;
-            draw();
+            if (currentSec % 10 == 0) draw();
+            else drawFast();
         }
     } else if (activeMode == TimerMode::STOPWATCH) {
         if (stopwatchState == StopwatchState::RUNNING) {
@@ -67,7 +68,8 @@ void TimerApp::update() {
             int currentSec = currentElapsedMs / 1000;
             if (currentSec != lastStopwatchSec) {
                 lastStopwatchSec = currentSec;
-                draw();
+                if (currentSec % 10 == 0) draw();
+                else drawFast();
             }
         }
     } else if (activeMode == TimerMode::COUNTDOWN) {
@@ -83,31 +85,18 @@ void TimerApp::update() {
                 countdownElapsedMsBeforePause = 0;
                 countdownRemainingSecs = 0;
                 lastCountdownSec = 0; // Trigger draw and show TIME'S UP!
-                draw();
+                draw(); // Time's up gets a full refresh
             } else if (remaining != lastCountdownSec) {
                 lastCountdownSec = remaining;
-                draw();
+                if (remaining % 10 == 0) draw();
+                else drawFast();
             }
         }
     }
 }
 
 void TimerApp::draw() {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-
-    static int tickCount = 0;
-    tickCount++;
-    // Periodically (every 30 ticks) perform a full E-Ink clear to prevent ghosting/burn-in
-    if (tickCount >= 30) {
-        tickCount = 0;
-        DisplayHAL::clear();
-    }
-
-    // Unified 2-pass localized partial update sequence:
-    // Pass 1: Wipes region to background & flushes to E-Ink display to reset microspheres.
-    // Pass 2: Renders mode tabs and active timer digits & flushes crisp new content to display.
-    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 0, w, h, [this]() {
+    auto renderContent = [this]() {
         drawModeSelector();
         if (activeMode == TimerMode::CLOCK) {
             drawClockMode();
@@ -116,25 +105,45 @@ void TimerApp::draw() {
         } else if (activeMode == TimerMode::COUNTDOWN) {
             drawCountdownMode();
         }
-    });
+    };
+
+    // Always perform a full hardware clear to avoid partial-update ghosting.
+    // The timer updates every second, so the extra flash is acceptable and
+    // keeps the display crisp.
+    UIFramework::performFullScreenDraw(framebuffer, renderContent);
+}
+
+void TimerApp::drawFast() {
+    auto renderContent = [this]() {
+        if (activeMode == TimerMode::CLOCK) {
+            drawClockMode();
+        } else if (activeMode == TimerMode::STOPWATCH) {
+            drawStopwatchMode();
+        } else if (activeMode == TimerMode::COUNTDOWN) {
+            drawCountdownMode();
+        }
+    };
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+    UIFramework::performFastPartialUpdate(framebuffer, 0, 100, w, h - 100, renderContent);
 }
 
 void TimerApp::drawButtonWithText(int x, int y, int w, int h, const char* label, bool active) {
-    uint8_t bgColor = active ? 0x99 : 0xFF; // Active is dark gray, inactive is white
-    uint8_t fgColor = 0x00;                 // Black border
-    
+    uint8_t fgColor = UIFramework::getForegroundColor();
+    uint8_t bgColor = active ? 0x99 : UIFramework::getBackgroundColor();
+
     // Draw background
     DisplayHAL::fillRect(x, y, w, h, bgColor, framebuffer);
     // Draw border
     DisplayHAL::drawRect(x, y, w, h, fgColor, framebuffer);
-    
+
     // Draw text centered
     typography.setFontSize(28.0f);
     int textW = typography.measureText(label);
     int tx = x + (w - textW) / 2;
     int ty = y + (h - 22) / 2;
-    
-    typography.renderText(label, tx, ty, framebuffer);
+
+    typography.renderText(label, tx, ty, framebuffer, fgColor);
 }
 
 void TimerApp::drawModeSelector() {
@@ -327,40 +336,40 @@ void TimerApp::handleTouch(int x, int y) {
                 stopwatchState = StopwatchState::RUNNING;
             }
             lastStopwatchSec = -1;
-            draw();
+            drawFast();
         } else if (x >= 500 && x <= 700 && y >= 380 && y <= 440) {
             stopwatchState = StopwatchState::STOPPED;
             stopwatchStartMs = 0;
             stopwatchElapsedMs = 0;
             lastStopwatchSec = -1;
-            draw();
+            drawFast();
         }
     } else if (activeMode == TimerMode::COUNTDOWN) {
         if (countdownState == CountdownState::STOPPED) {
             if (x >= 200 && x <= 280 && y >= 140 && y <= 190) {
                 countdownHours = (countdownHours + 1) % 100;
                 lastCountdownSec = -1;
-                draw();
+                drawFast();
             } else if (x >= 200 && x <= 280 && y >= 300 && y <= 350) {
                 countdownHours = (countdownHours + 99) % 100;
                 lastCountdownSec = -1;
-                draw();
+                drawFast();
             } else if (x >= 440 && x <= 520 && y >= 140 && y <= 190) {
                 countdownMinutes = (countdownMinutes + 1) % 60;
                 lastCountdownSec = -1;
-                draw();
+                drawFast();
             } else if (x >= 440 && x <= 520 && y >= 300 && y <= 350) {
                 countdownMinutes = (countdownMinutes + 59) % 60;
                 lastCountdownSec = -1;
-                draw();
+                drawFast();
             } else if (x >= 680 && x <= 760 && y >= 140 && y <= 190) {
                 countdownSeconds = (countdownSeconds + 1) % 60;
                 lastCountdownSec = -1;
-                draw();
+                drawFast();
             } else if (x >= 680 && x <= 760 && y >= 300 && y <= 350) {
                 countdownSeconds = (countdownSeconds + 59) % 60;
                 lastCountdownSec = -1;
-                draw();
+                drawFast();
             }
         }
 
@@ -382,7 +391,7 @@ void TimerApp::handleTouch(int x, int y) {
                 }
             }
             lastCountdownSec = -1;
-            draw();
+            drawFast();
         } else if (x >= 500 && x <= 700 && y >= 380 && y <= 440) {
             if (countdownState == CountdownState::STOPPED) {
                 countdownHours = 0;
@@ -393,7 +402,7 @@ void TimerApp::handleTouch(int x, int y) {
                 countdownElapsedMsBeforePause = 0;
             }
             lastCountdownSec = -1;
-            draw();
+            drawFast();
         }
     }
 }

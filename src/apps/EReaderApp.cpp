@@ -5,6 +5,8 @@
 #include "reader/AppStorage.h"
 #include "embedded_font.h"
 #include "Launcher.h"
+#include "NavigationManager.h"
+
 #include <cstring>
 #include <cstdlib>
 
@@ -56,12 +58,16 @@ static void appendBlockBreak(std::string& out) {
     }
 }
 
-static char decodeHtmlEntity(const std::string& entity) {
-    if (entity == "nbsp") return ' ';
-    if (entity == "amp") return '&';
-    if (entity == "lt") return '<';
-    if (entity == "gt") return '>';
-    if (entity == "quot") return '"';
+static std::string decodeHtmlEntity(const std::string& entity) {
+    if (entity == "nbsp") return " ";
+    if (entity == "amp") return "&";
+    if (entity == "lt") return "<";
+    if (entity == "gt") return ">";
+    if (entity == "quot") return "\"";
+    if (entity == "apos") return "'";
+    if (entity == "lsquo" || entity == "rsquo") return "'";
+    if (entity == "ldquo" || entity == "rdquo") return "\"";
+    if (entity == "mdash" || entity == "ndash") return "-";
     if (entity.size() > 1 && entity[0] == '#') {
         int base = 10;
         size_t start = 1;
@@ -72,11 +78,14 @@ static char decodeHtmlEntity(const std::string& entity) {
         char* end = nullptr;
         long value = strtol(entity.c_str() + start, &end, base);
         if (end && *end == '\0') {
-            if (value == 160) return ' ';
-            if (value >= 32 && value <= 126) return static_cast<char>(value);
+            if (value == 160) return " ";
+            if (value >= 32 && value <= 126) return std::string(1, static_cast<char>(value));
+            if (value == 8216 || value == 8217 || value == 39) return "'"; // '
+            if (value == 8220 || value == 8221) return "\""; // "
+            if (value == 8211 || value == 8212) return "-"; // -
         }
     }
-    return ' ';
+    return " ";
 }
 
 static char* stripHTML(const char* html, size_t len, size_t& outLen) {
@@ -118,7 +127,10 @@ static char* stripHTML(const char* html, size_t len, size_t& outLen) {
             }
             if (entityEnd < len && html[entityEnd] == ';') {
                 std::string entity(html + i + 1, html + entityEnd);
-                appendNormalizedChar(text, decodeHtmlEntity(entity));
+                std::string decoded = decodeHtmlEntity(entity);
+                for (char dc : decoded) {
+                    appendNormalizedChar(text, dc);
+                }
                 i = entityEnd;
                 continue;
             }
@@ -183,6 +195,9 @@ void EReaderApp::onCreate() {
     m_state = STATE_LIB;
     m_libraryPage = 0;
     m_librarySort = LibrarySort::AUTHOR;
+
+    NavigationManager::getInstance().navigateTo(NavTarget{0, STATE_LIB, false, ""});
+
 
 #ifndef NATIVE_TESTING
     if (!typography.loadFont("/sd/data/Roboto-Regular.ttf", 48.0f)) {
@@ -281,162 +296,164 @@ void EReaderApp::updateLibraryItems() {
 }
 
 void EReaderApp::drawLibrary() {
-    typography.setFontSize(32.0f);
-    
-    UIFramework::clearArea(framebuffer, 0, 0, 960, LIB_TOP_H);
-    
-    typography.setFontSize(48.0f);
-    typography.renderText("Library", 70, 2, framebuffer);
-    
-    typography.setFontSize(28.0f);
-    std::string sysInfo = "10:00 AM | 80% | 12GB Free";
-    int sysInfoW = typography.measureText(sysInfo);
-    typography.renderText(sysInfo, 960 - sysInfoW - 60, 12, framebuffer);
-    UIFramework::drawIcon16x16(framebuffer, 920, 18, COG_ICON, 0x00);
-    DisplayHAL::drawHLine(0, LIB_TOP_H - 1, 960, 0x00, framebuffer);
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        int w = DisplayHAL::getWidth();
+        uint8_t fg = UIFramework::getForegroundColor();
 
-    UIFramework::clearArea(framebuffer, LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H);
-    DisplayHAL::drawRect(LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H, 0x00, framebuffer);
-    
-    std::vector<std::pair<std::string, std::string>> buttons = {
-        {"Sort:", "Author"},
-        {"Sort:", "Genre"},
-        {"Sort:", "Prog %"},
-        {"Exit to", "Launcher"}
-    };
-    int btnH = LIB_MAIN_H / 4;
-    typography.setFontSize(24.0f);
-    for (size_t i = 0; i < buttons.size() && i < 4; i++) {
-        int by = LIB_MAIN_Y + (i * btnH);
-        UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, by + 10, LIB_SIDE_W - 20, btnH - 20, "");
-        
-        int tw1 = typography.measureText(buttons[i].first);
-        int tw2 = typography.measureText(buttons[i].second);
-        int tx1 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw1) / 2;
-        int tx2 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw2) / 2;
-        int ty = by + 25;
-        typography.renderText(buttons[i].first, tx1, ty, framebuffer);
-        typography.renderText(buttons[i].second, tx2, ty + 30, framebuffer);
-    }
-    typography.setFontSize(32.0f);
+        typography.setFontSize(48.0f);
+        typography.renderText("Library", 70, 2, framebuffer, fg);
 
-    UIFramework::clearArea(framebuffer, 0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H);
-    DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
+        typography.setFontSize(28.0f);
+        std::string sysInfo = "10:00 AM | 80% | 12GB Free";
+        int sysInfoW = typography.measureText(sysInfo);
+        typography.renderText(sysInfo, w - sysInfoW - 60, 12, framebuffer, fg);
+        UIFramework::drawIcon16x16(framebuffer, 920, 18, COG_ICON, fg);
+        DisplayHAL::drawHLine(0, LIB_TOP_H - 1, w, fg, framebuffer);
 
-    int pBtnW = LIB_PAGING_W - 20;
-    int pBtnH = LIB_MAIN_H / 2 - 20;
-    int symbolHeight = 24;
-    
-    int upY = LIB_MAIN_Y + 10;
-    UIFramework::drawButton(framebuffer, 25, upY, pBtnW, pBtnH, "");
-    std::string upSymbol = "/\\";
-    int twUp = typography.measureText(upSymbol);
-    typography.renderText(upSymbol, 25 + (pBtnW - twUp) / 2, upY + (pBtnH - symbolHeight) / 2, framebuffer);
-    
-    int dnY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
-    UIFramework::drawButton(framebuffer, 25, dnY, pBtnW, pBtnH, "");
-    std::string dnSymbol = "\\/";
-    int twDn = typography.measureText(dnSymbol);
-    typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer);
+        DisplayHAL::drawRect(LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H, fg, framebuffer);
 
-    updateLibraryItems();
-    
-    int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
-    int startIndex = m_libraryPage * itemsPerPage;
-    int y = LIB_MAIN_Y;
-    typography.setFontSize(40.0f);
-    
-    for (int i = 0; i < itemsPerPage && (startIndex + i) < m_parsedLibraryItems.size(); i++) {
-        LibraryItem& item = m_parsedLibraryItems[startIndex + i];
-        int rowY = y + 20;  
-        
-        std::string leftText = item.title + " - " + item.author;
-        int maxW = LIB_LIST_W - 100;
-        while (leftText.length() > 3 && typography.measureText(leftText + "...") > maxW) {
-            leftText.pop_back();
+        std::vector<std::pair<std::string, std::string>> buttons = {
+            {"Sort:", "Author"},
+            {"Sort:", "Genre"},
+            {"Sort:", "Prog %"},
+            {"Exit to", "Launcher"}
+        };
+        int btnH = LIB_MAIN_H / 4;
+        typography.setFontSize(24.0f);
+        for (size_t i = 0; i < buttons.size() && i < 4; i++) {
+            int by = LIB_MAIN_Y + (i * btnH);
+            UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, by + 10, LIB_SIDE_W - 20, btnH - 20, "");
+
+            int tw1 = typography.measureText(buttons[i].first);
+            int tw2 = typography.measureText(buttons[i].second);
+            int tx1 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw1) / 2;
+            int tx2 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw2) / 2;
+            int ty = by + 25;
+            typography.renderText(buttons[i].first, tx1, ty, framebuffer, fg);
+            typography.renderText(buttons[i].second, tx2, ty + 30, framebuffer, fg);
         }
-        if (leftText.length() < item.title.length() + item.author.length() + 3) {
-            leftText += "...";
+        typography.setFontSize(32.0f);
+
+        DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
+
+        int pBtnW = LIB_PAGING_W - 20;
+        int pBtnH = LIB_MAIN_H / 2 - 20;
+        int symbolHeight = 24;
+
+        int upY = LIB_MAIN_Y + 10;
+        UIFramework::drawButton(framebuffer, 25, upY, pBtnW, pBtnH, "");
+        std::string upSymbol = "/\\";
+        int twUp = typography.measureText(upSymbol);
+        typography.renderText(upSymbol, 25 + (pBtnW - twUp) / 2, upY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
+
+        int dnY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
+        UIFramework::drawButton(framebuffer, 25, dnY, pBtnW, pBtnH, "");
+        std::string dnSymbol = "\\/";
+        int twDn = typography.measureText(dnSymbol);
+        typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
+
+        updateLibraryItems();
+
+        int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
+        int startIndex = m_libraryPage * itemsPerPage;
+        int y = LIB_MAIN_Y;
+        typography.setFontSize(40.0f);
+
+        for (int i = 0; i < itemsPerPage && (startIndex + i) < m_parsedLibraryItems.size(); i++) {
+            LibraryItem& item = m_parsedLibraryItems[startIndex + i];
+            int rowY = y + 20;
+
+            std::string leftText = item.title + " - " + item.author;
+            int maxW = LIB_LIST_W - 100;
+            while (leftText.length() > 3 && typography.measureText(leftText + "...") > maxW) {
+                leftText.pop_back();
+            }
+            if (leftText.length() < item.title.length() + item.author.length() + 3) {
+                leftText += "...";
+            }
+
+            std::string rightText = item.completionPercent == -100 ? "100%" : std::to_string(item.completionPercent) + "%";
+            int rw = typography.measureText(rightText);
+            typography.renderText(leftText, LIB_LIST_X + 20, rowY, framebuffer, fg);
+            typography.renderText(rightText, LIB_LIST_X + LIB_LIST_W - rw - 20, rowY, framebuffer, fg);
+            y += LIB_ROW_H;
         }
-        
-        std::string rightText = item.completionPercent == -100 ? "100%" : std::to_string(item.completionPercent) + "%";
-        int rw = typography.measureText(rightText);
-        typography.renderText(leftText, LIB_LIST_X + 20, rowY, framebuffer);
-        typography.renderText(rightText, LIB_LIST_X + LIB_LIST_W - rw - 20, rowY, framebuffer);
-        y += LIB_ROW_H;
-    }
-    
-    if (m_parsedLibraryItems.empty()) {
-        typography.renderText("No books found.", LIB_LIST_X + 20, LIB_MAIN_Y + 50, framebuffer);
-    }
-    typography.setFontSize(32.0f);
-    
-    DisplayHAL::display(framebuffer);
+
+        if (m_parsedLibraryItems.empty()) {
+            typography.renderText("No books found.", LIB_LIST_X + 20, LIB_MAIN_Y + 50, framebuffer, fg);
+        }
+        typography.setFontSize(32.0f);
+    });
 }
 
 void EReaderApp::drawReading() {
-    DisplayHAL::clear();
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-    UIFramework::clearArea(framebuffer, 0, 0, w, h);
-    
-    typography.setTopMargin(60);
-    typography.setBottomMargin(h * 0.05);
-    typography.setFontSize(getReadingFontSize());
-    
-    if (m_currentBookText) {
-        size_t remainingLen = m_currentBookTextLen - m_currentReadingOffset;
-        typography.renderText(m_currentBookText + m_currentReadingOffset, remainingLen, 20, 60, framebuffer);
-    }
-    
-    std::string infoStr = m_currentBookTitle;
-    if (!m_currentBookAuthor.empty() && m_currentBookAuthor != "Unknown Author") {
-        infoStr += " - " + m_currentBookAuthor;
-    }
-    
-    typography.setFontSize(24.0f);
-    int maxW = w - 110; 
-    std::string dispStr = infoStr;
-    if (typography.measureText(dispStr) > maxW) {
-        while (dispStr.length() > 3 && typography.measureText(dispStr + "...") > maxW) {
-            dispStr.pop_back();
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        int w = DisplayHAL::getWidth();
+        int h = DisplayHAL::getHeight();
+        uint8_t fg = UIFramework::getForegroundColor();
+
+        typography.setTopMargin(60);
+        typography.setBottomMargin(h * 0.05);
+        typography.setFontSize(getReadingFontSize());
+
+        if (m_currentBookText) {
+            size_t remainingLen = m_currentBookTextLen - m_currentReadingOffset;
+            typography.renderText(m_currentBookText + m_currentReadingOffset, remainingLen, 20, 60, framebuffer, fg);
         }
-        dispStr += "...";
-    }
-    typography.renderText(dispStr, 20, 20, framebuffer, 0x05);
-    
-    typography.setFontSize(32.0f);
-    UIFramework::drawButton(framebuffer, w - 80, 10, 70, 40, "");
-    int tw = typography.measureText("ROT");
-    typography.renderText("ROT", w - 80 + (70 - tw) / 2, 16, framebuffer);
-    
-    float progress = 0;
-    if (m_currentBookTextLen > 0) {
-        if (m_textReader.isOpen()) {
-            progress = (float)m_textReader.getPosition() / (float)m_textReader.getFileSize();
-        } else {
-            progress = (float)m_currentReadingOffset / (float)m_currentBookTextLen;
+
+        // Draw [Back] button in top-left bar
+        UIFramework::drawButton(framebuffer, 10, 10, 80, 40, "");
+        typography.setFontSize(22.0f);
+        int btw = typography.measureText("Back");
+        typography.renderText("Back", 10 + (80 - btw) / 2, 18, framebuffer, fg);
+
+        std::string infoStr = m_currentBookTitle;
+        if (!m_currentBookAuthor.empty() && m_currentBookAuthor != "Unknown Author") {
+            infoStr += " - " + m_currentBookAuthor;
         }
-    }
-    if (progress > 1.0f) progress = 1.0f;
-    
-    int scrollBarHeight = h * 0.01;
-    int scrollBarY = h - h * 0.03;
-    int scrollBarX = w * 0.10;
-    
-    char progStr[16];
-    snprintf(progStr, sizeof(progStr), "%d%%", (int)(progress * 100));
-    int pw = typography.measureText(progStr);
-    int barEnd = w - w * 0.10 - pw - 10; 
-    int actualBarWidth = barEnd - scrollBarX;
-    
-    if (actualBarWidth > 0) {
-        DisplayHAL::drawRect(scrollBarX, scrollBarY, actualBarWidth, scrollBarHeight, 0x00, framebuffer);
-        DisplayHAL::fillRect(scrollBarX, scrollBarY, (int)(actualBarWidth * progress), scrollBarHeight, 0x00, framebuffer);
-        typography.renderText(progStr, barEnd + 10, scrollBarY + scrollBarHeight - 2, framebuffer);
-    }
-    
-    DisplayHAL::display(framebuffer);
+
+        typography.setFontSize(24.0f);
+        int maxW = w - 190;
+        std::string dispStr = infoStr;
+        if (typography.measureText(dispStr) > maxW) {
+            while (dispStr.length() > 3 && typography.measureText(dispStr + "...") > maxW) {
+                dispStr.pop_back();
+            }
+            dispStr += "...";
+        }
+        typography.renderText(dispStr, 100, 20, framebuffer, 0x05);
+
+        typography.setFontSize(32.0f);
+        UIFramework::drawButton(framebuffer, w - 80, 10, 70, 40, "");
+        int tw = typography.measureText("ROT");
+        typography.renderText("ROT", w - 80 + (70 - tw) / 2, 16, framebuffer, fg);
+
+        float progress = 0;
+        if (m_currentBookTextLen > 0) {
+            if (m_textReader.isOpen()) {
+                progress = (float)m_textReader.getPosition() / (float)m_textReader.getFileSize();
+            } else {
+                progress = (float)m_currentReadingOffset / (float)m_currentBookTextLen;
+            }
+        }
+        if (progress > 1.0f) progress = 1.0f;
+
+        int scrollBarHeight = h * 0.01;
+        int scrollBarY = h - h * 0.03;
+        int scrollBarX = w * 0.10;
+
+        char progStr[16];
+        snprintf(progStr, sizeof(progStr), "%d%%", (int)(progress * 100));
+        int pw = typography.measureText(progStr);
+        int barEnd = w - w * 0.10 - pw - 10;
+        int actualBarWidth = barEnd - scrollBarX;
+
+        if (actualBarWidth > 0) {
+            DisplayHAL::drawRect(scrollBarX, scrollBarY, actualBarWidth, scrollBarHeight, fg, framebuffer);
+            DisplayHAL::fillRect(scrollBarX, scrollBarY, (int)(actualBarWidth * progress), scrollBarHeight, fg, framebuffer);
+            typography.renderText(progStr, barEnd + 10, scrollBarY + scrollBarHeight - 2, framebuffer, fg);
+        }
+    });
 }
 
 void EReaderApp::openBook(int index) {
@@ -546,6 +563,7 @@ void EReaderApp::openBook(int index) {
     }
 
     m_state = STATE_READ;
+    NavigationManager::getInstance().navigateTo(NavTarget{0, STATE_READ, DisplayHAL::isPortrait(), path});
     drawReading();
 }
 
@@ -603,10 +621,11 @@ void EReaderApp::handleTouch(int x, int y) {
             } else {
                 AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset);
             }
-            DisplayHAL::setPortrait(false);
-            DisplayHAL::clear();
-            m_state = STATE_LIB;
-            drawLibrary();
+            if (!NavigationManager::getInstance().goBack()) {
+                DisplayHAL::setPortrait(false);
+                m_state = STATE_LIB;
+                drawLibrary();
+            }
         } else if (y < 60 && x > w - 80) {
             DisplayHAL::setPortrait(!DisplayHAL::isPortrait());
             drawReading();

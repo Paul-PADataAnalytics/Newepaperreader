@@ -1,72 +1,46 @@
-# LilyGo E-Reader & NER Companion System (v2.0.0)
+# LilyGo EPD47 E-Reader System v2.0
 
-A custom e-paper reader operating environment designed for the **LilyGO T5-ePaper-S3 (EPD47)** board, paired with the **NER Companion** Android mobile application.
+Welcome to the LilyGo EPD47 E-Reader System v2.0! This is a complete custom firmware for the LilyGo T5-ePaper-S3 (4.7" E-Ink display) built using PlatformIO.
 
----
+## Key Features
 
-## Architecture Overview
+### Core System
+- **Power Efficiency**: Extreme low-power Light Sleep mode activates after 30 seconds of inactivity. Powers down the E-Ink display and halts the CPU, waking instantly on touch (via GT911 hardware interrupt).
+- **Advanced Display Framework**: Implements a custom 2-pass partial update system to reduce screen flashing, along with full-screen hardware refreshes when needed.
+- **Dark Mode**: System-wide dark mode inversion support.
+- **Native Simulator**: Develop and test UI components directly on your PC using the `native` PlatformIO environment (via SDL2), before deploying to the ESP32.
 
-### 1. Embedded Firmware (ESP32-S3 / C++ / PlatformIO)
-- **Modular App Platform Framework**: Managed by a central `Launcher` that coordinates `onCreate`, `onDestroy`, `draw`, `handleTouch`, and `update` across applications.
-- **6 Applications**:
-  1. **E-Reader App**: Reads EPUB, TXT, and RTF books from SD card (`/books/`). Features library sorting (Author, Genre, Completion %), bookmarks, font rendering, custom genre dropdowns, and configurable reading font size.
-  2. **eBookmark App**: Track physical book reading progress and statistics, synchronized live via BLE.
-  3. **Settings App**: Multi-page settings manager for Light/Dark Mode 16-level grayscale inversion, E-Reader reading font size (`20pt`–`40pt`), and dedicated BLE Server broadcast controls.
-  4. **Calculator App**: Touch-friendly 4x5 pocket calculator grid with mathematical expression evaluation operating in portrait mode (540x960).
-  5. **Timer App**: Multi-mode Clock, Stopwatch, and Countdown timer with periodic deep E-Ink screen flushes to prevent burn-in/ghosting.
-  6. **Image Viewer App**: SD-card JPG image browser using `stb_image` allocated in **ESP32 PSRAM**, live 16-shade E-Ink grayscale conversion, persistent `.raw` caching mapped directly to original files, and auto-rotation for portrait images.
-- **2-Pass System-wide Localized Refresh Architecture**: Eliminates E-Ink ghosting by performing a 2-pass update sequence on all localized UI changes (Pass 1: wipes target bounding box to background & flushes to hardware display to reset microspheres; Pass 2: renders new crisp text and flushes to hardware).
-- **30-Second Inactivity Sleep Screen**: Automatically clears screen and sweeps the SD card for converted `.raw` images, sequentially displaying them as dynamic E-Ink standby screens to prevent burn-in. Falls back to `"Sleeping zzzz"` if none are found. Wakes up cleanly on touch.
-- **Always-On System Service BLE**: Pre-allocated static 4KB ring buffer (zero dynamic heap allocation/deallocation overhead during runtime) with auto-reconnect advertising (`"EPD-Reader"`). Processes date/time sync, book progress sync, and database queries globally across all apps.
-- **Global Escape Gesture**: Tap top-left corner (`x <= 60, y <= 60`) from any application to return to the System Launcher menu.
+### Included Applications
+- **Launcher**: A dynamic home screen displaying battery life, current time, and an app grid.
+- **E-Reader**: A fully-featured EPUB reader utilizing a custom typography engine. Supports pagination, adjustable font sizes, and screen rotation.
+- **eBookmarks**: Rich bookmarking system that saves your exact progress (page, percentage) and synchronizes seamlessly.
+- **Companion App Sync**: Built-in Bluetooth Low Energy (BLE) server to communicate with mobile companion apps. Supports two-way bookmark syncing and wireless EPUB book transfers.
+- **Image Viewer**: Render and navigate through `.raw` high-contrast images directly from the SD card.
+- **Calculator**: A built-in standard arithmetic calculator.
+- **Timer**: Includes a local Clock, a Stopwatch with lap times, and a Countdown Timer.
+- **Settings**: System configuration interface to manage defaults (like E-Reader font size and Dark mode preferences).
 
-### 2. NER Companion Mobile App (Flutter / Android)
-- **ISBN & Barcode Scanning**: Scan physical book barcodes via camera.
-- **API Metadata Fetching**: OpenLibrary & Google Books API integration for automatic title, author, page count, and genre fetching.
-- **Gutenberg Free Ebook Library**: Browse and download open-domain ebooks directly to the device.
-- **Live BLE Synchronizer**: Auto-reconnects to `EPD-Reader`, syncs mobile device date/time to ESP32 RTC, and bi-directionally syncs reading progress and bookmarks via immediate minor delta notifications.
+## Building the Project
 
----
+This project uses PlatformIO. 
 
-## Build & Installation Instructions
+### Dependencies
+All required libraries (such as `LilyGo-EPD47`, `AsyncTCP`, `ArduinoJson`, etc.) are automatically managed by PlatformIO.
 
-### ESP32 Firmware (PlatformIO)
-Prerequisites: PlatformIO CLI or VS Code PlatformIO extension.
-
-- **Native Desktop Mock**:
-  ```bash
-  pio run -e native
-  ./.pio/build/native/program
-  ```
-
-- **ESP32-S3 Microcontroller Target**:
-  ```bash
-  pio run -e t5-47-s3 -t upload
-  ```
-
-### Android Companion App (NER Companion)
-Prerequisites: Flutter SDK (^3.10.8) and Android SDK.
-
+### Compile for Hardware (ESP32-S3)
 ```bash
-cd android_app
-flutter pub get
-flutter run
+pio run -e t5-47-s3
+pio run -e t5-47-s3 -t upload
 ```
 
----
+### Compile for Native Simulator (Desktop)
+```bash
+pio run -e native
+.pio/build/native/program
+```
 
-## System Configuration & Key Features
-
-| Feature | Details |
-|---|---|
-| **Version Label** | `v2.0.0` |
-| **Inactivity Sleep Timer** | 30 seconds -> Cycles through cached `.raw` images or `"Sleeping zzzz"` |
-| **Global Escape Corner** | Top-Left corner (`x <= 60, y <= 60`) |
-| **Settings Cog Header** | Top-Right corner (`x >= 900, y <= 60`) |
-| **Grayscale Inversion** | Dark Mode toggle in SettingsApp (`~b` / `15 - val`) |
-| **BLE Service UUID** | `12345678-1234-1234-1234-123456789abc` |
-
----
-
-## License & Credits
-Developed for LilyGO T5-ePaper-S3 (EPD47). Includes open-source libraries: `LilyGo-EPD47`, `ArduinoJson`, `stb_image`, `tinyxml2`, and `miniz`.
+## Hardware Requirements
+* **Board**: LilyGo T5-ePaper-S3 (ESP32-S3)
+* **Display**: 4.7-inch E-Ink Display (960x540)
+* **Touch**: GT911 Capacitive Touch Controller
+* **Storage**: MicroSD Card (for books and images)

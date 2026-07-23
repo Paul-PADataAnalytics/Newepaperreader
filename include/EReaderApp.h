@@ -41,11 +41,16 @@ private:
     char* m_currentBookText = nullptr;
     size_t m_currentBookTextLen = 0;
     int m_currentReadingOffset = 0;
+    std::vector<size_t> m_pageHistory;
     std::string m_currentBookPath = "";
     std::string m_currentBookTitle = "";
     std::string m_currentBookAuthor = "";
     int m_libraryPage = 0;
     LibrarySort m_librarySort = LibrarySort::AUTHOR;
+
+    std::vector<std::string> m_chapters;
+    int m_currentChapterIndex = -1;
+    void loadChapter(int index);
 
     FileBrowser m_fileBrowser;
     EpubParser m_epubParser;
@@ -53,6 +58,7 @@ private:
 
     static float s_readingFontSize;
 
+    void prepareTypographyForReading();
     void updateLibraryItems();
     void drawLibrary();
     void drawReading();

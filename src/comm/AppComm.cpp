@@ -282,6 +282,8 @@ static std::vector<uint8_t> file_upload_buffer;
 static int file_upload_expected_chunks = -1;
 static int file_upload_received_chunks = 0;
 
+bool deviceConnected = false;
+
 class MyWriteCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic* pCharacteristic) override {
         std::string value = pCharacteristic->getValue();
@@ -293,9 +295,11 @@ class MyWriteCallbacks : public BLECharacteristicCallbacks {
 
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) override {
+        deviceConnected = true;
         Serial.println("AppComm: Companion app connected!");
     }
     void onDisconnect(BLEServer* pServer) override {
+        deviceConnected = false;
         Serial.println("AppComm: Companion app disconnected. Auto-restarting advertising...");
         BLEDevice::startAdvertising();
     }

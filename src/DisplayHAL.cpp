@@ -174,7 +174,7 @@ float DisplayHAL::getBatteryVoltage() {
 
 int DisplayHAL::getBatteryPercent() {
     float v = getBatteryVoltage();
-    // LiPo cell discharge curve mapping: 4.2V = 100%, 3.3V = 0%
+    // 820mAh LiPo cell discharge curve mapping: 4.2V = 100%, 3.3V = 0%
     if (v >= 4.2f) return 100;
     if (v <= 3.3f) return 0;
     int pct = (int)(((v - 3.3f) / (4.2f - 3.3f)) * 100.0f);

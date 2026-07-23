@@ -224,7 +224,13 @@ static void drawSleepScreen() {
         while (file) {
             std::string name = file.name();
             if (name.length() > 4 && name.substr(name.length() - 4) == ".raw") {
-                rawImages.push_back(std::string("/images/") + name);
+                if (name.find("/images/") == 0) {
+                    rawImages.push_back(name);
+                } else if (name.length() > 0 && name[0] == '/') {
+                    rawImages.push_back("/images" + name);
+                } else {
+                    rawImages.push_back("/images/" + name);
+                }
             }
             file = dir.openNextFile();
         }
@@ -342,6 +348,8 @@ void loop() {
             lastTouchActivityTime = now;
             lastTouchTime = 0; // Reset debounce timer to zero for instant waking touch responsiveness
 
+            DisplayHAL::powerOn();
+
             if (Launcher::getInstance().getActiveApp()) {
                 Launcher::getInstance().getActiveApp()->draw();
             } else {
@@ -354,7 +362,10 @@ void loop() {
 
     if (isSystemSleeping) {
 #ifndef NATIVE_TESTING
-        delay(100);
+        gpio_wakeup_enable(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_LOW_LEVEL);
+        esp_sleep_enable_gpio_wakeup();
+        esp_light_sleep_start();
+        delay(10);
 #else
         DisplayHAL::handleEvents();
         if (DisplayHAL::windowShouldClose()) exit(0);
@@ -363,14 +374,10 @@ void loop() {
         return;
     }
 
-    // Sleep behavior: if reading, push the inactivity timer forward.
-    // If we exit reading, we have a full 30s before sleep triggers.
-    bool isReading = Launcher::getInstance().getActiveAppIndex() == 0;
-    if (isReading) {
-        lastTouchActivityTime = now;
-    } else if ((now - lastTouchActivityTime) >= 30000) {
+    if ((now - lastTouchActivityTime) >= 30000) {
         isSystemSleeping = true;
         drawSleepScreen();
+        DisplayHAL::powerOff();
         return;
     }
 

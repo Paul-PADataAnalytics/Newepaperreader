@@ -291,30 +291,29 @@ void TimerApp::drawCountdownMode() {
 }
 
 void TimerApp::handleTouch(int x, int y) {
-    if (y >= 15 && y <= 75) {
-        if (x >= 70 && x <= 260) {
+    if (y <= 90) {
+        if (x >= 50 && x <= 270) {
             if (activeMode != TimerMode::CLOCK) {
                 activeMode = TimerMode::CLOCK;
                 lastClockSec = -1;
                 draw();
             }
             return;
-        } else if (x >= 280 && x <= 470) {
+        } else if (x >= 280 && x <= 480) {
             if (activeMode != TimerMode::STOPWATCH) {
                 activeMode = TimerMode::STOPWATCH;
                 lastStopwatchSec = -1;
                 draw();
             }
             return;
-        } else if (x >= 490 && x <= 680) {
+        } else if (x >= 490 && x <= 690) {
             if (activeMode != TimerMode::COUNTDOWN) {
                 activeMode = TimerMode::COUNTDOWN;
                 lastCountdownSec = -1;
                 draw();
             }
             return;
-        } else if (x >= 700 && x <= 890) {
-            onDestroy();
+        } else if (x >= 700 && x <= 960) {
             extern void exitToSystemLauncher();
             exitToSystemLauncher();
             return;

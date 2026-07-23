@@ -80,6 +80,12 @@ void CalculatorApp::draw() {
         if (valX < 20) valX = 20;
         typography.renderText(valToDraw, valX, 115, framebuffer, fg);
 
+        // Draw back button
+        UIFramework::drawButton(framebuffer, 10, 10, 100, 40, "");
+        typography.setFontSize(22.0f);
+        int btw = typography.measureText("< Back");
+        typography.renderText("< Back", 10 + (100 - btw) / 2, 18, framebuffer, fg);
+
         // Draw buttons
         for (const auto& btn : buttons) {
             UIFramework::drawButton(framebuffer, btn.x, btn.y, btn.w, btn.h, "");
@@ -100,6 +106,12 @@ void CalculatorApp::drawDisplay() {
     UIFramework::performFastPartialUpdate(framebuffer, 0, 0, w, 199, [this, w, bg, fg]() {
         DisplayHAL::drawHLine(0, 199, w, fg, framebuffer);
 
+        // Draw back button
+        UIFramework::drawButton(framebuffer, 10, 10, 100, 40, "");
+        typography.setFontSize(22.0f);
+        int btw = typography.measureText("< Back");
+        typography.renderText("< Back", 10 + (100 - btw) / 2, 18, framebuffer, fg);
+
         if (!expression.empty()) {
             typography.setFontSize(24.0f);
             int exprW = typography.measureText(expression);
@@ -118,6 +130,12 @@ void CalculatorApp::drawDisplay() {
 }
 
 void CalculatorApp::handleTouch(int x, int y) {
+    if (x <= 150 && y <= 60) {
+        extern void exitToSystemLauncher();
+        exitToSystemLauncher();
+        return;
+    }
+
     for (const auto& btn : buttons) {
         if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
             handleButtonPress(btn.label);

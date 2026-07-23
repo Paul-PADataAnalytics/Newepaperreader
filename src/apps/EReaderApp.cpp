@@ -6,7 +6,7 @@
 #include "embedded_font.h"
 #include "Launcher.h"
 #include "NavigationManager.h"
-
+#include "EBookmarkManager.h"
 #include <cstring>
 #include <cstdlib>
 
@@ -219,6 +219,7 @@ void EReaderApp::onDestroy() {
         m_currentBookTextLen = 0;
     }
     m_textReader.closeFile();
+    m_epubParser.close();
     DisplayHAL::setPortrait(false);
 }
 
@@ -257,6 +258,16 @@ void EReaderApp::updateLibraryItems() {
         size_t dotPos = item.title.find_last_of('.');
         if (dotPos != std::string::npos) {
             item.title = item.title.substr(0, dotPos);
+        }
+        
+        EBookmarkManager::getInstance().initialize();
+        const auto& bmarks = EBookmarkManager::getInstance().getBookmarks();
+        for (const auto& b : bmarks) {
+            if (b.isbn == item.title) {
+                if (!b.title.empty()) item.title = b.title;
+                if (!b.author.empty()) item.author = b.author;
+                break;
+            }
         }
         
         int offset = AppStorage::loadBookmark(AppStorage::toRuntimePath("/books/" + f.name));
@@ -392,12 +403,21 @@ void EReaderApp::drawReading() {
         int h = DisplayHAL::getHeight();
         uint8_t fg = UIFramework::getForegroundColor();
 
-        typography.setTopMargin(60);
-        typography.setBottomMargin(h * 0.05);
-        typography.setFontSize(getReadingFontSize());
+        prepareTypographyForReading();
 
         if (m_currentBookText) {
+            static bool s_lastPortrait = DisplayHAL::isPortrait();
+            static float s_lastFontSize = getReadingFontSize();
+            
+            if (s_lastPortrait != DisplayHAL::isPortrait() || s_lastFontSize != getReadingFontSize()) {
+                m_pageHistory.clear();
+                s_lastPortrait = DisplayHAL::isPortrait();
+                s_lastFontSize = getReadingFontSize();
+            }
+
             size_t remainingLen = m_currentBookTextLen - m_currentReadingOffset;
+            size_t endOffset = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
+            printf("[EReader] Rendering page starting at offset: %d, ending at (next page start): %zu\n", (int)m_currentReadingOffset, endOffset);
             typography.renderText(m_currentBookText + m_currentReadingOffset, remainingLen, 20, 60, framebuffer, fg);
         }
 
@@ -456,6 +476,40 @@ void EReaderApp::drawReading() {
     });
 }
 
+void EReaderApp::prepareTypographyForReading() {
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+    typography.setTopMargin(60);
+    typography.setBottomMargin(h * 0.05);
+    typography.setFontSize(getReadingFontSize());
+}
+
+
+void EReaderApp::loadChapter(int index) {
+    if (m_chapters.empty() || index < 0 || index >= (int)m_chapters.size()) return;
+
+    m_pageHistory.clear();    
+    size_t size = 0;
+    char* html = m_epubParser.getFileContent(m_chapters[index], size);
+    if (!html) return;
+    
+    size_t strippedLen = 0;
+    char* stripped = stripHTML(html, size, strippedLen);
+    free(html);
+    
+    if (m_currentBookText) {
+        free(m_currentBookText);
+        m_currentBookText = nullptr;
+    }
+    
+    if (stripped) {
+        m_currentBookText = stripped;
+        m_currentBookTextLen = strippedLen;
+    } else {
+        m_currentBookTextLen = 0;
+    }
+}
+
 void EReaderApp::openBook(int index) {
     if (index < 0 || index >= (int)m_libraryFiles.size()) return;
     
@@ -505,12 +559,14 @@ void EReaderApp::openBook(int index) {
             }
         }
     } else if (m_epubParser.open(path)) {
-        auto chapters = m_epubParser.getChapterList();
+        m_chapters = m_epubParser.getChapterList();
+        m_currentChapterIndex = 0;
         char* fallbackText = nullptr;
         size_t fallbackLen = 0;
-        for (const auto& chapter : chapters) {
+        int fallbackIndex = 0;
+        for (int i = 0; i < (int)m_chapters.size(); i++) {
             size_t size = 0;
-            char* html = m_epubParser.getFileContent(chapter, size);
+            char* html = m_epubParser.getFileContent(m_chapters[i], size);
             if (!html) continue;
 
             size_t strippedLen = 0;
@@ -519,14 +575,16 @@ void EReaderApp::openBook(int index) {
             if (!stripped) continue;
 
             size_t readableChars = countReadableChars(stripped, strippedLen);
-            if (isPreferredEpubChapter(chapter) && readableChars >= 40) {
+            if (isPreferredEpubChapter(m_chapters[i]) && readableChars >= 40) {
                 m_currentBookText = stripped;
                 m_currentBookTextLen = strippedLen;
+                m_currentChapterIndex = i;
                 break;
             }
             if (!fallbackText && readableChars > 0) {
                 fallbackText = stripped;
                 fallbackLen = strippedLen;
+                fallbackIndex = i;
             } else {
                 free(stripped);
             }
@@ -534,8 +592,8 @@ void EReaderApp::openBook(int index) {
         if (!m_currentBookText && fallbackText) {
             m_currentBookText = fallbackText;
             m_currentBookTextLen = fallbackLen;
+            m_currentChapterIndex = fallbackIndex;
         }
-        m_epubParser.close();
     }
 
     m_currentBookPath = path;
@@ -560,6 +618,7 @@ void EReaderApp::openBook(int index) {
         m_currentReadingOffset = savedOffset;
         if (m_currentReadingOffset < 0) m_currentReadingOffset = 0;
         if (m_currentReadingOffset > (int)m_currentBookTextLen) m_currentReadingOffset = 0;
+        m_pageHistory.clear();
     }
 
     m_state = STATE_READ;
@@ -630,12 +689,15 @@ void EReaderApp::handleTouch(int x, int y) {
             DisplayHAL::setPortrait(!DisplayHAL::isPortrait());
             drawReading();
         } else if (x > w / 2) {
+            prepareTypographyForReading();
             if (m_textReader.isOpen()) {
                 size_t nextStart = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
                 if (nextStart > (size_t)m_currentReadingOffset && nextStart < m_currentBookTextLen) {
+                    m_pageHistory.push_back(m_currentReadingOffset);
                     m_currentReadingOffset = nextStart;
                     AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition() - (m_currentBookTextLen - m_currentReadingOffset));
                 } else {
+                    m_pageHistory.clear();
                     m_textReader.nextPage();
                     std::string text = m_textReader.getPageText();
                     if (m_currentBookText) free(m_currentBookText);
@@ -652,30 +714,54 @@ void EReaderApp::handleTouch(int x, int y) {
                 }
             } else {
                 size_t nextStart = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
-                if (nextStart > (size_t)m_currentReadingOffset) {
+                if (nextStart > (size_t)m_currentReadingOffset && nextStart < m_currentBookTextLen) {
+                    m_pageHistory.push_back(m_currentReadingOffset);
                     m_currentReadingOffset = nextStart;
+                } else if (m_currentChapterIndex >= 0 && m_currentChapterIndex + 1 < (int)m_chapters.size()) {
+                    m_currentChapterIndex++;
+                    loadChapter(m_currentChapterIndex);
+                    m_currentReadingOffset = 0;
                 }
                 AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset);
             }
             drawReading();
         } else {
+            prepareTypographyForReading();
             if (m_textReader.isOpen()) {
-                m_textReader.prevPage();
-                std::string text = m_textReader.getPageText();
-                if (m_currentBookText) free(m_currentBookText);
-                m_currentBookTextLen = text.length();
+                if (!m_pageHistory.empty()) {
+                    m_currentReadingOffset = m_pageHistory.back();
+                    m_pageHistory.pop_back();
+                } else {
+                    m_pageHistory.clear();
+                    m_textReader.prevPage();
+                    std::string text = m_textReader.getPageText();
+                    if (m_currentBookText) free(m_currentBookText);
+                    m_currentBookTextLen = text.length();
 #ifndef NATIVE_TESTING
-                m_currentBookText = (char*)ps_malloc(m_currentBookTextLen + 1);
-                if (!m_currentBookText) m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
+                    m_currentBookText = (char*)ps_malloc(m_currentBookTextLen + 1);
+                    if (!m_currentBookText) m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
 #else
-                m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
+                    m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
 #endif
-                if (m_currentBookText) memcpy(m_currentBookText, text.c_str(), m_currentBookTextLen + 1);
-                AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition());
-                m_currentReadingOffset = 0;
+                    if (m_currentBookText) {
+                        memcpy(m_currentBookText, text.c_str(), m_currentBookTextLen + 1);
+                        m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentBookTextLen);
+                    }
+                    AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition());
+                }
             } else {
-                size_t prevStart = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
-                m_currentReadingOffset = prevStart;
+                if (!m_pageHistory.empty()) {
+                    m_currentReadingOffset = m_pageHistory.back();
+                    m_pageHistory.pop_back();
+                } else if (m_currentReadingOffset == 0 && m_currentChapterIndex > 0) {
+                    m_currentChapterIndex--;
+                    loadChapter(m_currentChapterIndex);
+                    m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentBookTextLen);
+                    m_pageHistory.clear();
+                } else {
+                    size_t prevStart = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
+                    m_currentReadingOffset = prevStart;
+                }
                 AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset);
             }
             drawReading();

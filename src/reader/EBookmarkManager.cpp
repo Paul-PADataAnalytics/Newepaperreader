@@ -195,6 +195,9 @@ void EBookmarkManager::updatePage(const std::string& isbn, int newPage, uint32_t
             book.history.push_back(entry);
             
             save();
+            if (timestamp == 0) {
+                AppComm::sendBookDelta(book.isbn, book.title, book.author, book.currentPage, book.totalPages);
+            }
             return;
         }
     }

@@ -9,6 +9,7 @@
 #include "TypographyEngine.h"
 #include "AppComm.h"
 #include "ui/UIFramework.h"
+#include "app_icons_embedded.h"
 #include <time.h>
 
 #ifndef NATIVE_TESTING
@@ -27,6 +28,20 @@ Application* createSettings() { return new SettingsApp(); }
 Application* createCalculator() { return new CalculatorApp(); }
 Application* createTimer() { return new TimerApp(); }
 Application* createImageViewer() { return new ImageViewerApp(); }
+
+
+static void drawIcon48x48(uint8_t* fb, int iconX, int iconY, const uint8_t* iconData) {
+    if (!fb || !iconData) return;
+    for (int r = 0; r < 48; r++) {
+        for (int c = 0; c < 48; c += 2) {
+            uint8_t byteVal = iconData[r * 24 + (c / 2)];
+            uint8_t p1 = (byteVal >> 4) & 0x0F;
+            uint8_t p2 = byteVal & 0x0F;
+            DisplayHAL::setPixel(iconX + c, iconY + r, p1, fb);
+            DisplayHAL::setPixel(iconX + c + 1, iconY + r, p2, fb);
+        }
+    }
+}
 
 Launcher& Launcher::getInstance() {
     static Launcher instance;
@@ -192,13 +207,20 @@ void Launcher::drawMenu() {
         for (int i = 0; i < 6; i++) {
             UIFramework::drawButton(framebuffer, cards[i].x, cards[i].y, cardW, cardH, "");
             
-            typography.setFontSize(30.0f);
+            // Draw 48x48 App Icon centered at top of card
+            int iconX = cards[i].x + (cardW - 48) / 2;
+            int iconY = cards[i].y + 15;
+            drawIcon48x48(framebuffer, iconX, iconY, g_embeddedAppIcons + (i * 1152));
+
+            // App Title
+            typography.setFontSize(24.0f);
             int titleW = typography.measureText(cards[i].title);
-            typography.renderText(cards[i].title, cards[i].x + (cardW - titleW) / 2, cards[i].y + 30, framebuffer);
+            typography.renderText(cards[i].title, cards[i].x + (cardW - titleW) / 2, cards[i].y + 75, framebuffer);
             
-            typography.setFontSize(18.0f);
+            // App Description
+            typography.setFontSize(16.0f);
             int descW = typography.measureText(cards[i].desc);
-            typography.renderText(cards[i].desc, cards[i].x + (cardW - descW) / 2, cards[i].y + 100, framebuffer, 0x03);
+            typography.renderText(cards[i].desc, cards[i].x + (cardW - descW) / 2, cards[i].y + 125, framebuffer, 0x04);
         }
 
         // Draw bottom helper message

@@ -136,9 +136,9 @@ void processSerialCommands() {
 void setup() {
 #ifndef NATIVE_TESTING
     Serial.begin(115200);
-    Serial.println("Starting LilyGO EPD47 E-Reader System v2.0.0...");
+    Serial.println("Starting LilyGO EPD47 E-Reader System v2.2.0...");
 #else
-    printf("Starting LilyGO EPD47 E-Reader System v2.0.0 (Native Mock)...\n");
+    printf("Starting LilyGO EPD47 E-Reader System v2.2.0 (Native Mock)...\n");
 #endif
 
     DisplayHAL::init();
@@ -207,6 +207,7 @@ static void drawSleepScreen() {
 
 #ifdef NATIVE_TESTING
     DIR* d = opendir("data/images");
+    if (!d) d = opendir("images");
     if (d) {
         struct dirent* entry;
         while ((entry = readdir(d)) != nullptr) {
@@ -224,57 +225,75 @@ static void drawSleepScreen() {
         while (file) {
             std::string name = file.name();
             if (name.length() > 4 && name.substr(name.length() - 4) == ".raw") {
+                std::string fullPath;
                 if (name.find("/images/") == 0) {
-                    rawImages.push_back(name);
+                    fullPath = name;
                 } else if (name.length() > 0 && name[0] == '/') {
-                    rawImages.push_back("/images" + name);
+                    fullPath = "/images" + name;
                 } else {
-                    rawImages.push_back("/images/" + name);
+                    fullPath = "/images/" + name;
                 }
+                rawImages.push_back(fullPath);
             }
             file = dir.openNextFile();
         }
     }
 #endif
 
+    bool imageLoaded = false;
+
     if (!rawImages.empty()) {
-        static int sleepImageIndex = 0;
-        if (sleepImageIndex >= (int)rawImages.size()) sleepImageIndex = 0;
-        std::string selectedImage = rawImages[sleepImageIndex++];
+        static size_t sleepImageIdx = 0;
+        size_t attempts = rawImages.size();
         
         UIFramework::performFullScreenDraw(framebuffer, [&]() {
+            for (size_t a = 0; a < attempts; a++) {
+                std::string selectedImage = rawImages[(sleepImageIdx + a) % rawImages.size()];
 #ifdef NATIVE_TESTING
-            FILE* f = fopen(selectedImage.c_str(), "rb");
-            if (f) {
-                size_t bytesRead = fread(framebuffer, 1, 960 * 540 / 2, f);
-                (void)bytesRead;
-                fclose(f);
-            }
+                FILE* f = fopen(selectedImage.c_str(), "rb");
+                if (f) {
+                    size_t readBytes = fread(framebuffer, 1, 960 * 540 / 2, f);
+                    fclose(f);
+                    if (readBytes == 960 * 540 / 2) {
+                        imageLoaded = true;
+                        sleepImageIdx = (sleepImageIdx + a + 1) % rawImages.size();
+                        break;
+                    }
+                }
 #else
-            std::string actualPath = selectedImage;
-            if (actualPath.rfind("/sd", 0) == 0) {
-                actualPath = actualPath.substr(3);
-            }
-            File f = SD.open(actualPath.c_str(), FILE_READ);
-            if (f) {
-                f.read(framebuffer, 960 * 540 / 2);
-                f.close();
-            }
+                File f = SD.open(selectedImage.c_str(), FILE_READ);
+                if (f) {
+                    size_t readBytes = f.read(framebuffer, 960 * 540 / 2);
+                    f.close();
+                    if (readBytes == 960 * 540 / 2) {
+                        imageLoaded = true;
+                        sleepImageIdx = (sleepImageIdx + a + 1) % rawImages.size();
+                        break;
+                    }
+                }
 #endif
+            }
+
+            if (!imageLoaded) {
+                int w = DisplayHAL::getWidth();
+                int h = DisplayHAL::getHeight();
+                typography.setFontSize(48.0f);
+                std::string sleepMsg = "Sleeping zzzz";
+                int tw = typography.measureText(sleepMsg);
+                int tx = (w - tw) / 2;
+                int ty = (h - 48) / 2;
+                typography.renderText(sleepMsg, tx, ty, framebuffer, 0x00);
+            }
         });
     } else {
-        // Unified full-screen draw with mandatory hardware clear to prevent burn-in
         UIFramework::performFullScreenDraw(framebuffer, []() {
             int w = DisplayHAL::getWidth();
             int h = DisplayHAL::getHeight();
-
-            // Render "Sleeping zzzz" centered in the middle of the screen
             typography.setFontSize(48.0f);
             std::string sleepMsg = "Sleeping zzzz";
             int tw = typography.measureText(sleepMsg);
             int tx = (w - tw) / 2;
             int ty = (h - 48) / 2;
-
             typography.renderText(sleepMsg, tx, ty, framebuffer, 0x00);
         });
     }
@@ -283,6 +302,28 @@ static void drawSleepScreen() {
 }
 
 void loop() {
+    // BOOT Button (GPIO 0) manual sleep / wake toggle
+#ifndef NATIVE_TESTING
+    static uint32_t lastBootBtnTime = 0;
+    if (digitalRead(GPIO_NUM_0) == LOW) {
+        uint32_t btnNow = millis();
+        if ((btnNow - lastBootBtnTime) > 400) {
+            lastBootBtnTime = btnNow;
+            isSystemSleeping = !isSystemSleeping;
+            if (isSystemSleeping) {
+                drawSleepScreen();
+            } else {
+                DisplayHAL::powerOn();
+                if (Launcher::getInstance().getActiveApp()) {
+                    Launcher::getInstance().getActiveApp()->draw();
+                } else {
+                    Launcher::getInstance().drawMenu();
+                }
+            }
+            return;
+        }
+    }
+#endif
     processSerialCommands();
 
     uint32_t now = millis();
@@ -363,6 +404,7 @@ void loop() {
     if (isSystemSleeping) {
 #ifndef NATIVE_TESTING
         gpio_wakeup_enable(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_LOW_LEVEL);
+        gpio_wakeup_enable(GPIO_NUM_0, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();
         esp_light_sleep_start();
         delay(10);
@@ -426,12 +468,25 @@ void loop() {
 #ifdef NATIVE_TESTING
 #include <string.h>
 int main(int argc, char** argv) {
+    const char* dumpPgm = nullptr;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug-screen") == 0) {
             DisplayHAL::setDebugScreen(true);
+        } else if (strcmp(argv[i], "--dump-pgm") == 0 && i + 1 < argc) {
+            dumpPgm = argv[++i];
         }
     }
     setup();
+    if (dumpPgm) {
+        FILE* f = fopen(dumpPgm, "wb");
+        if (f) {
+            fprintf(f, "P5\n960 540\n255\n");
+            fwrite(DisplayHAL::frontBuffer, 1, 960 * 540 / 2, f);
+            fclose(f);
+            printf("Dumped framebuffer PGM to %s\n", dumpPgm);
+        }
+        return 0;
+    }
     while (true) {
         loop();
     }

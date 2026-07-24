@@ -1,46 +1,37 @@
-# LilyGo EPD47 E-Reader System v2.0
+# LilyGo EPD47 E-Reader System v2.2.0
 
-Welcome to the LilyGo EPD47 E-Reader System v2.0! This is a complete custom firmware for the LilyGo T5-ePaper-S3 (4.7" E-Ink display) built using PlatformIO.
+Welcome to the LilyGo EPD47 E-Reader System **v2.2.0**! This is the complete custom firmware for the LilyGo T5-ePaper-S3 (4.7" E-Ink display) built using PlatformIO.
 
-## Key Features
+![Launcher v2.2](file:///home/paul/Documents/projects/newepaperreader/images/screen_exact.jpg)
 
-### Core System
-- **Power Efficiency**: Extreme low-power Light Sleep mode activates after 30 seconds of inactivity. Powers down the E-Ink display and halts the CPU, waking instantly on touch (via GT911 hardware interrupt).
-- **Advanced Display Framework**: Implements a custom 2-pass partial update system to reduce screen flashing, along with full-screen hardware refreshes when needed.
-- **Dark Mode**: System-wide dark mode inversion support.
-- **Native Simulator**: Develop and test UI components directly on your PC using the `native` PlatformIO environment (via SDL2), before deploying to the ESP32.
+## System Overview & Key Features
 
-### Included Applications
-- **Launcher**: A dynamic home screen displaying battery life, current time, and an app grid.
-- **E-Reader**: A fully-featured EPUB reader utilizing a custom typography engine. Supports pagination, adjustable font sizes, and screen rotation.
-- **eBookmarks**: Rich bookmarking system that saves your exact progress (page, percentage) and synchronizes seamlessly.
-- **Companion App Sync**: Built-in Bluetooth Low Energy (BLE) server to communicate with mobile companion apps. Supports two-way bookmark syncing and wireless EPUB book transfers.
-- **Image Viewer**: Render and navigate through `.raw` high-contrast images directly from the SD card.
-- **Calculator**: A built-in standard arithmetic calculator.
-- **Timer**: Includes a local Clock, a Stopwatch with lap times, and a Countdown Timer.
-- **Settings**: System configuration interface to manage defaults (like E-Reader font size and Dark mode preferences).
+- **App Grid Launcher with Icons**: Visual 2x3 app grid with embedded 48x48 16-level grayscale icons.
+- **Full Application Suite**:
+  - **E-Reader**: Full EPUB and text reading with customizable font sizing and pagination.
+  - **eBookmark Sync**: BLE synchronization with mobile companion apps for reading progress tracking.
+  - **File Manager**: Comprehensive SD card file and directory browser.
+  - **Image Viewer**: High-contrast JPEG and RAW image rendering engine.
+  - **Calculator**: High-contrast basic math utility.
+  - **Settings App**: Wireless and system configuration portal.
+- **Advanced Display HAL**: Custom 2-pass partial update engine to eliminate ghosting while preserving E-Ink lifespan.
+- **Hardware Documentation**: Comprehensive [User Manual](file:///home/paul/Documents/projects/newepaperreader/manual/index.md) including hardware constraints and developer safety notes.
 
-## Building the Project
+## Hardware & Firmware Safety
 
-This project uses PlatformIO. 
+For detailed hardware specifications, RTC wakeup constraints, and critical E-Ink driver IC timing notes, please refer to:
+👉 [01 - Hardware Overview & Critical Developer Notes](file:///home/paul/Documents/projects/newepaperreader/manual/01_hardware_overview.md)
 
-### Dependencies
-All required libraries (such as `LilyGo-EPD47`, `AsyncTCP`, `ArduinoJson`, etc.) are automatically managed by PlatformIO.
+## Building the Firmware
 
-### Compile for Hardware (ESP32-S3)
+### Hardware Build (ESP32-S3)
 ```bash
 pio run -e t5-47-s3
-pio run -e t5-47-s3 -t upload
+pio run -e t5-47-s3 -t upload -t monitor
 ```
 
-### Compile for Native Simulator (Desktop)
+### Desktop Native Simulator
 ```bash
 pio run -e native
-.pio/build/native/program
+./.pio/build/native/program
 ```
-
-## Hardware Requirements
-* **Board**: LilyGo T5-ePaper-S3 (ESP32-S3)
-* **Display**: 4.7-inch E-Ink Display (960x540)
-* **Touch**: GT911 Capacitive Touch Controller
-* **Storage**: MicroSD Card (for books and images)

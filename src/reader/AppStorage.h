@@ -22,4 +22,24 @@ bool saveBookmark(const std::string& runtimeBookPath, int offset);
 // Loads bookmark offset; returns 0 when missing.
 int loadBookmark(const std::string& runtimeBookPath);
 
+// File management operations. Paths are SD-root-relative (for example,
+// /books/title.epub). Existing destination files are never overwritten.
+bool copyFile(const std::string& sourcePath, const std::string& destinationPath,
+              std::string& error);
+bool moveFile(const std::string& sourcePath, const std::string& destinationPath,
+              std::string& error);
+bool deleteFile(const std::string& path, std::string& error);
+struct SavedSystemState {
+    int appIndex = -1;
+    int internalState = 0;
+    bool isPortrait = false;
+    std::string path = "";
+    bool valid = false;
+};
+
+bool saveSystemState(const SavedSystemState& state);
+SavedSystemState loadSystemState();
+bool clearSystemState();
+
 } // namespace AppStorage
+

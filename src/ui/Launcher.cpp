@@ -3,7 +3,7 @@
 #include "EBookmarkApp.h"
 #include "SettingsApp.h"
 #include "CalculatorApp.h"
-#include "TimerApp.h"
+#include "FileManagerApp.h"
 #include "ImageViewerApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
@@ -26,7 +26,7 @@ Application* createEReader() { return new EReaderApp(); }
 Application* createEBookmark() { return new EBookmarkApp(); }
 Application* createSettings() { return new SettingsApp(); }
 Application* createCalculator() { return new CalculatorApp(); }
-Application* createTimer() { return new TimerApp(); }
+Application* createFileManager() { return new FileManagerApp(); }
 Application* createImageViewer() { return new ImageViewerApp(); }
 
 
@@ -58,7 +58,7 @@ void Launcher::init() {
         {"eBookmark App", "Track physical books via BLE companion", createEBookmark},
         {"Settings App", "Configure system-wide wireless settings", createSettings},
         {"Calculator App", "Simple high-contrast basic math utility", createCalculator},
-        {"Timer App", "Clock, Stopwatch, and Countdown utility", createTimer},
+        {"File Browser", "Manage files and folders on the SD card", createFileManager},
         {"Image Viewer", "JPEG rendering with 16 grayscale conversion", createImageViewer}
     };
     m_activeAppIndex = -1;
@@ -196,7 +196,7 @@ void Launcher::drawMenu() {
             {30, 100, "E-Reader App", "Read EPUB & Text library"},
             {340, 100, "eBookmark", "Track physical reads & stats"},
             {650, 100, "Calculator", "Pocket math & arithmetic"},
-            {30, 300, "Timer App", "Clock, Stopwatch, Countdown"},
+            {30, 300, "File Browser", "Manage files on the SD card"},
             {340, 300, "Image Viewer", "Browse & convert JPG images"},
             {650, 300, "Settings App", "Configure wireless settings"}
         };

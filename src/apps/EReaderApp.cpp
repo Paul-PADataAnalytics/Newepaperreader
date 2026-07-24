@@ -205,7 +205,9 @@ void EReaderApp::onCreate() {
     }
 #else
     if (!typography.loadFont("data/Roboto-Regular.ttf", 32)) {
-        printf("Failed to load Roboto-Regular.ttf\n");
+        if (!typography.loadFont("Roboto-Regular.ttf", 32)) {
+            printf("Failed to load Roboto-Regular.ttf\n");
+        }
     }
 #endif
 

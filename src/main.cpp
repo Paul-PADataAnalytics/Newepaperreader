@@ -183,7 +183,9 @@ void setup() {
     }
 #else
     if (!typography.loadFont("data/Roboto-Regular.ttf", 32)) {
-        printf("Failed to load Roboto-Regular.ttf\n");
+        if (!typography.loadFont("Roboto-Regular.ttf", 32)) {
+            printf("Failed to load Roboto-Regular.ttf\n");
+        }
     }
 #endif
 
@@ -206,17 +208,20 @@ static void drawSleepScreen() {
     std::vector<std::string> rawImages;
 
 #ifdef NATIVE_TESTING
-    DIR* d = opendir("data/images");
-    if (!d) d = opendir("images");
-    if (d) {
-        struct dirent* entry;
-        while ((entry = readdir(d)) != nullptr) {
-            std::string name = entry->d_name;
-            if (name.length() > 4 && name.substr(name.length() - 4) == ".raw") {
-                rawImages.push_back("data/images/" + name);
+    const char* testDirs[] = {"data/images", "images", "."};
+    for (const char* dirPath : testDirs) {
+        DIR* d = opendir(dirPath);
+        if (d) {
+            struct dirent* entry;
+            while ((entry = readdir(d)) != nullptr) {
+                std::string name = entry->d_name;
+                if (name.length() > 4 && name.substr(name.length() - 4) == ".raw") {
+                    rawImages.push_back(std::string(dirPath) + "/" + name);
+                }
             }
+            closedir(d);
+            if (!rawImages.empty()) break;
         }
-        closedir(d);
     }
 #else
     File dir = SD.open("/images");

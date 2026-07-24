@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Build the native target
 pio run -e native
@@ -9,5 +10,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# Run the compiled binary and pass any arguments (e.g. --debug-screen)
-./.pio/build/native/program "$@"
+# Ensure data directory exists
+mkdir -p data
+
+# Run the compiled binary inside data/ as the root SD card
+cd data
+../.pio/build/native/program "$@"

@@ -260,28 +260,35 @@ void ImageViewerApp::drawView() {
         int w = DisplayHAL::getWidth();
         int h = DisplayHAL::getHeight();
 
-        // 1. Load converted raw 4-bit E-Ink format directly into framebuffer
+        if (m_convertedFrame) {
+            memcpy(framebuffer, m_convertedFrame, 960 * 540 / 2);
+        } else {
 #ifdef NATIVE_TESTING
-        std::string relCache = m_cachePath;
-        if (relCache.length() > 0 && relCache[0] == '/') {
-            relCache = relCache.substr(1);
-        }
-        FILE* f = fopen(relCache.c_str(), "rb");
-        if (!f) {
-            std::string dataCache = "data/" + relCache;
-            f = fopen(dataCache.c_str(), "rb");
-        }
-        if (f) {
-            fread(framebuffer, 1, 960 * 540 / 2, f);
-            fclose(f);
-        }
+            std::string relCache = m_cachePath;
+            if (relCache.length() > 0 && relCache[0] == '/') {
+                relCache = relCache.substr(1);
+            }
+            FILE* f = fopen(relCache.c_str(), "rb");
+            if (!f) {
+                std::string dataCache = "data/" + relCache;
+                f = fopen(dataCache.c_str(), "rb");
+            }
+            if (f) {
+                fread(framebuffer, 1, 960 * 540 / 2, f);
+                fclose(f);
+            }
 #else
-        File f = SD.open(m_cachePath.c_str(), FILE_READ);
-        if (f) {
-            f.read(framebuffer, 960 * 540 / 2);
-            f.close();
-        }
+            std::string actualPath = m_cachePath;
+            if (actualPath.rfind("/sd", 0) == 0) {
+                actualPath = actualPath.substr(3);
+            }
+            File f = SD.open(actualPath.c_str(), FILE_READ);
+            if (f) {
+                f.read(framebuffer, 960 * 540 / 2);
+                f.close();
+            }
 #endif
+        }
 
         // 2. Draw a Back navigation overlay button (bottom right)
         uint8_t fg = UIFramework::getForegroundColor();
@@ -560,7 +567,15 @@ void ImageViewerApp::update() {
         drawConverting(false);
 
 #ifdef NATIVE_TESTING
-        FILE* out = fopen(m_cachePath.c_str(), "wb");
+        std::string relCacheSave = m_cachePath;
+        if (relCacheSave.length() > 0 && relCacheSave[0] == '/') {
+            relCacheSave = relCacheSave.substr(1);
+        }
+        FILE* out = fopen(relCacheSave.c_str(), "wb");
+        if (!out) {
+            std::string dataCache = "data/" + relCacheSave;
+            out = fopen(dataCache.c_str(), "wb");
+        }
         if (out) {
             fwrite(m_convertedFrame, 1, 960 * 540 / 2, out);
             fclose(out);

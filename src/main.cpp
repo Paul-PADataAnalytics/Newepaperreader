@@ -150,6 +150,11 @@ void setup() {
     xTaskCreatePinnedToCore(touchReaderTask, "touchReader", 4096, nullptr, 24,
                             &touchReaderTaskHandle, 1);
 
+    pinMode(GPIO_NUM_0, INPUT_PULLUP);
+    pinMode(TOUCH_INT, INPUT_PULLUP);
+    gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
+    gpio_pullup_en(GPIO_NUM_0);
+
     gpio_install_isr_service(0);
     gpio_set_intr_type(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_NEGEDGE);
     gpio_isr_handler_add(static_cast<gpio_num_t>(TOUCH_INT), touchIsrHandler,
@@ -410,6 +415,12 @@ void loop() {
 
     if (isSystemSleeping) {
 #ifndef NATIVE_TESTING
+        // Enforce internal pullup resistors so input pins NEVER float on electrical noise
+        gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
+        gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
+        gpio_pullup_en(GPIO_NUM_0);
+        gpio_pulldown_dis(GPIO_NUM_0);
+
         // Clear GT911 touch interrupt state before entering light sleep so INT pin goes HIGH
         int dummyX = -1, dummyY = -1;
         DisplayHAL::getTouch(dummyX, dummyY);
@@ -419,17 +430,28 @@ void loop() {
         esp_sleep_enable_gpio_wakeup();
         esp_light_sleep_start();
 
-        // Woke up from light sleep: restore active state and redraw UI
-        isSystemSleeping = false;
-        lastTouchActivityTime = millis();
-        DisplayHAL::powerOn();
+        // Verify if wakeup was caused by a real touch or BOOT button press vs a noise glitch
+        delay(30);
+        bool bootPressed = (digitalRead(GPIO_NUM_0) == LOW);
+        int wakeX = -1, wakeY = -1;
+        bool touchDetected = DisplayHAL::getTouch(wakeX, wakeY);
 
-        if (Launcher::getInstance().getActiveApp()) {
-            Launcher::getInstance().getActiveApp()->draw();
+        if (bootPressed || touchDetected) {
+            // Valid wake event! Restore active state and redraw UI
+            isSystemSleeping = false;
+            lastTouchActivityTime = millis();
+            DisplayHAL::powerOn();
+
+            if (Launcher::getInstance().getActiveApp()) {
+                Launcher::getInstance().getActiveApp()->draw();
+            } else {
+                Launcher::getInstance().drawMenu();
+            }
+            delay(150);
         } else {
-            Launcher::getInstance().drawMenu();
+            // Electrical noise glitch: remain in sleep and ensure display power stays off
+            DisplayHAL::powerOff();
         }
-        delay(150);
 #else
         DisplayHAL::handleEvents();
         if (DisplayHAL::windowShouldClose()) exit(0);

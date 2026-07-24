@@ -129,7 +129,13 @@ bool DisplayHAL::getTouch(int &x, int &y) {
 void DisplayHAL::init() {
     epd_init();
     
-    pinMode(TOUCH_INT, INPUT);
+    pinMode(TOUCH_INT, INPUT_PULLUP);
+    gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
+    gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
+
+    pinMode(GPIO_NUM_0, INPUT_PULLUP);
+    gpio_pullup_en(GPIO_NUM_0);
+    gpio_pulldown_dis(GPIO_NUM_0);
     
     Wire.begin(BOARD_SDA, BOARD_SCL);
     

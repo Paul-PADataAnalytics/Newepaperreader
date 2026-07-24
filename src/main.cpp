@@ -312,12 +312,14 @@ void loop() {
     static uint32_t lastBootBtnTime = 0;
     if (digitalRead(GPIO_NUM_0) == LOW) {
         uint32_t btnNow = millis();
-        if ((btnNow - lastBootBtnTime) > 400) {
+        if ((btnNow - lastBootBtnTime) > 600) {
             lastBootBtnTime = btnNow;
             isSystemSleeping = !isSystemSleeping;
             if (isSystemSleeping) {
                 drawSleepScreen();
+                DisplayHAL::powerOff();
             } else {
+                lastTouchActivityTime = btnNow;
                 DisplayHAL::powerOn();
                 if (Launcher::getInstance().getActiveApp()) {
                     Launcher::getInstance().getActiveApp()->draw();
@@ -408,11 +410,26 @@ void loop() {
 
     if (isSystemSleeping) {
 #ifndef NATIVE_TESTING
+        // Clear GT911 touch interrupt state before entering light sleep so INT pin goes HIGH
+        int dummyX = -1, dummyY = -1;
+        DisplayHAL::getTouch(dummyX, dummyY);
+
         gpio_wakeup_enable(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_LOW_LEVEL);
         gpio_wakeup_enable(GPIO_NUM_0, GPIO_INTR_LOW_LEVEL);
         esp_sleep_enable_gpio_wakeup();
         esp_light_sleep_start();
-        delay(10);
+
+        // Woke up from light sleep: restore active state and redraw UI
+        isSystemSleeping = false;
+        lastTouchActivityTime = millis();
+        DisplayHAL::powerOn();
+
+        if (Launcher::getInstance().getActiveApp()) {
+            Launcher::getInstance().getActiveApp()->draw();
+        } else {
+            Launcher::getInstance().drawMenu();
+        }
+        delay(150);
 #else
         DisplayHAL::handleEvents();
         if (DisplayHAL::windowShouldClose()) exit(0);

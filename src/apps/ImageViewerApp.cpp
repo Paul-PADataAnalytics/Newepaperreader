@@ -262,7 +262,15 @@ void ImageViewerApp::drawView() {
 
         // 1. Load converted raw 4-bit E-Ink format directly into framebuffer
 #ifdef NATIVE_TESTING
-        FILE* f = fopen(m_cachePath.c_str(), "rb");
+        std::string relCache = m_cachePath;
+        if (relCache.length() > 0 && relCache[0] == '/') {
+            relCache = relCache.substr(1);
+        }
+        FILE* f = fopen(relCache.c_str(), "rb");
+        if (!f) {
+            std::string dataCache = "data/" + relCache;
+            f = fopen(dataCache.c_str(), "rb");
+        }
         if (f) {
             fread(framebuffer, 1, 960 * 540 / 2, f);
             fclose(f);
@@ -363,7 +371,15 @@ void ImageViewerApp::startConversion(const std::string& path) {
 
     bool isCached = false;
 #ifdef NATIVE_TESTING
-    FILE* f = fopen(m_cachePath.c_str(), "rb");
+    std::string relCacheCheck = m_cachePath;
+    if (relCacheCheck.length() > 0 && relCacheCheck[0] == '/') {
+        relCacheCheck = relCacheCheck.substr(1);
+    }
+    FILE* f = fopen(relCacheCheck.c_str(), "rb");
+    if (!f) {
+        std::string dataCache = "data/" + relCacheCheck;
+        f = fopen(dataCache.c_str(), "rb");
+    }
     if (f) {
         isCached = true;
         fclose(f);
@@ -393,7 +409,15 @@ void ImageViewerApp::startConversion(const std::string& path) {
 
 static uint8_t* readEntireFile(const std::string& path, size_t& out_size) {
 #ifdef NATIVE_TESTING
-    FILE* f = fopen(path.c_str(), "rb");
+    std::string relPath = path;
+    if (relPath.length() > 0 && relPath[0] == '/') {
+        relPath = relPath.substr(1);
+    }
+    FILE* f = fopen(relPath.c_str(), "rb");
+    if (!f) {
+        std::string dataPath = "data/" + relPath;
+        f = fopen(dataPath.c_str(), "rb");
+    }
     if (!f) return nullptr;
     fseek(f, 0, SEEK_END);
     out_size = ftell(f);

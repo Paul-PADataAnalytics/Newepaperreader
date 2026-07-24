@@ -66,31 +66,18 @@ void FileManagerApp::drawListLayout(const char* title, bool selectingDestination
         for (int i = 0; i < 4; i++) {
             int buttonY = LIB_MAIN_Y + i * buttonHeight;
             UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, buttonY + 10,
-                                    LIB_SIDE_W - 20, buttonHeight - 20, "");
-            typography.setFontSize(i == 2 && selectingDestination ? 20.0f : 24.0f);
-            int textWidth = typography.measureText(buttons[i]);
-            typography.renderText(buttons[i],
-                                  LIB_SIDE_X + (LIB_SIDE_W - textWidth) / 2,
-                                  buttonY + (buttonHeight - 24) / 2,
-                                  framebuffer, fg);
+                                    LIB_SIDE_W - 20, buttonHeight - 20, buttons[i]);
         }
 
-        DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
+        DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xFF, framebuffer);
         int pagingButtonWidth = LIB_PAGING_W - 20;
         int pagingButtonHeight = LIB_MAIN_H / 2 - 20;
 
         int upY = LIB_MAIN_Y + 10;
-        UIFramework::drawButton(framebuffer, 25, upY, pagingButtonWidth, pagingButtonHeight, "");
-        typography.setFontSize(32.0f);
-        int upWidth = typography.measureText("/\\");
-        typography.renderText("/\\", 25 + (pagingButtonWidth - upWidth) / 2,
-                              upY + (pagingButtonHeight - 24) / 2, framebuffer, fg);
+        UIFramework::drawButton(framebuffer, 25, upY, pagingButtonWidth, pagingButtonHeight, "/\\");
 
         int downY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
-        UIFramework::drawButton(framebuffer, 25, downY, pagingButtonWidth, pagingButtonHeight, "");
-        int downWidth = typography.measureText("\\/");
-        typography.renderText("\\/", 25 + (pagingButtonWidth - downWidth) / 2,
-                              downY + (pagingButtonHeight - 24) / 2, framebuffer, fg);
+        UIFramework::drawButton(framebuffer, 25, downY, pagingButtonWidth, pagingButtonHeight, "\\/");
 
         const std::vector<FileInfo>& files = m_browser.getFiles();
         int startIndex = m_page * ITEMS_PER_PAGE;

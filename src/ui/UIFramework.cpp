@@ -1,3 +1,5 @@
+#include "TypographyEngine.h"
+extern TypographyEngine typography;
 #include "UIFramework.h"
 #include "DisplayHAL.h"
 
@@ -27,15 +29,21 @@ void UIFramework::drawProgressBar(uint8_t *framebuffer, float progress, const ch
 }
 
 void UIFramework::drawButton(uint8_t *framebuffer, int x, int y, int w, int h, const char* label, bool inverted) {
-    uint8_t bgColor = inverted ? 0x00 : 0xEE; // Black if inverted, very light grey (masks to 0x0E) otherwise
-    uint8_t fgColor = inverted ? 0xFF : 0x00;
+    uint8_t bgColor = inverted ? 0x00 : 0xEE; // Black if inverted, very light grey otherwise
+    uint8_t fgColor = inverted ? 0xFF : 0x00; // White text if inverted, black text otherwise
     
     // Background
     DisplayHAL::fillRect(x, y, w, h, bgColor, framebuffer);
     // Border
     DisplayHAL::drawRect(x, y, w, h, fgColor, framebuffer);
     
-    // Text placeholder...
+    if (label && label[0] != '\0') {
+        typography.setFontSize(22.0f);
+        int tw = typography.measureText(label);
+        int tx = x + (w - tw) / 2;
+        int ty = y + (h - 22) / 2;
+        typography.renderText(label, tx, ty, framebuffer, fgColor);
+    }
 }
 
 uint8_t UIFramework::getBackgroundColor() {

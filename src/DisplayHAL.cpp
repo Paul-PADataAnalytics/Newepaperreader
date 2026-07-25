@@ -133,9 +133,14 @@ void DisplayHAL::init() {
     gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
     gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
 
-    pinMode(GPIO_NUM_0, INPUT_PULLUP);
-    gpio_pullup_en(GPIO_NUM_0);
-    gpio_pulldown_dis(GPIO_NUM_0);
+    // NOTE: GPIO0 must NEVER be touched here (pinMode/pullup/etc) - it is
+    // hard-wired on this board to the 74HCT4094D CFG_STR line used
+    // internally by the LilyGo-EPD47 driver (epd_poweron/epd_poweroff config
+    // shift register strobe). Reconfiguring it as an input (e.g. for a
+    // "BOOT button" feature) silently breaks the EPD driver's ability to
+    // strobe its config register - code runs with no crash/error, but the
+    // panel never visibly updates again. Confirmed via git bisect + GPIO map
+    // in .pio/libdeps/*/LilyGo-EPD47/README.MD ("0 | 74HCT4094D CFG_STR | Free: no").
     
     Wire.begin(BOARD_SDA, BOARD_SCL);
     

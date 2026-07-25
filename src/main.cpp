@@ -344,12 +344,22 @@ void loop() {
     TouchEvent ev{};
 
     while (touchEventQueue && xQueueReceive(touchEventQueue, &ev, 0) == pdTRUE) {
-        gotTouchEvent = true;
         if (ev.phase == TouchPhase::DOWN) {
+            // Real press - always counts as activity.
+            gotTouchEvent = true;
             touchDownWaiting = true;
             tx = ev.x;
             ty = ev.y;
         } else {
+            // UP events fire on every GT911 INT pulse, including electrical
+            // noise/heartbeat pulses with no real touch. Only count this as
+            // user activity (and reset the inactivity/sleep timer) if it's
+            // the release of a press we actually saw start - otherwise the
+            // 30s inactivity sleep timer would be reset every noise pulse
+            // and never elapse.
+            if (touchDownWaiting) {
+                gotTouchEvent = true;
+            }
             touchDownWaiting = false;
             touchFired = false;
             lastUpTime = now;
@@ -400,6 +410,21 @@ void loop() {
         gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
         gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
 
+        // CRITICAL: detach the edge-triggered app ISR before reconfiguring this
+        // GPIO for level-triggered sleep wakeup below. gpio_wakeup_enable()
+        // silently flips the pin's shared interrupt-type register to
+        // LOW_LEVEL; if touchIsrHandler is still attached when that happens,
+        // it refires continuously for as long as the line reads low (a real
+        // touch, or a routine GT911 noise pulse), flooding CPU1 with ISR
+        // entries and starving its idle task - this trips "Interrupt wdt
+        // timeout on CPU1" and the device crash-loops forever. There is no
+        // safe point to restore this after esp_light_sleep_start() returns:
+        // the storm can already be underway (started while still LOW_LEVEL,
+        // before our own restore code ever gets scheduled), so the handler
+        // must be fully removed for the whole risky window and only
+        // reattached once the line is confirmed clear again below.
+        gpio_isr_handler_remove(static_cast<gpio_num_t>(TOUCH_INT));
+
         // Clear GT911 touch interrupt state before entering light sleep so INT pin goes HIGH
         int dummyX = -1, dummyY = -1;
         DisplayHAL::getTouch(dummyX, dummyY);
@@ -415,6 +440,44 @@ void loop() {
         // can glitch LOW transiently, which combined with a silent retry loop
         // here previously caused the device to get stuck sleeping/waking forever
         // without ever redrawing the display (looked like total display failure).
+
+        // Disable the GPIO wakeup source immediately (no isr handler is
+        // attached right now, so the line can safely still be LOW_LEVEL for a
+        // moment with no storm risk). Then service the touch controller at
+        // TASK level (safe blocking I2C) so the physical INT line actually
+        // goes back high, BEFORE we re-arm the edge interrupt + reattach the
+        // handler - this guarantees no pending low level is left over to
+        // immediately refire the moment the handler goes back on.
+        gpio_wakeup_disable(static_cast<gpio_num_t>(TOUCH_INT));
+        int wx = -1, wy = -1;
+        // getTouch() returns true only for a genuine, currently-down touch
+        // point (same signal touchReaderTask uses to distinguish DOWN/UP).
+        // The GT911 also raises this same INT line for noise/heartbeat
+        // pulses that carry no real touch point - getTouch() returns false
+        // for those, exactly like the awake-loop noise filtering added for
+        // the inactivity timer. Use that here to tell a genuine wake-up tap
+        // apart from a noise-driven false wake.
+        bool realTouchWake = DisplayHAL::getTouch(wx, wy);
+
+        gpio_set_intr_type(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_NEGEDGE);
+        gpio_isr_handler_add(static_cast<gpio_num_t>(TOUCH_INT), touchIsrHandler,
+                             nullptr);
+
+        // Discard any touch events that may have been queued during the
+        // sleep/wake transition so we don't act on stale/spurious data right
+        // after waking.
+        if (touchEventQueue) {
+            xQueueReset(touchEventQueue);
+        }
+
+        if (!realTouchWake) {
+            // Just noise - stay asleep. Returning here (isSystemSleeping is
+            // still true) means the very next loop() call re-enters this same
+            // block and goes right back into light sleep, without ever
+            // powering on the display or redrawing.
+            return;
+        }
+
         isSystemSleeping = false;
         lastTouchActivityTime = millis();
         DisplayHAL::powerOn();

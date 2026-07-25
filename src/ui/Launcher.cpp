@@ -72,13 +72,21 @@ void Launcher::loop() {
     if (m_activeApp) {
         m_activeApp->update();
     } else {
-        // Redraw launcher menu if minute changes to keep date/time display updated
+        // Redraw launcher menu if minute changes to keep date/time display updated.
+        // NOTE: lastMin must be seeded with the CURRENT minute on the first call
+        // (not -1) - otherwise the very first Launcher::loop() call right after
+        // boot always sees a "change" and triggers a redundant full redraw of
+        // the menu that drawMenu() already just drew moments earlier in setup().
         static int lastMin = -1;
+        static bool seeded = false;
         time_t rawtime;
         time(&rawtime);
         struct tm* timeinfo = localtime(&rawtime);
         int currentMin = timeinfo ? timeinfo->tm_min : -1;
-        if (currentMin != lastMin) {
+        if (!seeded) {
+            lastMin = currentMin;
+            seeded = true;
+        } else if (currentMin != lastMin) {
             lastMin = currentMin;
             drawMenu();
         }

@@ -626,14 +626,6 @@ void DisplayHAL::updateScreenFast() {
     }
     
 #ifndef NATIVE_TESTING
-    // Align physical_minX to 16-pixel boundary to avoid epd_draw_frame_1bit shifting bugs
-    int original_maxX = physical_minX + physical_w;
-    physical_minX = physical_minX & ~15;
-    physical_w = original_maxX - physical_minX;
-    if (physical_w % 16 != 0) {
-        physical_w = (physical_w + 15) & ~15;
-    }
-
     Rect_t area = { 
         .x = physical_minX, 
         .y = physical_minY, 
@@ -641,16 +633,33 @@ void DisplayHAL::updateScreenFast() {
         .height = physical_h 
     };
 
-    // Hardware 1-bit fast update
-    int stride = physical_w / 8;
-    int monoStride = stride;
-    uint8_t* monoBuf = (uint8_t*)calloc(1, monoStride * physical_h);
-    if (monoBuf) {
+    // NOTE (2026-07-26): the previous implementation here used the driver's
+    // manual 1-bit fast-draw pipeline (epd_push_pixels + epd_draw_frame_1bit
+    // with a hand-rolled byte-swap "fix"). That pipeline has no other proven
+    // usage anywhere in this codebase and was producing corrupted full-height
+    // bars on hardware (confirmed via photo) even though the computed diff
+    // bounding box itself was small and correctly clipped. Both candidate
+    // byte-order fixes (present and removed) were tested on hardware; removing
+    // the swap made corruption measurably WORSE, so the bug is not simply a
+    // byte-order mistake in that pipeline.
+    //
+    // Instead, reuse the SAME 4bpp grayscale pipeline (epd_clear_area +
+    // epd_draw_grayscale_image / calc_epd_input_4bpp) that DisplayHAL::display()
+    // and updateScreenPartial() already use successfully for full-screen
+    // draws, just scoped to the small diff bounding box. This pipeline has its
+    // own row-skip optimization (skip_row()) for rows outside the area, so it
+    // stays fast for small updates while reusing a hardware pathway already
+    // proven correct on this exact panel. Confirmed fixed on hardware (Calculator
+    // digit entry, no more corruption bars).
+    int bufStride = (physical_w + 1) / 2;
+    uint8_t* smallBuf = (uint8_t*)malloc(bufStride * physical_h);
+    if (smallBuf) {
+        memset(smallBuf, 0xFF, bufStride * physical_h);
         for (int py = 0; py < physical_h; py++) {
             for (int px = 0; px < physical_w; px++) {
                 int physical_abs_x = physical_minX + px;
                 int physical_abs_y = physical_minY + py;
-                
+
                 int lx, ly;
                 if (_isPortrait) {
                     ly = physical_abs_x;
@@ -665,42 +674,29 @@ void DisplayHAL::updateScreenFast() {
                 }
 
                 uint8_t color = getPixel(lx, ly, frontBuffer);
-                // 1bpp driver ONLY draws black pixels and skips 0s. 
-                // We want to draw the dark pixels as black.
-                bool isBlack = (color < 0x08);
-                if (isBlack) {
-                    monoBuf[py * stride + (px / 8)] |= (1 << (px % 8));
+                int idx = py * bufStride + px / 2;
+                // Same convention as display()'s rotation path: hardware
+                // expects even physical-x pixels in the LOWER nibble, odd in
+                // the UPPER nibble.
+                if (px % 2) {
+                    smallBuf[idx] = (smallBuf[idx] & 0x0F) | (color << 4);
+                } else {
+                    smallBuf[idx] = (smallBuf[idx] & 0xF0) | (color & 0x0F);
                 }
             }
         }
 
-        // FIX: The LilyGo calc_epd_input_1bpp has a byte-swap bug!
-        // It maps line_data[0] to the upper 16-bits of the 32-bit DMA word, and line_data[1] to the lower 16-bits.
-        // Because ESP32 is little-endian, the DMA transmits the lower 16-bits FIRST.
-        // So line_data[1] (pixels 8-15) is drawn BEFORE line_data[0] (pixels 0-7)!
-        // We must swap every adjacent pair of bytes in monoBuf to compensate.
-        for (int i = 0; i < monoStride * physical_h; i += 2) {
-            if (i + 1 < monoStride * physical_h) {
-                uint8_t temp = monoBuf[i];
-                monoBuf[i] = monoBuf[i + 1];
-                monoBuf[i + 1] = temp;
-            }
-        }
+        // PERF (2026-07-26): epd_clear_area() defaults to 4 cycles (32 erase
+        // passes), which dominates the cost of this otherwise-small scoped
+        // update. Reduced to 1 cycle (8 passes) here using the same
+        // unmodified, proven epd_clear_area_cycles() function - no bit-packing
+        // or byte-order logic changed. If ghosting/residue reappears on
+        // hardware, bump the cycle count back up (2-4) or revert to
+        // epd_clear_area(area).
+        epd_clear_area_cycles(area, 1, 50);
+        epd_draw_grayscale_image(area, smallBuf);
 
-        // Cleanly erase the bounding box area with multiple white pulses.
-        // Pulsing is required for E-ink to overcome particle inertia.
-        // 8 pulses of 500 ticks (50 * 10) = 4000 ticks of white to fully erase deep black.
-        for (int i = 0; i < 8; i++) {
-            epd_push_pixels(area, 50, 1);
-        }
-
-        // Push 1-bit frame of black pixels in multiple pulses.
-        // 4 pulses of 500 ticks = 2000 ticks for deep, high-contrast black.
-        for (int i = 0; i < 4; i++) {
-            epd_draw_frame_1bit(area, monoBuf, BLACK_ON_WHITE, 500);
-        }
-
-        free(monoBuf);
+        free(smallBuf);
     }
 #else
     if (s_debugScreen) {

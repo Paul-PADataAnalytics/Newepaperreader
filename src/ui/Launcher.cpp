@@ -93,7 +93,7 @@ void Launcher::loop() {
     }
 }
 
-void Launcher::launchApp(int index) {
+void Launcher::launchApp(int index, bool autoDraw) {
     if (index < 0 || index >= (int)m_apps.size()) return;
     exitCurrentApp();
     
@@ -103,7 +103,11 @@ void Launcher::launchApp(int index) {
     m_activeApp->onCreate();
     
     // Let the app perform a unified full-screen draw (includes hardware clear).
-    m_activeApp->draw();
+    // autoDraw=false lets a caller (e.g. deep-sleep breadcrumb restore) drive
+    // the app to a specific sub-state first, avoiding a wasted default draw.
+    if (autoDraw) {
+        m_activeApp->draw();
+    }
 }
 
 void Launcher::switchToApp(int index) {

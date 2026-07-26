@@ -115,14 +115,14 @@ std::string toBookmarkPath(const std::string& runtimeBookPath) {
     return runtimeBookPath + ".bmk";
 }
 
-bool saveBookmark(const std::string& runtimeBookPath, int offset) {
+bool saveBookmark(const std::string& runtimeBookPath, int offset, int chapterIndex, int totalChapters) {
 #ifdef NATIVE_TESTING
     std::string path = toBookmarkPath(runtimeBookPath);
     FILE* f = fopen(path.c_str(), "w");
     if (!f) {
         return false;
     }
-    fprintf(f, "%d", offset);
+    fprintf(f, "%d\n%d\n%d", offset, chapterIndex, totalChapters);
     fclose(f);
     return true;
 #else
@@ -131,7 +131,7 @@ bool saveBookmark(const std::string& runtimeBookPath, int offset) {
     if (!f) {
         return false;
     }
-    f.printf("%d", offset);
+    f.printf("%d\n%d\n%d", offset, chapterIndex, totalChapters);
     f.close();
     return true;
 #endif
@@ -159,6 +159,43 @@ int loadBookmark(const std::string& runtimeBookPath) {
     String s = f.readString();
     f.close();
     return s.toInt();
+#endif
+}
+
+BookmarkInfo loadBookmarkInfo(const std::string& runtimeBookPath) {
+    BookmarkInfo info;
+#ifdef NATIVE_TESTING
+    std::string path = toBookmarkPath(runtimeBookPath);
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return info;
+    fscanf(f, "%d", &info.offset);
+    if (fscanf(f, "%d", &info.chapterIndex) != 1) info.chapterIndex = 0;
+    if (fscanf(f, "%d", &info.totalChapters) != 1) info.totalChapters = 0;
+    fclose(f);
+    return info;
+#else
+    std::string path = toBookmarkPath(runtimeBookPath);
+    if (!SD.exists(path.c_str())) return info;
+    File f = SD.open(path.c_str(), FILE_READ);
+    if (!f) return info;
+    String s = f.readString();
+    f.close();
+
+    int firstNl = s.indexOf('\n');
+    if (firstNl < 0) {
+        info.offset = s.toInt();
+        return info;
+    }
+    info.offset = s.substring(0, firstNl).toInt();
+
+    int secondNl = s.indexOf('\n', firstNl + 1);
+    if (secondNl < 0) {
+        info.chapterIndex = s.substring(firstNl + 1).toInt();
+        return info;
+    }
+    info.chapterIndex = s.substring(firstNl + 1, secondNl).toInt();
+    info.totalChapters = s.substring(secondNl + 1).toInt();
+    return info;
 #endif
 }
 

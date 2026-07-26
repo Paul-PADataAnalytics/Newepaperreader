@@ -17,7 +17,7 @@ public:
     void init();
     void loop();
 
-    void launchApp(int index);
+    void launchApp(int index, bool autoDraw = true);
     void switchToApp(int index);
     void exitCurrentApp();
     void returnToPreviousApp();

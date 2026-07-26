@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <esp_sleep.h>
+#include <driver/rtc_io.h>
 #include "utilities.h"
 #else
 #include <stdio.h>
@@ -22,6 +23,7 @@
 #include "ui/UIFramework.h"
 #include "reader/AppStorage.h"
 #include "Launcher.h"
+#include "EReaderApp.h"
 #include "AppComm.h"
 
 #include "embedded_font.h"
@@ -98,6 +100,20 @@ static uint32_t millis() {
 #endif
 
 static unsigned long lastTouchTime = 0;
+
+// True while a book page is actively being read (EReaderApp's STATE_READ),
+// as opposed to its library/file list view or any other app. EReaderApp is
+// always app index 0 (see Launcher::init()). Used to exempt active reading
+// from the 30s inactivity auto-lock timeout, and to decide what to put in
+// the deep-sleep resume breadcrumb. Cross-platform (no ESP-IDF dependency),
+// so it's available in both native and hardware builds.
+static bool isCurrentlyReadingBook() {
+    if (Launcher::getInstance().getActiveAppIndex() != 0) return false;
+    Application* active = Launcher::getInstance().getActiveApp();
+    if (!active) return false;
+    EReaderApp* reader = static_cast<EReaderApp*>(active);
+    return reader->isReadingBook();
+}
 
 void exitToSystemLauncher() {
     Launcher::getInstance().exitCurrentApp();
@@ -208,24 +224,54 @@ void setup() {
     // Start BLE background system service continuously on system startup
     AppComm::init();
 
+#ifndef NATIVE_TESTING
+    // If we just woke from our own deep-sleep lock mode (BUTTON_1 ext0
+    // wakeup - see saveBreadcrumbAndEnterLockMode()), restore the breadcrumb
+    // saved right before the chip reset: resume the last active app (and,
+    // for the e-reader, jump straight to the exact book) instead of always
+    // landing back on the main launcher menu. Any other reset cause (first
+    // power-on, USB reset, firmware flash, crash) boots normally.
+    bool resumedFromLock = false;
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+        AppStorage::SavedSystemState saved = AppStorage::loadSystemState();
+        if (saved.valid && saved.appIndex >= 0) {
+            DisplayHAL::setPortrait(saved.isPortrait);
+            if (saved.appIndex == 0 && saved.internalState == 1 && !saved.path.empty()) {
+                // EReaderApp (index 0), was mid-book - skip its default
+                // library draw and jump straight into the saved page.
+                Launcher::getInstance().launchApp(0, false);
+                EReaderApp* reader = static_cast<EReaderApp*>(Launcher::getInstance().getActiveApp());
+                if (reader) {
+                    reader->resumeAtPath(saved.path);
+                    resumedFromLock = true;
+                }
+            } else {
+                Launcher::getInstance().launchApp(saved.appIndex);
+                resumedFromLock = true;
+            }
+        }
+    }
+    if (!resumedFromLock) {
+        Launcher::getInstance().drawMenu();
+    }
+#else
     Launcher::getInstance().drawMenu();
+#endif
 }
 
 static uint32_t lastTouchActivityTime = 0;
 static bool isSystemSleeping = false;
 
 #ifndef NATIVE_TESTING
-// Edge-triggered, debounced BUTTON_1 press detector for the awake-state
-// manual sleep toggle. Mirrors the touch tap-debounce style in loop():
-// fires once on the down edge, then ignores the line until it's been seen
-// released for a short debounce window (protects against switch bounce).
+// Edge-triggered, debounced BUTTON_1 press detector for the manual lock
+// trigger. Mirrors the touch tap-debounce style in loop(): fires once on
+// the down edge, then ignores the line until it's been seen released for a
+// short debounce window (protects against switch bounce).
 //
-// State is FILE-SCOPE (not function-local static) so both the awake-loop
-// poll and the post-wake resync below share the same values - this matches
-// the documented "BOOT Debounce Trap" lesson: a function-local static here
-// caused a held button to immediately re-trigger sleep right after waking,
-// because the wake path had no way to tell the poller "this press already
-// caused the wake, don't count it again."
+// State is FILE-SCOPE (not function-local static), matching the documented
+// "BOOT Debounce Trap" lesson - though for deep sleep specifically there is
+// no "wake without reboot" path to worry about: every wake is a full chip
+// reset, so these statics simply reinitialize fresh on each boot.
 static bool button1DownWaiting = false;
 static uint32_t lastButton1UpTime = 0;
 const uint32_t BUTTON1_DEBOUNCE_MS = 50;
@@ -246,16 +292,6 @@ static bool checkButton1DebouncedPress(uint32_t now) {
         button1DownWaiting = false;
     }
     return firedThisCall;
-}
-
-// Called immediately after waking (from touch OR button) so a still-held
-// BUTTON_1 doesn't look like a brand-new press to the awake-loop poller and
-// cause an instant re-sleep. Marks the button as "already waiting" if it's
-// still down, exactly mirroring the fix for the historical lastBootBtnTime
-// debounce trap.
-static void resyncButton1DebounceAfterWake(uint32_t now) {
-    button1DownWaiting = (digitalRead(BUTTON_1) == LOW);
-    lastButton1UpTime = now;
 }
 #endif
 
@@ -364,6 +400,55 @@ static void drawSleepScreen() {
     DisplayHAL::setPortrait(wasPortrait);
 }
 
+#ifndef NATIVE_TESTING
+// Deep-sleep "lock mode": saves a small resume breadcrumb, shows the sleep
+// screen, powers off the panel, then puts the whole chip into deep sleep
+// with ONLY BUTTON_1 armed as a wake source (no touch-wake at all - this is
+// intentional, so the device can be put in a pocket and only wakes on a
+// deliberate button press). esp_deep_sleep_start() NEVER RETURNS: the chip
+// fully resets and re-runs setup() from scratch, which detects the
+// ESP_SLEEP_WAKEUP_EXT0 cause and restores this breadcrumb.
+static void saveBreadcrumbAndEnterLockMode() {
+    AppStorage::SavedSystemState state;
+    state.appIndex = Launcher::getInstance().getActiveAppIndex();
+    state.isPortrait = DisplayHAL::isPortrait();
+    state.internalState = 0;
+    state.path = "";
+
+    if (state.appIndex == 0) {
+        // EReaderApp is always app index 0 (see Launcher::init()).
+        EReaderApp* reader = static_cast<EReaderApp*>(Launcher::getInstance().getActiveApp());
+        if (reader && reader->isReadingBook()) {
+            // Force-persist the exact current page position now, rather than
+            // relying on whatever the last touch-driven page turn happened
+            // to save - guarantees resume lands on the precise page being
+            // read at the moment of locking.
+            reader->saveCurrentPosition();
+            state.internalState = 1; // matches EReaderApp::STATE_READ
+            state.path = reader->getCurrentBookPath();
+        }
+    }
+    AppStorage::saveSystemState(state);
+
+    drawSleepScreen();
+    DisplayHAL::powerOff();
+
+    // A deep-sleep wakeup source must be configured via the RTC_GPIO
+    // peripheral - the regular digital GPIO matrix (and its gpio_wakeup_enable
+    // used by the old light-sleep design) is powered down during deep sleep.
+    // rtc_gpio_pullup_en/pulldown_dis configure the RTC-domain pull resistor
+    // (separate from gpio_pullup_en, which only affects the digital domain),
+    // and esp_sleep_enable_ext0_wakeup arms a single RTC-capable pin - BUTTON_1
+    // (GPIO21) qualifies since RTC GPIOs on this S3 chip are GPIO0-21. Level 0
+    // = wake when the line reads LOW (active-low button with pullup).
+    rtc_gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
+    rtc_gpio_pulldown_dis(static_cast<gpio_num_t>(BUTTON_1));
+    esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BUTTON_1), 0);
+
+    esp_deep_sleep_start(); // never returns
+}
+#endif
+
 void loop() {
     // NOTE: GPIO0 is hard-wired to the EPD driver's CFG_STR line on this
     // board (see note in DisplayHAL::init()) and must never be read/driven
@@ -376,10 +461,10 @@ void loop() {
         lastTouchActivityTime = now;
     }
 
-    // Manual sleep/wake toggle button (BUTTON_1 / GPIO21). Only acted on
-    // here for the awake -> sleep direction; the sleep -> awake direction is
-    // handled entirely by the GPIO wakeup source armed inside the
-    // isSystemSleeping block below (loop() doesn't run again until then).
+    // Manual lock button (BUTTON_1 / GPIO21): triggers deep-sleep lock mode
+    // immediately (see saveBreadcrumbAndEnterLockMode() below). The wake
+    // side is handled entirely by setup() after the resulting chip reset -
+    // loop() never runs again until then.
     bool button1Pressed = false;
 #ifndef NATIVE_TESTING
     button1Pressed = checkButton1DebouncedPress(now);
@@ -447,8 +532,20 @@ void loop() {
     bool touched = touchDownWaiting && (static_cast<int32_t>(now - lastUpTime) >= TAP_DEBOUNCE_MS);
 
     if (touched) {
-        if (isSystemSleeping) {
-            // Wake up from sleep on touch!
+        lastTouchActivityTime = now;
+    }
+
+    if (isSystemSleeping) {
+        // Only reachable in NATIVE_TESTING now. On real hardware "sleeping"
+        // means deep-sleep lock mode (see saveBreadcrumbAndEnterLockMode()
+        // below), which never returns to loop() at all - the chip fully
+        // resets and setup() handles the wake side after reboot. This
+        // NATIVE_TESTING-only branch is a lightweight simulated sleep/wake so
+        // other app logic can still be exercised without real ESP-IDF deep
+        // sleep APIs; touch always "wakes" it here purely for dev
+        // convenience (unlike real hardware, where only the button wakes).
+#ifdef NATIVE_TESTING
+        if (touched) {
             isSystemSleeping = false;
             lastTouchActivityTime = now;
             lastTouchTime = 0; // Reset debounce timer to zero for instant waking touch responsiveness
@@ -462,129 +559,6 @@ void loop() {
             }
             return; // Consume touch for waking up
         }
-        lastTouchActivityTime = now;
-    }
-
-    if (isSystemSleeping) {
-#ifndef NATIVE_TESTING
-        // Enforce internal pullup resistor so TOUCH_INT never floats on electrical noise.
-        // (GPIO0 is intentionally NOT touched here - see note in DisplayHAL::init().)
-        gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
-        gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
-        // Same defensive pullup enforcement for the manual wake button.
-        // BUTTON_1 has no app-level ISR ever attached (poll-only design), so
-        // unlike TOUCH_INT there is no shared-interrupt-register hazard here.
-        gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
-        gpio_pulldown_dis(static_cast<gpio_num_t>(BUTTON_1));
-
-        // CRITICAL: detach the edge-triggered app ISR before reconfiguring this
-        // GPIO for level-triggered sleep wakeup below. gpio_wakeup_enable()
-        // silently flips the pin's shared interrupt-type register to
-        // LOW_LEVEL; if touchIsrHandler is still attached when that happens,
-        // it refires continuously for as long as the line reads low (a real
-        // touch, or a routine GT911 noise pulse), flooding CPU1 with ISR
-        // entries and starving its idle task - this trips "Interrupt wdt
-        // timeout on CPU1" and the device crash-loops forever. There is no
-        // safe point to restore this after esp_light_sleep_start() returns:
-        // the storm can already be underway (started while still LOW_LEVEL,
-        // before our own restore code ever gets scheduled), so the handler
-        // must be fully removed for the whole risky window and only
-        // reattached once the line is confirmed clear again below.
-        gpio_isr_handler_remove(static_cast<gpio_num_t>(TOUCH_INT));
-
-        // Clear GT911 touch interrupt state before entering light sleep so INT pin goes HIGH
-        int dummyX = -1, dummyY = -1;
-        DisplayHAL::getTouch(dummyX, dummyY);
-
-        gpio_wakeup_enable(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_LOW_LEVEL);
-        // BUTTON_1 as a second wakeup source: a genuinely free, dedicated
-        // pin with no ISR attached, so arming it here carries none of the
-        // shared-interrupt-register risk documented above for TOUCH_INT.
-        // Guard: only arm it if the button currently reads HIGH (released).
-        // If the very press that just triggered sleep-entry is still being
-        // held down at this instant, arming a LOW_LEVEL wakeup on it would
-        // fire immediately and undo the sleep we're about to enter. Skipping
-        // it for this pass is safe - TOUCH_INT is still armed, and the next
-        // loop() iteration (right after this light-sleep call returns) will
-        // re-check and arm it once the button has actually been released.
-        bool button1CurrentlyHigh = (digitalRead(BUTTON_1) == HIGH);
-        if (button1CurrentlyHigh) {
-            gpio_wakeup_enable(static_cast<gpio_num_t>(BUTTON_1), GPIO_INTR_LOW_LEVEL);
-        }
-        esp_sleep_enable_gpio_wakeup();
-        esp_light_sleep_start();
-
-        // Woke up from light sleep: restore active state and redraw UI.
-        // NOTE: do NOT gate this on a post-wake re-check of the GPIO level and
-        // silently loop back into esp_light_sleep_start() on "no valid event" -
-        // GPIO0 is the boot-strap pin wired to the USB auto-reset circuit and
-        // can glitch LOW transiently, which combined with a silent retry loop
-        // here previously caused the device to get stuck sleeping/waking forever
-        // without ever redrawing the display (looked like total display failure).
-
-        // Disable the GPIO wakeup source immediately (no isr handler is
-        // attached right now, so the line can safely still be LOW_LEVEL for a
-        // moment with no storm risk). Then service the touch controller at
-        // TASK level (safe blocking I2C) so the physical INT line actually
-        // goes back high, BEFORE we re-arm the edge interrupt + reattach the
-        // handler - this guarantees no pending low level is left over to
-        // immediately refire the moment the handler goes back on.
-        gpio_wakeup_disable(static_cast<gpio_num_t>(TOUCH_INT));
-        gpio_wakeup_disable(static_cast<gpio_num_t>(BUTTON_1));
-        int wx = -1, wy = -1;
-        // getTouch() returns true only for a genuine, currently-down touch
-        // point (same signal touchReaderTask uses to distinguish DOWN/UP).
-        // The GT911 also raises this same INT line for noise/heartbeat
-        // pulses that carry no real touch point - getTouch() returns false
-        // for those, exactly like the awake-loop noise filtering added for
-        // the inactivity timer. Use that here to tell a genuine wake-up tap
-        // apart from a noise-driven false wake.
-        bool realTouchWake = DisplayHAL::getTouch(wx, wy);
-        // A real button wake reads LOW (active-low, INPUT_PULLUP) right after
-        // waking. Plain level read (not the awake-loop's edge debouncer) -
-        // we already know *something* woke us; this just confirms it was the
-        // button rather than noise. `now` here is stale (captured before the
-        // blocking esp_light_sleep_start() call, which may have lasted any
-        // length of time), so re-read millis() for the resync below.
-        bool realButtonWake = (digitalRead(BUTTON_1) == LOW);
-
-        gpio_set_intr_type(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_NEGEDGE);
-        gpio_isr_handler_add(static_cast<gpio_num_t>(TOUCH_INT), touchIsrHandler,
-                             nullptr);
-
-        // Discard any touch events that may have been queued during the
-        // sleep/wake transition so we don't act on stale/spurious data right
-        // after waking.
-        if (touchEventQueue) {
-            xQueueReset(touchEventQueue);
-        }
-
-        if (!realTouchWake && !realButtonWake) {
-            // Just noise - stay asleep. Returning here (isSystemSleeping is
-            // still true) means the very next loop() call re-enters this same
-            // block and goes right back into light sleep, without ever
-            // powering on the display or redrawing.
-            return;
-        }
-
-        isSystemSleeping = false;
-        lastTouchActivityTime = millis();
-        // Prime the awake-loop's button debounce state to reflect reality
-        // right now (still held, or already released) so a held BUTTON_1
-        // doesn't look like a brand-new press to checkButton1DebouncedPress()
-        // and instantly re-trigger sleep on the very next loop() iteration -
-        // the same class of bug as the historical lastBootBtnTime debounce
-        // trap (see repo memory).
-        resyncButton1DebounceAfterWake(millis());
-        DisplayHAL::powerOn();
-
-        if (Launcher::getInstance().getActiveApp()) {
-            Launcher::getInstance().getActiveApp()->draw();
-        } else {
-            Launcher::getInstance().drawMenu();
-        }
-        delay(150);
-#else
         DisplayHAL::handleEvents();
         if (DisplayHAL::windowShouldClose()) exit(0);
         usleep(100000);
@@ -592,10 +566,21 @@ void loop() {
         return;
     }
 
-    if (button1Pressed || (now - lastTouchActivityTime) >= 30000) {
+    // Reading-mode exemption: don't let the 30s inactivity timer auto-lock
+    // the device while a book page is actively displayed (e.g. mid-read with
+    // no touches for a while is normal, not "left unattended"). A manual
+    // BUTTON_1 press still always locks the device, even while reading.
+    bool inReadingPageView = isCurrentlyReadingBook();
+    bool inactivityTimeout = !inReadingPageView && ((now - lastTouchActivityTime) >= 30000);
+
+    if (button1Pressed || inactivityTimeout) {
+#ifndef NATIVE_TESTING
+        saveBreadcrumbAndEnterLockMode(); // never returns - chip resets
+#else
         isSystemSleeping = true;
         drawSleepScreen();
         DisplayHAL::powerOff();
+#endif
         return;
     }
 

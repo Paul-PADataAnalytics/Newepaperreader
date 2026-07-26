@@ -314,7 +314,8 @@ void EReaderApp::updateLibraryItems() {
         
         std::string lowerName = f.name;
         for (char& c : lowerName) c = tolower(c);
-        if (lowerName.length() >= 5 && lowerName.substr(lowerName.length() - 5) == ".epub") {}
+        bool isEpub = false;
+        if (lowerName.length() >= 5 && lowerName.substr(lowerName.length() - 5) == ".epub") isEpub = true;
         else if (lowerName.length() >= 4 && lowerName.substr(lowerName.length() - 4) == ".txt") {}
         else if (lowerName.length() >= 3 && lowerName.substr(lowerName.length() - 3) == ".md") {}
         else if (lowerName.length() >= 4 && lowerName.substr(lowerName.length() - 4) == ".rtf") {}
@@ -344,13 +345,29 @@ void EReaderApp::updateLibraryItems() {
         
         // Use the file's own fully-qualified path (not "/books/" + name) so
         // bookmarks for books in nested subdirectories resolve correctly.
-        int offset = AppStorage::loadBookmark(AppStorage::toRuntimePath(f.path));
-        if (offset > 0 && f.size > 0) {
-            item.completionPercent = (offset * 100) / (f.size * 2); 
-            if (item.completionPercent > 100) item.completionPercent = 100;
-            if (item.completionPercent == 0) item.completionPercent = 1;
+        std::string runtimePath = AppStorage::toRuntimePath(f.path);
+        if (isEpub) {
+            // EPUB books are split across many per-chapter sub-files, so a
+            // raw byte offset compared to the whole .epub (zip) file size is
+            // meaningless - use chapter-granularity progress instead, which
+            // is what's actually persisted (see AppStorage::BookmarkInfo).
+            AppStorage::BookmarkInfo bmark = AppStorage::loadBookmarkInfo(runtimePath);
+            if (bmark.totalChapters > 0) {
+                item.completionPercent = (bmark.chapterIndex * 100) / bmark.totalChapters;
+                if (item.completionPercent > 100) item.completionPercent = 100;
+                if (item.completionPercent == 0 && bmark.chapterIndex > 0) item.completionPercent = 1;
+            } else {
+                item.completionPercent = 0;
+            }
         } else {
-            item.completionPercent = 0;
+            int offset = AppStorage::loadBookmark(runtimePath);
+            if (offset > 0 && f.size > 0) {
+                item.completionPercent = (offset * 100) / f.size;
+                if (item.completionPercent > 100) item.completionPercent = 100;
+                if (item.completionPercent == 0) item.completionPercent = 1;
+            } else {
+                item.completionPercent = 0;
+            }
         }
         
         if (item.completionPercent >= 97) {
@@ -609,11 +626,62 @@ void EReaderApp::openBook(int index) {
     }
     
     std::string path = AppStorage::toRuntimePath(m_libraryFiles[index].path);
+    openBookAtRuntimePath(path);
+}
+
+void EReaderApp::resumeAtPath(const std::string& runtimePath) {
+    // Derive a title/author the same way openBook() falls back to when a
+    // book isn't found in parsed library metadata - the library may not
+    // have been scanned yet this boot (resuming right after a deep-sleep
+    // wake, before the user has ever opened the library view).
+    m_currentBookTitle = runtimePath;
+    size_t slashPos = runtimePath.find_last_of('/');
+    if (slashPos != std::string::npos) {
+        m_currentBookTitle = runtimePath.substr(slashPos + 1);
+    }
+    size_t dotPos = m_currentBookTitle.find_last_of('.');
+    if (dotPos != std::string::npos) {
+        m_currentBookTitle = m_currentBookTitle.substr(0, dotPos);
+    }
+    m_currentBookAuthor = "Unknown Author";
+
+    openBookAtRuntimePath(runtimePath);
+}
+
+void EReaderApp::saveCurrentPosition() {
+    if (m_state != STATE_READ || m_currentBookPath.empty()) return;
+
+    if (m_textReader.isOpen()) {
+        // TextReader paginates in large chunks (see TextReader::getPageText()):
+        // m_textReader.getPosition() is the absolute file offset of the START
+        // of the currently loaded chunk, and m_currentReadingOffset is the
+        // on-screen sub-page's offset WITHIN that chunk. The exact absolute
+        // file position of the page currently on screen is their sum.
+        AppStorage::saveBookmark(m_currentBookPath,
+            (int)(m_textReader.getPosition() + (size_t)m_currentReadingOffset));
+    } else {
+        // EPUB (or any non-TextReader path): m_currentReadingOffset is an
+        // offset into the CURRENTLY LOADED CHAPTER's text only - chapters
+        // are separate sub-files, so the chapter index must be persisted
+        // too, or resume will reopen whichever chapter the "find preferred
+        // starting chapter" heuristic guesses and misapply this offset there.
+        AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
+            m_currentChapterIndex, (int)m_chapters.size());
+    }
+}
+
+void EReaderApp::openBookAtRuntimePath(const std::string& path) {
     AppScreens::drawLoading(framebuffer, "Loading...");
 
     bool isText = false;
     if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
     if (path.length() >= 3 && path.substr(path.length() - 3) == ".md") isText = true;
+
+    // Loaded up front (before opening EPUB chapters) so a saved chapter
+    // index can steer which chapter gets loaded below, instead of always
+    // re-running the "guess a starting chapter" heuristic meant only for a
+    // book that's never been opened before.
+    AppStorage::BookmarkInfo bmark = AppStorage::loadBookmarkInfo(path);
 
     if (m_currentBookText) {
         free(m_currentBookText);
@@ -638,43 +706,57 @@ void EReaderApp::openBook(int index) {
     } else if (m_epubParser.open(path)) {
         m_chapters = m_epubParser.getChapterList();
         m_currentChapterIndex = 0;
-        char* fallbackText = nullptr;
-        size_t fallbackLen = 0;
-        int fallbackIndex = 0;
-        for (int i = 0; i < (int)m_chapters.size(); i++) {
-            size_t size = 0;
-            char* html = m_epubParser.getFileContent(m_chapters[i], size);
-            if (!html) continue;
 
-            size_t strippedLen = 0;
-            char* stripped = stripHTML(html, size, strippedLen);
-            free(html);
-            if (!stripped) continue;
-
-            size_t readableChars = countReadableChars(stripped, strippedLen);
-            if (isPreferredEpubChapter(m_chapters[i]) && readableChars >= 40) {
-                m_currentBookText = stripped;
-                m_currentBookTextLen = strippedLen;
-                m_currentChapterIndex = i;
-                break;
-            }
-            if (!fallbackText && readableChars > 0) {
-                fallbackText = stripped;
-                fallbackLen = strippedLen;
-                fallbackIndex = i;
-            } else {
-                free(stripped);
-            }
+        // If we have a saved chapter for THIS exact chapter layout (guard
+        // against a stale bookmark from a different/edited copy of a
+        // similarly-named book), jump straight to it instead of guessing.
+        bool haveSavedChapter = bmark.chapterIndex >= 0 &&
+            bmark.chapterIndex < (int)m_chapters.size() &&
+            bmark.totalChapters == (int)m_chapters.size();
+        if (haveSavedChapter) {
+            loadChapter(bmark.chapterIndex);
+            m_currentChapterIndex = bmark.chapterIndex;
         }
-        if (!m_currentBookText && fallbackText) {
-            m_currentBookText = fallbackText;
-            m_currentBookTextLen = fallbackLen;
-            m_currentChapterIndex = fallbackIndex;
+
+        if (!m_currentBookText) {
+            char* fallbackText = nullptr;
+            size_t fallbackLen = 0;
+            int fallbackIndex = 0;
+            for (int i = 0; i < (int)m_chapters.size(); i++) {
+                size_t size = 0;
+                char* html = m_epubParser.getFileContent(m_chapters[i], size);
+                if (!html) continue;
+
+                size_t strippedLen = 0;
+                char* stripped = stripHTML(html, size, strippedLen);
+                free(html);
+                if (!stripped) continue;
+
+                size_t readableChars = countReadableChars(stripped, strippedLen);
+                if (isPreferredEpubChapter(m_chapters[i]) && readableChars >= 40) {
+                    m_currentBookText = stripped;
+                    m_currentBookTextLen = strippedLen;
+                    m_currentChapterIndex = i;
+                    break;
+                }
+                if (!fallbackText && readableChars > 0) {
+                    fallbackText = stripped;
+                    fallbackLen = strippedLen;
+                    fallbackIndex = i;
+                } else {
+                    free(stripped);
+                }
+            }
+            if (!m_currentBookText && fallbackText) {
+                m_currentBookText = fallbackText;
+                m_currentBookTextLen = fallbackLen;
+                m_currentChapterIndex = fallbackIndex;
+            }
         }
     }
 
     m_currentBookPath = path;
-    int savedOffset = AppStorage::loadBookmark(path);
+    int savedOffset = bmark.offset;
 
     if (isText && m_textReader.isOpen()) {
         m_textReader.setPosition(savedOffset);
@@ -755,7 +837,8 @@ void EReaderApp::handleTouch(int x, int y) {
                 AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition());
                 m_textReader.closeFile();
             } else {
-                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset);
+                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
+                    m_currentChapterIndex, (int)m_chapters.size());
             }
             if (!NavigationManager::getInstance().goBack()) {
                 DisplayHAL::setPortrait(false);
@@ -799,7 +882,8 @@ void EReaderApp::handleTouch(int x, int y) {
                     loadChapter(m_currentChapterIndex);
                     m_currentReadingOffset = 0;
                 }
-                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset);
+                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
+                    m_currentChapterIndex, (int)m_chapters.size());
             }
             drawReading();
         } else {
@@ -839,7 +923,8 @@ void EReaderApp::handleTouch(int x, int y) {
                     size_t prevStart = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
                     m_currentReadingOffset = prevStart;
                 }
-                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset);
+                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
+                    m_currentChapterIndex, (int)m_chapters.size());
             }
             drawReading();
         }

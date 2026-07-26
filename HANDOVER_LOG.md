@@ -1,19 +1,15 @@
 # Handover Log
 
-## Current Status (2026-07-20)
-The AI system executing the **V1.0 Roadmap** (Hardware Touch, Light Sleep, and WiFi Sync) encountered an API quota limit (429 RESOURCE_EXHAUSTED) on its subagents and had to pause.
+## Current Status (2026-07-26) — v2.3.0
+Firmware is stable, hardware-verified, and at **v2.3.0**. See [TODO.md](TODO.md) for the full session-by-session history and [manual/index.md](manual/index.md) for the user/developer manual.
 
-## Work Completed
-The user manually stepped in and applied patches to continue the work:
-1. `platformio.ini` updated with `AsyncTCP` and `ESPAsyncWebServer` dependencies.
-2. `main.cpp` updated with `STATE_WIFI_SYNC`, light sleep timers (`esp_light_sleep_start()`), and hardware touch polling (`lastTouchTime`).
-3. `DisplayHAL.cpp` updated to initialize and read from the real `TouchClass` (I2C L58/GT911 sensor).
-4. `src/comm/WiFiSync.cpp` and `WiFiSync.h` created for the SoftAP ("EPD-Reader") and Async HTTP upload server.
+Highlights of the current design (all hardware-verified):
+- **Sleep/wake**: True ESP32-S3 deep sleep ("lock mode"), entered via **User Button 1** (`GPIO 21`) or after 30s of inactivity (suspended while actively reading a page). Only `BUTTON_1` (ext0 RTC wakeup) can wake the device - touch does not. Waking fully resets the chip; a breadcrumb saved to `/sd/data/system_state.txt` (see `AppStorage::SavedSystemState`) restores the active app and, for the E-Reader app, the exact book/chapter/page.
+- **GPIO 0 is never used by application code** - it's reserved exclusively for the ESP32-S3 ROM bootloader (USB flashing). This was a hard-learned lesson from an earlier design that used it for a sleep button and caused boot-mode conflicts.
+- **EPUB reading position** persists both the in-chapter offset and the chapter index/count (`AppStorage::BookmarkInfo`), since EPUB chapters are separate sub-files parsed independently - resuming reopens the exact chapter, not just an offset applied to a guessed chapter.
 
 ## Next Steps for the Next System
-- **Cleanup**: I have removed the `main.cpp.rej` and `main.cpp.orig` files that were left behind from the manual patch attempt.
-- **Verification**: Run `pio run -e t5-47-s3` to verify that the newly integrated `WiFiSync` and `touch.h` hardware classes compile correctly for the ESP32-S3.
-- **Integration Testing**: Flash the firmware and verify that:
-  1. The hardware touch sensor triggers correctly.
-  2. The unit enters light sleep after 5 seconds of inactivity.
-  3. The "Enter WiFi Sync Mode" button in the library view successfully starts the `EPD-Reader` SoftAP and accepts HTTP file uploads.
+- No open bugs at time of writing. The user maintains a `version3.md` wishlist for future feature work - consult it (once created) before starting new work.
+- Before making sleep/wake or GPIO changes, re-read the GPIO0 warning above and check `TODO.md`'s history for why BUTTON_1/GPIO21 was chosen instead.
+- `src/DisplayHAL.cpp` / `include/DisplayHAL.h` are filesystem-locked (`chmod 444`) - do not modify without explicit user request.
+

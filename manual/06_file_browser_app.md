@@ -1,8 +1,8 @@
 # Chapter 6: File Browser Application
 
-> **App Version**: v2.2.0  
-> **Firmware Version**: v2.2.0  
-> **Last Verified**: 2026-07-24  
+> **App Version**: v2.3.0  
+> **Firmware Version**: v2.3.0  
+> **Last Verified**: 2026-07-26  
 
 ---
 

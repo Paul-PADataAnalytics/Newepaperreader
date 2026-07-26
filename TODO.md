@@ -1,7 +1,7 @@
 # Project TODO & Agent Handoff Document
 
 **Project:** `newepaperreader` — LilyGo E-Reader (ESP32-S3 EPD47) + Android Companion App (Flutter)  
-**Last Updated:** 2026-07-22  
+**Last Updated:** 2026-07-26  
 
 ---
 
@@ -28,6 +28,21 @@
 ---
 
 ## 2. Recent Completed Work Log
+
+### Session: 2026-07-26 (Release v2.3.0 — Sleep/Wake Redesign & Bookmark Accuracy)
+- [x] **Fixed 30s inactivity sleep not triggering** (was silently broken after an earlier refactor).
+- [x] **Fixed Calculator partial-redraw corruption bars** left behind on the E-Ink display.
+- [x] **Recursive book directory scan + progress screen**: library scan now walks nested subdirectories with a live progress overlay for slow scans.
+- [x] **Redesigned the sleep/wake boot button** off `GPIO 0` entirely (was conflicting with the ESP32-S3 ROM bootloader's boot-mode pin) onto **User Button 1 (`GPIO 21`)**, with a held-button race-condition guard.
+- [x] **Redesigned sleep as a true deep-sleep "lock mode"**:
+  - Replaced the old light-sleep (touch + button wake) implementation with real `esp_deep_sleep_start()`, woken only via `BUTTON_1` ext0 RTC wakeup — touch no longer wakes the device, maximizing battery savings.
+  - Added a breadcrumb/resume mechanism (`AppStorage::SavedSystemState` / `saveSystemState()` / `loadSystemState()`, persisted to `/sd/data/system_state.txt`) so waking (a full chip reset) relaunches the same app and, for the E-Reader app, jumps straight back into the same book via `EReaderApp::resumeAtPath()`.
+  - Exempted the 30s inactivity auto-lock while actively viewing a reading page — only the manual button locks while reading; auto-lock still applies everywhere else.
+- [x] **Fixed reading-position resume accuracy**:
+  - `EReaderApp::saveCurrentPosition()` force-persists the exact current position immediately before locking, instead of relying on the last touch-driven page-turn save.
+  - Extended bookmark persistence (`AppStorage::BookmarkInfo` / `loadBookmarkInfo()`) to also store the EPUB chapter index + chapter count, since EPUB chapters are separate sub-files — resume now reopens the exact saved chapter instead of reapplying an offset to whichever chapter a "guess the first chapter" heuristic picked.
+  - Fixed the library view's completion percentage, which was previously computing a bogus, near-always-1% value (`offset*100/(fileSize*2)`, and comparing a chapter-local EPUB offset against the whole zip file's size). Text/RTF/Markdown now use `offset/fileSize`; EPUB now uses `chapterIndex/totalChapters`.
+- [x] **Version bump to v2.3.0** across firmware (`src/main.cpp`, `src/ui/Launcher.cpp` status bar), `README.md`, and the full `manual/` chapter set; corrected stale `GPIO 0`/"BOOT button"/light-sleep/`sys_state.json` references throughout the manual to match the new `BUTTON_1`/deep-sleep/`system_state.txt` design.
 
 ### Session: 2026-07-22 (Kimi K2.7 Session)
 - [x] **Transition Refreshes**: Removed extra `DisplayHAL::clear()` in `Launcher::switchToApp()` to prevent double screen flashing.

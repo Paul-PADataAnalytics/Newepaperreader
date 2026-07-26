@@ -1,7 +1,7 @@
 # Chapter 1: Hardware Specifications & Architecture
 
 ## Overview
-The **LilyGo EPD47 E-Reader System v2.2** firmware is designed specifically for the **LilyGo T5-ePaper-S3 (T5-4.7 S3)** development board. This document details the exact hardware components, IC controllers, display parallel bus interface, touch digitizer, and peripheral pinouts to assess hardware compatibility with other ESP32 E-Paper hardware.
+The **LilyGo EPD47 E-Reader System v2.3** firmware is designed specifically for the **LilyGo T5-ePaper-S3 (T5-4.7 S3)** development board. This document details the exact hardware components, IC controllers, display parallel bus interface, touch digitizer, and peripheral pinouts to assess hardware compatibility with other ESP32 E-Paper hardware.
 
 ---
 
@@ -73,8 +73,8 @@ The MicroSD card host operates over SPI:
 
 ## 5. System Buttons & GPIO Mappings
 
-- **BOOT / Standby Button**: `GPIO 0` (Triggers instant Deep Sleep standby mode; pressing it again wakes the system and restores reading state).
-- **User Button 1**: `GPIO 21` (Custom action / page turn trigger).
+- **User Button 1 (Lock/Wake)**: `GPIO 21` (`BUTTON_1`). Pressing it while awake immediately saves a resume breadcrumb and puts the device into true ESP32-S3 deep sleep ("lock mode"); pressing it again fully resets the chip and wakes it, restoring the exact app/book/page you left. This is the *only* wake source while locked - touch input does not wake the device. See [Chapter 4](04_ereader_app.md) for full behavior.
+- **GPIO 0**: Reserved exclusively for the ESP32-S3 ROM bootloader (hold during power-on/reset to flash over USB - see [Chapter 2](02_getting_started_and_tools.md)). Never used by application code - touching `GPIO0` in firmware can interfere with USB flashing/boot-mode selection.
 - **Battery ADC Voltage**: `GPIO 14` / ADC (Monitors LiPo battery voltage percentage).
 
 ---

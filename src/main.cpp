@@ -152,9 +152,9 @@ void processSerialCommands() {
 void setup() {
 #ifndef NATIVE_TESTING
     Serial.begin(115200);
-    Serial.println("Starting LilyGO EPD47 E-Reader System v2.2.0...");
+    Serial.println("Starting LilyGO EPD47 E-Reader System v2.3.0...");
 #else
-    printf("Starting LilyGO EPD47 E-Reader System v2.2.0 (Native Mock)...\n");
+    printf("Starting LilyGO EPD47 E-Reader System v2.3.0 (Native Mock)...\n");
 #endif
 
     DisplayHAL::init();

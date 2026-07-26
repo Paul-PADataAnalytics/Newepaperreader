@@ -1,8 +1,8 @@
 # Chapter 5: eBookmark Companion App
 
-> **App Version**: v2.2.0  
-> **Firmware Version**: v2.2.0  
-> **Last Verified**: 2026-07-24  
+> **App Version**: v2.3.0  
+> **Firmware Version**: v2.3.0  
+> **Last Verified**: 2026-07-26  
 
 ---
 

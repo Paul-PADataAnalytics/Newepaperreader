@@ -164,7 +164,7 @@ void Launcher::drawMenu() {
 
         // 1. Top Status Bar: Title + Date & Time
         typography.setFontSize(34.0f);
-        typography.renderText("LilyGo System v2.0.0", 30, 10, framebuffer);
+        typography.renderText("LilyGo System v2.3.0", 30, 10, framebuffer);
 
         // Format current date and time
         time_t rawtime;

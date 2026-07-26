@@ -1,8 +1,8 @@
 # Chapter 3: Launcher Home Screen
 
-> **App Version**: v2.2.0  
-> **Firmware Version**: v2.2.0  
-> **Last Verified**: 2026-07-24  
+> **App Version**: v2.3.0  
+> **Firmware Version**: v2.3.0  
+> **Last Verified**: 2026-07-26  
 
 ---
 
@@ -16,7 +16,7 @@ The **Launcher** serves as the system home screen for the LilyGo EPD47 E-Reader.
 ## Screen Features & Breakdown
 
 ### 1. Top Status Bar
-- **System Identifier**: Displays `LilyGo System v2.2.0`.
+- **System Identifier**: Displays `LilyGo System v2.3.0`.
 - **Real-time Clock & Date**: Formatted as `Day Month Date | Hour:Minute AM/PM` (updates automatically every minute).
 - **Battery & RAM Metrics**: Monitors live LiPo battery percentage (`Batt:XX%`) and available internal heap (`Heap:XXKB` on hardware or `Native` on desktop simulator).
 

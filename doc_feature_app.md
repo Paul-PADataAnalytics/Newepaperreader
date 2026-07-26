@@ -9,10 +9,10 @@ This chunk implements the companion app and the communication layer necessary fo
 * **`AppComm`**
   * **Role**: Abstracts the communication layer (BLE for actual hardware, TCP for native mock testing).
   * **Implementation**:
-    * **`init()`**: Initializes the communication medium. In `NATIVE_TESTING` mode, this spins up a non-blocking POSIX TCP socket listening on port `9876`. For real hardware, this would initialize the BLE GATT server (stubbed out for now).
-    * **`poll()`**: Non-blocking poll for new data or client connections. In native mode, it uses `accept` and `read` to check for new TCP events.
-    * **`sendData()`**: Transmits a message back to the connected client.
-    * **`hasData()` & `getNextMessage()`**: Queue mechanism for processing incoming packets.
+    * **`init()`**: Initializes the communication medium. In `NATIVE_TESTING` mode, this spins up a non-blocking POSIX TCP socket listening on port `9876`. On real hardware, this initializes a real BLE GATT server (`"EPD-Reader"`, advertising restarts automatically on disconnect) - no longer a stub.
+    * **`poll()`**: Non-blocking poll for new data or client connections. In native mode, it uses `accept` and `read` to check for new TCP events; on hardware it drains the BLE receive queue. Continuously parses `TIME` (RTC clock sync), `BOOK` (eBookmark update), and `GET_BOOKMARKS` messages regardless of the active app.
+    * **`sendData()`**: Transmits a message back to the connected client (TCP write on native, BLE notification on hardware).
+    * **`hasData()` & `getNextMessage()`**: Queue mechanism for processing incoming packets (fixed-size static ring buffer on hardware - no dynamic allocation).
 
 ### Flutter Companion App (`android_app/`)
 * **`MyApp` & `TCPTestPage` (`main.dart`)**:

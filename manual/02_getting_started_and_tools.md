@@ -83,7 +83,7 @@ chmod +x tools/prepare_sd.sh
 ├── data/
 │   ├── app_icons.bin        # 4-bit 16-grayscale packed launcher icons (6912 bytes)
 │   ├── Roboto-Regular.ttf   # System TrueType font for typography engine
-│   └── sys_state.json       # System standby state (active app, page pos, book path)
+│   └── system_state.txt     # Deep-sleep resume breadcrumb (active app index, book path/page state, orientation)
 ├── books/
 │   ├── classic/             # EPUB / TXT classic books directory (deep scanned)
 │   └── scifi/               # EPUB / TXT sci-fi books directory (deep scanned)

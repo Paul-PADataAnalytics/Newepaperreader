@@ -155,6 +155,14 @@ void setup() {
     // NOTE: GPIO0 is reserved for the EPD driver's CFG_STR line - never
     // reconfigure it here (see note in DisplayHAL::init()).
 
+    // Manual sleep/wake toggle button. BUTTON_1 (GPIO21 on this S3 board,
+    // per LilyGo-EPD47's utilities.h) is a genuinely free, dedicated button
+    // pin - not shared with SD/I2C/touch/CFG_STR. Polled only (no ISR), so
+    // unlike TOUCH_INT it never needs its interrupt-type register shared
+    // with an app-level edge handler.
+    pinMode(BUTTON_1, INPUT_PULLUP);
+    gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
+
     gpio_install_isr_service(0);
     gpio_set_intr_type(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_NEGEDGE);
     gpio_isr_handler_add(static_cast<gpio_num_t>(TOUCH_INT), touchIsrHandler,
@@ -205,6 +213,51 @@ void setup() {
 
 static uint32_t lastTouchActivityTime = 0;
 static bool isSystemSleeping = false;
+
+#ifndef NATIVE_TESTING
+// Edge-triggered, debounced BUTTON_1 press detector for the awake-state
+// manual sleep toggle. Mirrors the touch tap-debounce style in loop():
+// fires once on the down edge, then ignores the line until it's been seen
+// released for a short debounce window (protects against switch bounce).
+//
+// State is FILE-SCOPE (not function-local static) so both the awake-loop
+// poll and the post-wake resync below share the same values - this matches
+// the documented "BOOT Debounce Trap" lesson: a function-local static here
+// caused a held button to immediately re-trigger sleep right after waking,
+// because the wake path had no way to tell the poller "this press already
+// caused the wake, don't count it again."
+static bool button1DownWaiting = false;
+static uint32_t lastButton1UpTime = 0;
+const uint32_t BUTTON1_DEBOUNCE_MS = 50;
+
+static bool checkButton1DebouncedPress(uint32_t now) {
+    bool rawPressed = (digitalRead(BUTTON_1) == LOW); // active-low, INPUT_PULLUP
+    bool firedThisCall = false;
+
+    if (rawPressed) {
+        if (!button1DownWaiting && (now - lastButton1UpTime) >= BUTTON1_DEBOUNCE_MS) {
+            button1DownWaiting = true;
+            firedThisCall = true;
+        }
+    } else {
+        if (button1DownWaiting) {
+            lastButton1UpTime = now;
+        }
+        button1DownWaiting = false;
+    }
+    return firedThisCall;
+}
+
+// Called immediately after waking (from touch OR button) so a still-held
+// BUTTON_1 doesn't look like a brand-new press to the awake-loop poller and
+// cause an instant re-sleep. Marks the button as "already waiting" if it's
+// still down, exactly mirroring the fix for the historical lastBootBtnTime
+// debounce trap.
+static void resyncButton1DebounceAfterWake(uint32_t now) {
+    button1DownWaiting = (digitalRead(BUTTON_1) == LOW);
+    lastButton1UpTime = now;
+}
+#endif
 
 static void drawSleepScreen() {
     bool wasPortrait = DisplayHAL::isPortrait();
@@ -323,6 +376,15 @@ void loop() {
         lastTouchActivityTime = now;
     }
 
+    // Manual sleep/wake toggle button (BUTTON_1 / GPIO21). Only acted on
+    // here for the awake -> sleep direction; the sleep -> awake direction is
+    // handled entirely by the GPIO wakeup source armed inside the
+    // isSystemSleeping block below (loop() doesn't run again until then).
+    bool button1Pressed = false;
+#ifndef NATIVE_TESTING
+    button1Pressed = checkButton1DebouncedPress(now);
+#endif
+
     // Edge-triggered tap detector: fire once on the transition from
     // "not touching" to "touching", then ignore every sample until the finger
     // lifts and the line stays clear for a short debounce window.
@@ -409,6 +471,11 @@ void loop() {
         // (GPIO0 is intentionally NOT touched here - see note in DisplayHAL::init().)
         gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
         gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
+        // Same defensive pullup enforcement for the manual wake button.
+        // BUTTON_1 has no app-level ISR ever attached (poll-only design), so
+        // unlike TOUCH_INT there is no shared-interrupt-register hazard here.
+        gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
+        gpio_pulldown_dis(static_cast<gpio_num_t>(BUTTON_1));
 
         // CRITICAL: detach the edge-triggered app ISR before reconfiguring this
         // GPIO for level-triggered sleep wakeup below. gpio_wakeup_enable()
@@ -430,6 +497,20 @@ void loop() {
         DisplayHAL::getTouch(dummyX, dummyY);
 
         gpio_wakeup_enable(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_LOW_LEVEL);
+        // BUTTON_1 as a second wakeup source: a genuinely free, dedicated
+        // pin with no ISR attached, so arming it here carries none of the
+        // shared-interrupt-register risk documented above for TOUCH_INT.
+        // Guard: only arm it if the button currently reads HIGH (released).
+        // If the very press that just triggered sleep-entry is still being
+        // held down at this instant, arming a LOW_LEVEL wakeup on it would
+        // fire immediately and undo the sleep we're about to enter. Skipping
+        // it for this pass is safe - TOUCH_INT is still armed, and the next
+        // loop() iteration (right after this light-sleep call returns) will
+        // re-check and arm it once the button has actually been released.
+        bool button1CurrentlyHigh = (digitalRead(BUTTON_1) == HIGH);
+        if (button1CurrentlyHigh) {
+            gpio_wakeup_enable(static_cast<gpio_num_t>(BUTTON_1), GPIO_INTR_LOW_LEVEL);
+        }
         esp_sleep_enable_gpio_wakeup();
         esp_light_sleep_start();
 
@@ -449,6 +530,7 @@ void loop() {
         // handler - this guarantees no pending low level is left over to
         // immediately refire the moment the handler goes back on.
         gpio_wakeup_disable(static_cast<gpio_num_t>(TOUCH_INT));
+        gpio_wakeup_disable(static_cast<gpio_num_t>(BUTTON_1));
         int wx = -1, wy = -1;
         // getTouch() returns true only for a genuine, currently-down touch
         // point (same signal touchReaderTask uses to distinguish DOWN/UP).
@@ -458,6 +540,13 @@ void loop() {
         // the inactivity timer. Use that here to tell a genuine wake-up tap
         // apart from a noise-driven false wake.
         bool realTouchWake = DisplayHAL::getTouch(wx, wy);
+        // A real button wake reads LOW (active-low, INPUT_PULLUP) right after
+        // waking. Plain level read (not the awake-loop's edge debouncer) -
+        // we already know *something* woke us; this just confirms it was the
+        // button rather than noise. `now` here is stale (captured before the
+        // blocking esp_light_sleep_start() call, which may have lasted any
+        // length of time), so re-read millis() for the resync below.
+        bool realButtonWake = (digitalRead(BUTTON_1) == LOW);
 
         gpio_set_intr_type(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_NEGEDGE);
         gpio_isr_handler_add(static_cast<gpio_num_t>(TOUCH_INT), touchIsrHandler,
@@ -470,7 +559,7 @@ void loop() {
             xQueueReset(touchEventQueue);
         }
 
-        if (!realTouchWake) {
+        if (!realTouchWake && !realButtonWake) {
             // Just noise - stay asleep. Returning here (isSystemSleeping is
             // still true) means the very next loop() call re-enters this same
             // block and goes right back into light sleep, without ever
@@ -480,6 +569,13 @@ void loop() {
 
         isSystemSleeping = false;
         lastTouchActivityTime = millis();
+        // Prime the awake-loop's button debounce state to reflect reality
+        // right now (still held, or already released) so a held BUTTON_1
+        // doesn't look like a brand-new press to checkButton1DebouncedPress()
+        // and instantly re-trigger sleep on the very next loop() iteration -
+        // the same class of bug as the historical lastBootBtnTime debounce
+        // trap (see repo memory).
+        resyncButton1DebounceAfterWake(millis());
         DisplayHAL::powerOn();
 
         if (Launcher::getInstance().getActiveApp()) {
@@ -496,7 +592,7 @@ void loop() {
         return;
     }
 
-    if ((now - lastTouchActivityTime) >= 30000) {
+    if (button1Pressed || (now - lastTouchActivityTime) >= 30000) {
         isSystemSleeping = true;
         drawSleepScreen();
         DisplayHAL::powerOff();

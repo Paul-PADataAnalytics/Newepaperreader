@@ -14,6 +14,11 @@
 #include <Arduino.h>
 #else
 #include <stdio.h>
+#include <chrono>
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+}
 #endif
 
 extern uint8_t *framebuffer;
@@ -233,11 +238,76 @@ void EReaderApp::draw() {
     }
 }
 
+// Fixed region (below the main "Scanning library..." message) used to show a
+// live folder count while a long scan is in progress. Kept separate from
+// drawScanningProgressScreen() so repeat updates can go through the cheap
+// scoped partial-update path instead of a full-screen clear each time.
+static const int SCAN_PROGRESS_REGION_W = 400;
+static const int SCAN_PROGRESS_REGION_H = 30;
+
+void EReaderApp::drawScanningProgressScreen(int dirsVisited) {
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        int w = DisplayHAL::getWidth();
+        int h = DisplayHAL::getHeight();
+        uint8_t fg = UIFramework::getForegroundColor();
+
+        typography.setFontSize(32.0f);
+        std::string msg = "Scanning library...";
+        int msgW = typography.measureText(msg);
+        typography.renderText(msg, (w - msgW) / 2, h / 2 - 40, framebuffer, fg);
+    });
+    updateScanProgressCount(dirsVisited);
+}
+
+void EReaderApp::updateScanProgressCount(int dirsVisited) {
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+    int x = (w - SCAN_PROGRESS_REGION_W) / 2;
+    int y = h / 2;
+
+    // Cheap scoped update (same fast partial-update path used by Calculator,
+    // fixed in the previous punch-list item) so a long scan can show live
+    // progress without paying for a full-screen e-ink clear on every tick.
+    UIFramework::performFastPartialUpdate(framebuffer, x, y, SCAN_PROGRESS_REGION_W, SCAN_PROGRESS_REGION_H, [this, dirsVisited, x, y]() {
+        uint8_t fg = UIFramework::getForegroundColor();
+        typography.setFontSize(20.0f);
+        std::string sub = std::to_string(dirsVisited) + " folders scanned so far";
+        int subW = typography.measureText(sub);
+        typography.renderText(sub, x + (SCAN_PROGRESS_REGION_W - subW) / 2, y, framebuffer, fg);
+    });
+}
+
 void EReaderApp::updateLibraryItems() {
     m_parsedLibraryItems.clear();
-    m_fileBrowser.setRoot("/books");
-    std::vector<FileInfo> allFiles = m_fileBrowser.getFiles();
     m_libraryFiles.clear();
+
+    // Recursively scan every subdirectory of /books, not just the top level,
+    // so books placed in nested folders (e.g. by genre/author) are found.
+    // If the scan takes longer than 250ms, show a "Scanning..." screen so the
+    // device doesn't appear frozen; for scans that run much longer than that
+    // (hundreds of books across many folders), keep the folder count updated
+    // periodically (throttled to avoid spending more time redrawing than
+    // scanning) via a cheap scoped partial update rather than a full redraw.
+    uint32_t scanStart = millis();
+    uint32_t lastProgressUpdate = 0;
+    bool progressShown = false;
+    int dirsVisited = 0;
+    const uint32_t PROGRESS_UPDATE_INTERVAL_MS = 750;
+
+    std::vector<FileInfo> allFiles = m_fileBrowser.scanRecursive("/books", [&]() {
+        dirsVisited++;
+        uint32_t now = millis();
+        if (!progressShown) {
+            if (now - scanStart > 250) {
+                progressShown = true;
+                lastProgressUpdate = now;
+                drawScanningProgressScreen(dirsVisited);
+            }
+        } else if (now - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS) {
+            lastProgressUpdate = now;
+            updateScanProgressCount(dirsVisited);
+        }
+    });
 
     for (auto& f : allFiles) {
         if (f.isDirectory) continue;
@@ -272,7 +342,9 @@ void EReaderApp::updateLibraryItems() {
             }
         }
         
-        int offset = AppStorage::loadBookmark(AppStorage::toRuntimePath("/books/" + f.name));
+        // Use the file's own fully-qualified path (not "/books/" + name) so
+        // bookmarks for books in nested subdirectories resolve correctly.
+        int offset = AppStorage::loadBookmark(AppStorage::toRuntimePath(f.path));
         if (offset > 0 && f.size > 0) {
             item.completionPercent = (offset * 100) / (f.size * 2); 
             if (item.completionPercent > 100) item.completionPercent = 100;
@@ -309,6 +381,11 @@ void EReaderApp::updateLibraryItems() {
 }
 
 void EReaderApp::drawLibrary() {
+    // Scan for books BEFORE starting the full-screen draw, since a slow scan
+    // may itself need to show a one-time full-screen "Scanning..." progress
+    // screen (which would conflict with an already-in-progress full-screen draw).
+    updateLibraryItems();
+
     UIFramework::performFullScreenDraw(framebuffer, [this]() {
         int w = DisplayHAL::getWidth();
         uint8_t fg = UIFramework::getForegroundColor();
@@ -364,8 +441,6 @@ void EReaderApp::drawLibrary() {
         std::string dnSymbol = "\\/";
         int twDn = typography.measureText(dnSymbol);
         typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
-
-        updateLibraryItems();
 
         int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
         int startIndex = m_libraryPage * itemsPerPage;

@@ -63,4 +63,6 @@ private:
     void drawLibrary();
     void drawReading();
     void openBook(int index);
+    void drawScanningProgressScreen(int dirsVisited);
+    void updateScanProgressCount(int dirsVisited);
 };

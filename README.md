@@ -43,3 +43,15 @@ pio run -e native
 # Serve static site locally
 python3 -m http.server 8080 -d docs/
 ```
+
+🌐 **Live GitHub Pages Demo**
+
+The prebuilt demo in `docs/` is automatically deployed to **GitHub Pages** on every push to `main`. The deployment is handled by `.github/workflows/deploy-github-pages.yml` and can also be triggered manually.
+
+Once Pages is enabled in the repository settings with the source set to **GitHub Actions**, the live demo will be available at:
+
+```
+https://paul-padataanalytics.github.io/Newepaperreader/
+```
+
+> The live demo URL follows the standard GitHub Pages pattern: `https://<owner>.github.io/<repo>/` (owner casing is not significant).

@@ -54,4 +54,4 @@ Once Pages is enabled in the repository settings with the source set to **GitHub
 https://paul-padataanalytics.github.io/Newepaperreader/
 ```
 
-> The URL spelling intentionally matches the repository name `Paul-PADataAnalytics/Newepaperreader`.
+> The live demo URL follows the standard GitHub Pages pattern: `https://<owner>.github.io/<repo>/` (owner casing is not significant).

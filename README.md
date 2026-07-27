@@ -43,3 +43,5 @@ pio run -e native
 # Serve static site locally
 python3 -m http.server 8080 -d docs/
 ```
+
+🌐 The prebuilt demo in `docs/` is automatically deployed to **GitHub Pages** on every push to `main` via the `deploy-github-pages.yml` workflow. Once Pages is enabled in the repository settings (source: GitHub Actions), the live demo will be available at `https://paul-padataanalytics.github.io/Newepaperreader/`.

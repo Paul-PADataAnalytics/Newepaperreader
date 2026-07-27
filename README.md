@@ -44,4 +44,14 @@ pio run -e native
 python3 -m http.server 8080 -d docs/
 ```
 
-🌐 The prebuilt demo in `docs/` is automatically deployed to **GitHub Pages** on every push to `main` via the `deploy-github-pages.yml` workflow. Once Pages is enabled in the repository settings (source: GitHub Actions), the live demo will be available at `https://paul-padataanalytics.github.io/Newepaperreader/` (URL matches the repository name `Paul-PADataAnalytics/Newepaperreader`; deployed from `docs/` by `.github/workflows/deploy-github-pages.yml`).
+🌐 **Live GitHub Pages Demo**
+
+The prebuilt demo in `docs/` is automatically deployed to **GitHub Pages** on every push to `main`. The deployment is handled by `.github/workflows/deploy-github-pages.yml` and can also be triggered manually.
+
+Once Pages is enabled in the repository settings with the source set to **GitHub Actions**, the live demo will be available at:
+
+```
+https://paul-padataanalytics.github.io/Newepaperreader/
+```
+
+> The URL spelling matches the repository name `Paul-PADataAnalytics/Newepaperreader`.

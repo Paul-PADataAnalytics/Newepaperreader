@@ -54,4 +54,4 @@ Once Pages is enabled in the repository settings with the source set to **GitHub
 https://paul-padataanalytics.github.io/Newepaperreader/
 ```
 
-> The URL spelling matches the repository name `Paul-PADataAnalytics/Newepaperreader`.
+> The URL spelling intentionally matches the repository name `Paul-PADataAnalytics/Newepaperreader`.

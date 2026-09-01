@@ -411,9 +411,7 @@ void EReaderApp::drawLibrary() {
         typography.renderText("Library", 70, 2, framebuffer, fg);
 
         typography.setFontSize(28.0f);
-        std::string sysInfo = "10:00 AM | 80% | 12GB Free";
-        int sysInfoW = typography.measureText(sysInfo);
-        typography.renderText(sysInfo, w - sysInfoW - 60, 12, framebuffer, fg);
+        UIFramework::drawSystemStatus(framebuffer, w - 60, 12, 28.0f, fg);
         UIFramework::drawIcon16x16(framebuffer, 920, 18, COG_ICON, fg);
         DisplayHAL::drawHLine(0, LIB_TOP_H - 1, w, fg, framebuffer);
 

@@ -13,8 +13,15 @@ public:
     // Initializes the UI framework (loads fonts, sets up theme constants)
     static void init();
 
-    // Draws the top status bar (battery, title, time)
-    static void drawTopBar(uint8_t *framebuffer, const char* title, int batteryPercent);
+    // Draws the top status bar: title on the left, live time/battery on the
+    // right (via drawSystemStatus), and a divider line underneath.
+    static void drawTopBar(uint8_t *framebuffer, const char* title);
+
+    // Renders the live system status text ("H:MM AM/PM | NN%[+]") right-aligned
+    // so its right edge sits at `rightX`. This is the single source of truth
+    // for time/battery display — apps must call this rather than hardcoding
+    // placeholder values.
+    static void drawSystemStatus(uint8_t *framebuffer, int rightX, int y, float fontSize, uint8_t color);
 
     // Draws a progress bar at the bottom
     static void drawProgressBar(uint8_t *framebuffer, float progress, const char* label);

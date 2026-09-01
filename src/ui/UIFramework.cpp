@@ -2,17 +2,48 @@
 extern TypographyEngine typography;
 #include "UIFramework.h"
 #include "DisplayHAL.h"
+#include <time.h>
+#include <cstdio>
 
 void UIFramework::init() {
     // Placeholder for loading fonts or other UI assets if needed
 }
 
-void UIFramework::drawTopBar(uint8_t *framebuffer, const char* title, int batteryPercent) {
-    // Draw a top bar background (light gray or line underneath)
-    DisplayHAL::drawHLine(0, 30, EPD_WIDTH, 0x00, framebuffer); // Black line at y=30
-    
-    // Placeholder for text rendering (needs font header inclusion)
-    // writeln((GFXfont *)&firasans, title, &cursor_x, &cursor_y, framebuffer);
+// Single source of truth for the "live system status" text (current time +
+// battery). Apps must call this instead of hardcoding time/battery strings.
+// Renders right-aligned so its right edge sits at `rightX`.
+void UIFramework::drawSystemStatus(uint8_t *framebuffer, int rightX, int y, float fontSize, uint8_t color) {
+    time_t rawtime;
+    time(&rawtime);
+    struct tm* timeinfo = localtime(&rawtime);
+    char timeStr[16];
+    if (timeinfo && timeinfo->tm_year > 70) {
+        strftime(timeStr, sizeof(timeStr), "%I:%M %p", timeinfo);
+    } else {
+        snprintf(timeStr, sizeof(timeStr), "--:--");
+    }
+
+    int battPct = DisplayHAL::getBatteryPercent();
+    const char* chargeIcon = DisplayHAL::isCharging() ? "+" : "";
+
+    char statusStr[48];
+    snprintf(statusStr, sizeof(statusStr), "%s | %d%%%s", timeStr, battPct, chargeIcon);
+
+    typography.setFontSize(fontSize);
+    int tw = typography.measureText(statusStr);
+    typography.renderText(statusStr, rightX - tw, y, framebuffer, color);
+}
+
+void UIFramework::drawTopBar(uint8_t *framebuffer, const char* title) {
+    int w = DisplayHAL::getWidth();
+    uint8_t fg = getForegroundColor();
+
+    typography.setFontSize(34.0f);
+    typography.renderText(title, 30, 10, framebuffer, fg);
+
+    drawSystemStatus(framebuffer, w - 20, 18, 22.0f, fg);
+
+    DisplayHAL::drawHLine(0, 60, w, fg, framebuffer); // Divider under the bar
 }
 
 void UIFramework::drawProgressBar(uint8_t *framebuffer, float progress, const char* label) {

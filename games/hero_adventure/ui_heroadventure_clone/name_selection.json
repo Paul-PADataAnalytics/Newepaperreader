@@ -1,0 +1,20 @@
+{
+  "id": "name_selection",
+  "title": "Choose Your Hero's Name",
+  "text": [
+    "Select a name for your hero:",
+    "You will become a legend known by this name."
+  ],
+  "buttons": [
+    { "label": "{name_0}", "action": "selectname:0" },
+    { "label": "{name_1}", "action": "selectname:1" },
+    { "label": "{name_2}", "action": "selectname:2" },
+    { "label": "{name_3}", "action": "selectname:3" },
+    { "label": "{name_4}", "action": "selectname:4" },
+    { "label": "{name_5}", "action": "selectname:5" },
+    { "label": "{name_6}", "action": "selectname:6" },
+    { "label": "{name_7}", "action": "selectname:7" },
+    { "label": "{name_8}", "action": "selectname:8" },
+    { "label": "{name_9}", "action": "selectname:9" }
+  ]
+}

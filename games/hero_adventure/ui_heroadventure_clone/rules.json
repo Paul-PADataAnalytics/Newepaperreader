@@ -1,0 +1,23 @@
+{
+  "id": "rules",
+  "title": "How to Play",
+  "text": [
+    "HERO ADVENTURE - Quick Start",
+    "",
+    "1. CREATE a hero with one of 3 classes",
+    "2. JOURNEY through 5 legs with 20 events each",
+    "3. COMBAT: Fight, Sneak, Steal, or Flee",
+    "4. EXPLORE: Find dungeons with bosses",
+    "5. LEVEL UP: Choose 3 skills to boost",
+    "6. RETIRE: Buy a house in the Capital",
+    "",
+    "Your final score is gold remaining",
+    "multiplied by your house value.",
+    "",
+    "Try different strategies to reach",
+    "the leaderboard!"
+  ],
+  "buttons": [
+    { "label": "Back", "action": "goto:front_page" }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "inventory",
+  "title": "Inventory (Weight: {total_weight}/{max_weight})",
+  "text": [
+    "Gold: ${cash}",
+    "",
+    "Equipped Items:",
+    "{equipped_summary}",
+    "",
+    "Backpack items not shown (simplified for e-paper).",
+    "Collect useful items to increase your skills!"
+  ],
+  "buttons": [
+    { "label": "Character", "action": "open_character_sheet" },
+    { "label": "Back", "action": "close_inventory" }
+  ]
+}

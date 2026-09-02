@@ -497,10 +497,10 @@ void DisplayHAL::updateScreenFull() {
         uint8_t* temp = allocateFramebuffer();
         memset(temp, 0x00, getWidth() * getHeight() / 2); // Black flash
         display(temp);
-        usleep(150000);
+        // NATIVE_SLEEP_DISABLED;
         memset(temp, 0xFF, getWidth() * getHeight() / 2); // White flash
         display(temp);
-        usleep(150000);
+        // NATIVE_SLEEP_DISABLED;
         freeFramebuffer(temp);
     }
 #endif
@@ -551,15 +551,15 @@ void DisplayHAL::updateScreenPartial() {
         if (s_debugScreen) {
             // Flash bounded clear region to white
             display(tempFb);
-            usleep(100000);
+            // NATIVE_SLEEP_DISABLED;
             // Flash it black to highlight the bounding box
             fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0x00, tempFb);
             display(tempFb);
-            usleep(100000);
+            // NATIVE_SLEEP_DISABLED;
             // Flash back to white
             fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0xFF, tempFb);
             display(tempFb);
-            usleep(100000);
+            // NATIVE_SLEEP_DISABLED;
         } else {
             display(tempFb);
         }
@@ -708,7 +708,7 @@ void DisplayHAL::updateScreenFast() {
             memcpy(tempFb, backBuffer, w * h / 2);
             fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0x00, tempFb);
             display(tempFb);
-            usleep(20000); // 20ms
+            // NATIVE_SLEEP_DISABLED; // 20ms
             freeFramebuffer(tempFb);
         }
     }

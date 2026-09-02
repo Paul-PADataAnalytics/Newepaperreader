@@ -1,0 +1,24 @@
+{
+  "id": "combat",
+  "title": "Encounter: {monster_name}",
+  "text": [
+    "ENEMY STATS",
+    "Fighting: {monster_fighting}  Defending: {monster_defending}  Magic: {monster_magic}",
+    "",
+    "YOUR PROFILE",
+    "Attack: {combat_attack}  Defense: {combat_effective_defense}",
+    "Dmg/Rnd: {combat_round_damage}  Enemy Dmg: {combat_incoming_damage}",
+    "",
+    "{combat_narration}",
+    "",
+    "ESTIMATED COMBAT",
+    "Rounds to Win: {combat_rounds_to_kill}   Rounds to Die: {combat_rounds_to_die}",
+  ],
+  "buttons": [
+    { "label": "Fight ({fight_win_pct}%)", "action": "combat:fight" },
+    { "label": "Sneak ({sneak_win_pct}%)", "action": "combat:sneak" },
+    { "label": "Steal ({steal_win_pct}%)", "action": "combat:steal" },
+    { "label": "Kill ({stealth_kill_win_pct}%)", "action": "combat:stealth_kill" },
+    { "label": "Run Away", "action": "run_away", "visible_if": "allow_run" }
+  ]
+}

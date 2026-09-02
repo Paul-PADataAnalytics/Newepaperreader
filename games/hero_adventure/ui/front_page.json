@@ -1,0 +1,16 @@
+{
+  "id": "front_page",
+  "title": "Hero Adventure",
+  "no_wrap": true,
+  "text": [
+    "Welcome, brave adventurer!",
+    "An epic journey awaits you across five treacherous lands.",
+    "Choose your path below:"
+  ],
+  "buttons": [
+    { "label": "New Game", "action": "new_game" },
+    { "label": "High Scores", "action": "goto:high_scores" },
+    { "label": "Rules", "action": "goto:rules" },
+    { "label": "Exit", "action": "quit" }
+  ]
+}

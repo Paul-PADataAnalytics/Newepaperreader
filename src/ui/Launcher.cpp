@@ -5,12 +5,15 @@
 #include "CalculatorApp.h"
 #include "FileManagerApp.h"
 #include "ImageViewerApp.h"
+#include "HeroAdventureApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
 #include "ui/UIFramework.h"
 #include "app_icons_embedded.h"
+#include "menu_category_icons.h"
 #include <time.h>
+#include <cstring>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
@@ -28,7 +31,7 @@ Application* createSettings() { return new SettingsApp(); }
 Application* createCalculator() { return new CalculatorApp(); }
 Application* createFileManager() { return new FileManagerApp(); }
 Application* createImageViewer() { return new ImageViewerApp(); }
-
+Application* createHeroAdventure() { return new HeroAdventureApp(); }
 
 static void drawIcon48x48(uint8_t* fb, int iconX, int iconY, const uint8_t* iconData) {
     if (!fb || !iconData) return;
@@ -53,14 +56,88 @@ Launcher::~Launcher() {
 }
 
 void Launcher::init() {
-    m_apps = {
-        {"eReader App", "Read EPUB and text files from SD card", createEReader},
-        {"eBookmark App", "Track physical books via BLE companion", createEBookmark},
-        {"Settings App", "Configure system-wide wireless settings", createSettings},
-        {"Calculator App", "Simple high-contrast basic math utility", createCalculator},
-        {"File Browser", "Manage files and folders on the SD card", createFileManager},
-        {"Image Viewer", "JPEG rendering with 16 grayscale conversion", createImageViewer}
-    };
+    // Create main menu with categories and direct access apps
+    
+    // Create Utilities category
+    AppDescriptor utilities;
+    utilities.name = "Utilities";
+    utilities.description = "Access system tools";
+    utilities.factory = nullptr;
+    utilities.isCategory = true;
+    utilities.iconIndex = 0;  // Uses g_menuCategoryIcons[0]
+    
+    AppDescriptor calc;
+    calc.name = "Calculator App";
+    calc.description = "Simple high-contrast basic math utility";
+    calc.factory = createCalculator;
+    calc.isCategory = false;
+    calc.iconIndex = 3;
+    utilities.items.push_back(calc);
+    
+    AppDescriptor fileBrowser;
+    fileBrowser.name = "File Browser";
+    fileBrowser.description = "Manage files and folders on the SD card";
+    fileBrowser.factory = createFileManager;
+    fileBrowser.isCategory = false;
+    fileBrowser.iconIndex = 4;
+    utilities.items.push_back(fileBrowser);
+    
+    AppDescriptor settings;
+    settings.name = "Settings App";
+    settings.description = "Configure system-wide wireless settings";
+    settings.factory = createSettings;
+    settings.isCategory = false;
+    settings.iconIndex = 5;
+    utilities.items.push_back(settings);
+    
+    // Create Games category
+    AppDescriptor games;
+    games.name = "Games";
+    games.description = "Play adventures";
+    games.factory = nullptr;
+    games.isCategory = true;
+    games.iconIndex = 1;  // Uses g_menuCategoryIcons[1]
+    
+    AppDescriptor heroAdventure;
+    heroAdventure.name = "Hero Adventure";
+    heroAdventure.description = "Epic text-based RPG with touch controls";
+    heroAdventure.factory = createHeroAdventure;
+    heroAdventure.isCategory = false;
+    heroAdventure.iconIndex = 7;
+    games.items.push_back(heroAdventure);
+    
+    // Build main menu
+    m_apps.clear();
+    
+    AppDescriptor reader;
+    reader.name = "eReader App";
+    reader.description = "Read EPUB and text files from SD card";
+    reader.factory = createEReader;
+    reader.isCategory = false;
+    reader.iconIndex = 0;
+    m_apps.push_back(reader);
+    
+    AppDescriptor bookmark;
+    bookmark.name = "eBookmark App";
+    bookmark.description = "Track physical books via BLE companion";
+    bookmark.factory = createEBookmark;
+    bookmark.isCategory = false;
+    bookmark.iconIndex = 1;
+    m_apps.push_back(bookmark);
+    
+    AppDescriptor imageViewer;
+    imageViewer.name = "Image Viewer";
+    imageViewer.description = "JPEG rendering with 16 grayscale conversion";
+    imageViewer.factory = createImageViewer;
+    imageViewer.isCategory = false;
+    imageViewer.iconIndex = 2;
+    m_apps.push_back(imageViewer);
+    
+    m_apps.push_back(utilities);
+    m_apps.push_back(games);
+    
+    m_currentMenu = &m_apps;
+    m_currentCategoryIndex = -1;
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }
@@ -94,24 +171,43 @@ void Launcher::loop() {
 }
 
 void Launcher::launchApp(int index, bool autoDraw) {
-    if (index < 0 || index >= (int)m_apps.size()) return;
-    exitCurrentApp();
+    if (index < 0 || index >= (int)m_currentMenu->size()) return;
     
-    m_previousAppIndex = -1; // Launched directly from main launcher menu
+    AppDescriptor& app = (*m_currentMenu)[index];
+    
+    // If it's a category, navigate into it
+    if (app.isCategory) {
+        m_currentCategoryIndex = index;
+        m_currentMenu = &app.items;
+        drawMenu();
+        return;
+    }
+    
+    // Otherwise it's a real app - launch it
+    exitCurrentApp();
+    m_previousAppIndex = m_currentCategoryIndex;
     m_activeAppIndex = index;
-    m_activeApp = m_apps[index].factory();
+    m_activeApp = app.factory();
     m_activeApp->onCreate();
     
-    // Let the app perform a unified full-screen draw (includes hardware clear).
-    // autoDraw=false lets a caller (e.g. deep-sleep breadcrumb restore) drive
-    // the app to a specific sub-state first, avoiding a wasted default draw.
     if (autoDraw) {
         m_activeApp->draw();
     }
 }
 
 void Launcher::switchToApp(int index) {
-    if (index < 0 || index >= (int)m_apps.size()) return;
+    if (index < 0 || index >= (int)m_currentMenu->size()) return;
+    
+    AppDescriptor& app = (*m_currentMenu)[index];
+    
+    // If it's a category, navigate into it
+    if (app.isCategory) {
+        m_currentCategoryIndex = index;
+        m_currentMenu = &app.items;
+        drawMenu();
+        return;
+    }
+    
     int prevIndex = m_activeAppIndex;
 
     if (m_activeApp) {
@@ -122,18 +218,24 @@ void Launcher::switchToApp(int index) {
     
     m_previousAppIndex = prevIndex;
     m_activeAppIndex = index;
-    m_activeApp = m_apps[index].factory();
+    m_activeApp = app.factory();
     m_activeApp->onCreate();
-    
-    // Let the new app handle its own clear + draw for a single transition refresh.
     m_activeApp->draw();
 }
 
 void Launcher::returnToPreviousApp() {
     int prevIndex = m_previousAppIndex;
-    if (prevIndex >= 0 && prevIndex < (int)m_apps.size()) {
-        switchToApp(prevIndex);
-        m_previousAppIndex = -1; // Reset after returning
+    if (prevIndex >= 0) {
+        // If we're currently in a submenu, go back to main menu first
+        if (m_currentCategoryIndex >= 0) {
+            m_currentMenu = &m_apps;
+            m_currentCategoryIndex = -1;
+            drawMenu();
+        } else {
+            // Otherwise switch to previous app
+            switchToApp(prevIndex);
+            m_previousAppIndex = -1;
+        }
     } else {
         exitCurrentApp();
     }
@@ -147,7 +249,9 @@ void Launcher::exitCurrentApp() {
         m_activeAppIndex = -1;
         m_previousAppIndex = -1;
         
-        // Return to launcher menu; drawMenu uses performFullScreenDraw which clears.
+        // Return to main launcher menu
+        m_currentMenu = &m_apps;
+        m_currentCategoryIndex = -1;
         drawMenu();
     }
 }
@@ -164,7 +268,10 @@ void Launcher::drawMenu() {
 
         // 1. Top Status Bar: Title + shared live Date/Time/Battery status
         typography.setFontSize(34.0f);
-        typography.renderText("LilyGo System v2.3.0", 30, 10, framebuffer);
+        const char* menuTitle = (m_currentCategoryIndex >= 0 && m_currentCategoryIndex < (int)m_apps.size()) ? 
+            m_apps[m_currentCategoryIndex].name.c_str() :
+            "LilyGo System v2.3.0";
+        typography.renderText(menuTitle, 30, 10, framebuffer);
 
         UIFramework::drawSystemStatus(framebuffer, w - 20, 18, 24.0f, 0x03, /*includeDate=*/true);
 
@@ -183,49 +290,85 @@ void Launcher::drawMenu() {
 
         DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
 
-        // 2. Six Card-style app shortcuts in a 3x2 grid
+        // 2. Draw menu items (main or category)
+        int itemCount = m_currentMenu->size();
+        
         struct Card {
             int x, y;
-            const char* title;
-            const char* desc;
+            std::string title;
+            std::string desc;
+            int iconIndex;
+            bool isCategory;
         };
-
-        Card cards[6] = {
-            {30, 100, "E-Reader App", "Read EPUB & Text library"},
-            {340, 100, "eBookmark", "Track physical reads & stats"},
-            {650, 100, "Calculator", "Pocket math & arithmetic"},
-            {30, 300, "File Browser", "Manage files on the SD card"},
-            {340, 300, "Image Viewer", "Browse & convert JPG images"},
-            {650, 300, "Settings App", "Configure wireless settings"}
-        };
-
+        
+        // Create card layout
+        std::vector<Card> cards;
+        for (int i = 0; i < itemCount && (int)cards.size() < 6; i++) {
+            const AppDescriptor& app = (*m_currentMenu)[i];
+            int row = i / 3;
+            int col = i % 3;
+            int cardX = 30 + col * 310;
+            int cardY = 100 + row * 180;
+            
+            cards.push_back({
+                cardX, cardY,
+                app.name,
+                app.description,
+                app.iconIndex,
+                app.isCategory
+            });
+        }
+        
         int cardW = 280;
         int cardH = 170;
 
-        for (int i = 0; i < 6; i++) {
-            UIFramework::drawButton(framebuffer, cards[i].x, cards[i].y, cardW, cardH, "");
+        // Draw all cards
+        for (size_t i = 0; i < cards.size(); i++) {
+            const Card& card = cards[i];
+            UIFramework::drawButton(framebuffer, card.x, card.y, cardW, cardH, "");
             
             // Draw 48x48 App Icon centered at top of card
-            int iconX = cards[i].x + (cardW - 48) / 2;
-            int iconY = cards[i].y + 15;
-            drawIcon48x48(framebuffer, iconX, iconY, g_embeddedAppIcons + (i * 1152));
+            int iconX = card.x + (cardW - 48) / 2;
+            int iconY = card.y + 15;
+            
+            const uint8_t* iconData = nullptr;
+            if (card.isCategory) {
+                // Use category icons from g_menuCategoryIcons
+                if (card.iconIndex < 2) {
+                    iconData = g_menuCategoryIcons + (card.iconIndex * 1152);
+                }
+            } else {
+                // Use regular app icons from g_embeddedAppIcons
+                if (card.iconIndex < 8) {
+                    iconData = g_embeddedAppIcons + (card.iconIndex * 1152);
+                }
+            }
+            
+            if (iconData) {
+                drawIcon48x48(framebuffer, iconX, iconY, iconData);
+            }
 
             // App Title
             typography.setFontSize(24.0f);
-            int titleW = typography.measureText(cards[i].title);
-            typography.renderText(cards[i].title, cards[i].x + (cardW - titleW) / 2, cards[i].y + 75, framebuffer);
+            int titleW = typography.measureText(card.title.c_str());
+            typography.renderText(card.title.c_str(), card.x + (cardW - titleW) / 2, card.y + 75, framebuffer);
             
             // App Description
             typography.setFontSize(16.0f);
-            int descW = typography.measureText(cards[i].desc);
-            typography.renderText(cards[i].desc, cards[i].x + (cardW - descW) / 2, cards[i].y + 125, framebuffer, 0x04);
+            int descW = typography.measureText(card.desc.c_str());
+            typography.renderText(card.desc.c_str(), card.x + (cardW - descW) / 2, card.y + 125, framebuffer, 0x04);
         }
 
-        // Draw bottom helper message
+        // Draw footer with navigation hint
         typography.setFontSize(20.0f);
-        std::string help = "Tap the top-left corner (x<=60, y<=60) from any app to return here.";
-        int helpW = typography.measureText(help);
-        typography.renderText(help, (w - helpW) / 2, h - 35, framebuffer, 0x06);
+        std::string help;
+        if (m_currentCategoryIndex >= 0) {
+            help = "Tap the top-left corner to go back to main menu.";
+        } else {
+            help = "Tap the top-left corner (x<=60, y<=60) from any app to return here.";
+        }
+        int helpW = typography.measureText(help.c_str());
+        typography.renderText(help.c_str(), (w - helpW) / 2, h - 35, framebuffer, 0x06);
     });
 }
 
@@ -247,6 +390,14 @@ void Launcher::handleTouch(int x, int y) {
         }
         // Otherwise route touch to active app
         m_activeApp->handleTouch(x, y);
+        return;
+    }
+    
+    // If we're in a submenu and touch top-left, go back to main menu
+    if (m_currentCategoryIndex >= 0 && x <= 60 && y <= 60) {
+        m_currentMenu = &m_apps;
+        m_currentCategoryIndex = -1;
+        drawMenu();
         return;
     }
 
@@ -276,16 +427,16 @@ void Launcher::handleTouch(int x, int y) {
     if (row != -1 && col != -1) {
         int appIdx = -1;
         if (row == 0) {
-            if (col == 0) appIdx = 0;      // E-Reader
-            else if (col == 1) appIdx = 1; // E-Bookmark
-            else if (col == 2) appIdx = 3; // Calculator
+            if (col == 0) appIdx = 0;
+            else if (col == 1) appIdx = 1;
+            else if (col == 2) appIdx = 2;
         } else if (row == 1) {
-            if (col == 0) appIdx = 4;      // Timer
-            else if (col == 1) appIdx = 5; // Image Viewer
-            else if (col == 2) appIdx = 2; // Settings
+            if (col == 0) appIdx = 3;
+            else if (col == 1) appIdx = 4;
+            else if (col == 2) appIdx = 5;
         }
 
-        if (appIdx != -1) {
+        if (appIdx != -1 && appIdx < (int)m_currentMenu->size()) {
             launchApp(appIdx);
         }
     }

@@ -1,0 +1,18 @@
+{
+  "id": "high_scores",
+  "title": "High Scores",
+  "text": [
+    "Top Heroes of All Time",
+    "",
+    "1. Hero Name - 50,000 pts",
+    "2. Hero Name - 45,000 pts",
+    "3. Hero Name - 40,000 pts",
+    "4. Hero Name - 35,000 pts",
+    "5. Hero Name - 30,000 pts",
+    "",
+    "Keep playing to reach the leaderboard!"
+  ],
+  "buttons": [
+    { "label": "Back", "action": "goto:front_page" }
+  ]
+}

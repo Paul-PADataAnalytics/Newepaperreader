@@ -25,9 +25,16 @@ echo "Creating directory structure..."
 mkdir -p /tmp/sdcard/books
 mkdir -p /tmp/sdcard/Downloads
 mkdir -p /tmp/sdcard/data
+mkdir -p /tmp/sdcard/games/hero_adventure/ui
 
 echo "Copying fonts..."
 cp data/Roboto-Regular.ttf /tmp/sdcard/data/
+
+echo "Copying Hero Adventure game files..."
+if [ -d "games/hero_adventure" ]; then
+    cp -r games/hero_adventure/ui/* /tmp/sdcard/games/hero_adventure/ui/
+    echo "Hero Adventure UI files copied successfully"
+fi
 
 echo "Syncing and unmounting..."
 sync

@@ -1,0 +1,21 @@
+{
+  "id": "character_creation",
+  "title": "Character Creation",
+  "no_wrap": true,
+  "text": [
+    "Choose your character class!",
+    "",
+    "Each class has unique bonuses:",
+    "",
+    "HITTER — +20 Fighting, +20 Defending, +20 Camping",
+    "BLASTER — +20 Magic, +20 Spotting, +20 Medical",
+    "HIDER — +20 Stealth, +20 Salvaging, +20 Spotting",
+    "",
+    "Tap a class to choose"
+  ],
+  "buttons": [
+    { "label": "Hitter", "action": "class:Hitter" },
+    { "label": "Blaster", "action": "class:Blaster" },
+    { "label": "Hider", "action": "class:Hider" }
+  ]
+}

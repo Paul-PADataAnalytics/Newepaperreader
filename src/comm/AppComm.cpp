@@ -1,6 +1,8 @@
 #include "AppComm.h"
 #include "EBookmarkManager.h"
 #include "reader/AppStorage.h"
+#include "DisplayHAL.h"
+#include <ArduinoJson.h>
 #include <ArduinoJson.h>
 #include <mutex>
 #include <string>
@@ -266,12 +268,39 @@ void AppComm::poll() {
             std::string msg(buffer, valread);
             std::cout << "Received from app: " << msg << std::endl;
             
-            if (msg == "READ") {
-                sendData(read_buffer);
+            // Try to parse as JSON for test commands
+            JsonDocument doc;
+            if (!deserializeJson(doc, msg)) {
+                std::string cmd = doc["cmd"] | "";
+                
+                if (cmd == "touch") {
+                    int x = doc["x"] | -1;
+                    int y = doc["y"] | -1;
+                    if (x >= 0 && y >= 0) {
+                        DisplayHAL::injectTouch(x, y);
+                        std::string ack = "ACK: {\"cmd\": \"touch\", \"x\": " + std::to_string(x) + ", \"y\": " + std::to_string(y) + "}";
+                        sendData(ack);
+                    }
+                } else if (cmd == "get_screen_state") {
+                    // Return a simple acknowledgment - screen state is internal to display
+                    std::string response = "ACK: {\"cmd\": \"get_screen_state\"}";
+                    sendData(response);
+                } else if (msg == "READ") {
+                    sendData(read_buffer);
+                } else {
+                    ring_push(buffer, valread);
+                    std::string ack = "ACK: " + msg;
+                    sendData(ack);
+                }
             } else {
-                ring_push(buffer, valread);
-                std::string ack = "ACK: " + msg;
-                sendData(ack);
+                // Not JSON, handle as before
+                if (msg == "READ") {
+                    sendData(read_buffer);
+                } else {
+                    ring_push(buffer, valread);
+                    std::string ack = "ACK: " + msg;
+                    sendData(ack);
+                }
             }
         } else if (valread == 0) {
             std::cout << "Client disconnected" << std::endl;

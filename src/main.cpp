@@ -561,7 +561,7 @@ void loop() {
         }
         DisplayHAL::handleEvents();
         if (DisplayHAL::windowShouldClose()) exit(0);
-        usleep(100000);
+        // NATIVE_SLEEP_DISABLED;
 #endif
         return;
     }
@@ -577,9 +577,10 @@ void loop() {
 #ifndef NATIVE_TESTING
         saveBreadcrumbAndEnterLockMode(); // never returns - chip resets
 #else
-        isSystemSleeping = true;
-        drawSleepScreen();
-        DisplayHAL::powerOff();
+        // Native testing: suppress entering deep sleep. Reset inactivity timer
+        // so the simulator does not immediately re-enter sleep while unattended.
+        printf("NATIVE_TESTING: sleep suppressed (button1Pressed=%d, inactivity=%d)\n", button1Pressed ? 1 : 0, inactivityTimeout ? 1 : 0);
+        lastTouchActivityTime = now;
 #endif
         return;
     }
@@ -609,7 +610,7 @@ void loop() {
     if (DisplayHAL::windowShouldClose()) {
         exit(0);
     }
-    usleep(100000); // 100ms
+    // NATIVE_SLEEP_DISABLED; // 100ms
 #endif
 
     uint32_t loopEndTime = millis();

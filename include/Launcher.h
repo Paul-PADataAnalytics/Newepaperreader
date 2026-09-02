@@ -7,7 +7,10 @@
 struct AppDescriptor {
     std::string name;
     std::string description;
-    Application* (*factory)();
+    Application* (*factory)() = nullptr;
+    bool isCategory = false;  // If true, factory is nullptr and items are sub-apps
+    std::vector<AppDescriptor> items;  // Sub-items for categories
+    int iconIndex = 0;  // Index into embedded icon data
 };
 
 class Launcher {
@@ -36,6 +39,9 @@ private:
     Launcher& operator=(const Launcher&) = delete;
 
     std::vector<AppDescriptor> m_apps;
+    std::vector<AppDescriptor>* m_currentMenu = nullptr;  // Points to current menu (main or category)
+    int m_currentCategoryIndex = -1;  // If >= 0, we're in a submenu
+    
     Application* m_activeApp = nullptr;
     int m_activeAppIndex = -1;
     int m_previousAppIndex = -1;

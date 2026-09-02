@@ -1,0 +1,18 @@
+{
+  "id": "character_sheet",
+  "title": "Character: {hero_name} ({hero_class})",
+  "text": [
+    "HP: {hp}/{max_hp}   Gold: ${cash}",
+    "Honor: {honor_mark}/15",
+    "",
+    "Skills:",
+    "  Fighting: {fighting}  Defending: {defending}",
+    "  Magic: {magic}  Stealth: {stealth}",
+    "  Spotting: {spotting}  Salvaging: {salvaging}",
+    "  Camping: {camping}  Medical: {medical}"
+  ],
+  "buttons": [
+    { "label": "Inventory", "action": "open_inventory" },
+    { "label": "Back", "action": "close_character_sheet" }
+  ]
+}

@@ -33,7 +33,10 @@ public:
     // Each returned FileInfo's `path` is the full path from the SD root
     // (e.g. "/books/scifi/foo.epub"), suitable for direct use with
     // AppStorage::toRuntimePath(). `onProgress`, if provided, is invoked once
-    // per directory visited so callers can show a "scanning" UI for slow scans.
+    // per directory visited AND once per file entry read, so callers can show
+    // live "scanning" progress even for a large flat directory with no
+    // subdirectories (a single directory visit alone gives no useful signal
+    // for how much of a long scan remains).
     std::vector<FileInfo> scanRecursive(const char* rootPath, std::function<void()> onProgress = nullptr, int maxDepth = 8);
 
 private:

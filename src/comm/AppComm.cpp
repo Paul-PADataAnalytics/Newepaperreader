@@ -1,5 +1,6 @@
 #include "AppComm.h"
 #include "EBookmarkManager.h"
+#include "reader/AppStorage.h"
 #include <ArduinoJson.h>
 #include <mutex>
 #include <string>
@@ -428,6 +429,9 @@ bool AppComm::finishFileUpload() {
 
     Serial.printf("Saved uploaded file: %s (%u bytes)\n",
                   path.c_str(), file_upload_buffer.size());
+    // A book was just added over BLE - the library index cached from a
+    // previous scan no longer reflects what's on disk.
+    AppStorage::markLibraryDirty();
     cancelFileUpload();
     return true;
 }

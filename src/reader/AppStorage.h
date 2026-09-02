@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+#include <vector>
+#include <cstdint>
 
 namespace AppStorage {
 
@@ -55,6 +57,47 @@ struct SavedSystemState {
 bool saveSystemState(const SavedSystemState& state);
 SavedSystemState loadSystemState();
 bool clearSystemState();
+
+// True if this boot resumed from our own deep-sleep lock mode (BUTTON_1
+// EXT0 wakeup) rather than a fresh power-on/reset. The SD card is never
+// unmounted across a sleep-resume, so a cached content scan is still
+// trustworthy; on a fresh power-on the card could have been swapped or
+// edited by another device, so callers should treat cached scans as stale.
+// Always false under NATIVE_TESTING (no real sleep/wake cycle to detect).
+bool wasResumedFromSleep();
+
+// Marks every persisted content-library scan stale, forcing a rescan next
+// time one is loaded even on a sleep-resume boot. Call this after any
+// operation that adds/moves/deletes files in a scanned content directory
+// (SD file manager operations, BLE/WiFi sync uploads, etc.) so apps never
+// show a stale library after content actually changed.
+void markLibraryDirty();
+
+// One entry in a persisted recursive content scan - see saveLibraryIndex()/
+// loadLibraryIndex(). Deliberately minimal (just enough to reconstruct a
+// FileInfo) since it's a cache, not the source of truth.
+struct LibraryIndexEntry {
+    std::string path;
+    uint32_t size = 0;
+};
+
+// Persists a full recursive scan of `rootPath` (e.g. "/books") so future app
+// launches don't need to re-walk the SD card - one of the slowest operations
+// on this hardware - unless markLibraryDirty() was called or this boot is a
+// fresh power-on. Clears the dirty flag set by markLibraryDirty() on success.
+bool saveLibraryIndex(const std::string& rootPath, const std::vector<LibraryIndexEntry>& entries);
+
+struct LibraryIndex {
+    std::vector<LibraryIndexEntry> entries;
+    bool valid = false;
+};
+
+// Loads a previously-saved index for `rootPath`. `valid` is false (forcing
+// the caller to do a real scan) when no index has been saved yet, when
+// markLibraryDirty() invalidated it, or when this boot is a fresh power-on
+// (see wasResumedFromSleep()) - i.e. this single call encodes the full
+// "should we rescan?" policy so apps don't have to duplicate it.
+LibraryIndex loadLibraryIndex(const std::string& rootPath);
 
 } // namespace AppStorage
 

@@ -5,6 +5,7 @@
 #include <ESPAsyncWebServer.h>
 #include <SD.h>
 #include <SPI.h>
+#include "reader/AppStorage.h"
 
 static AsyncWebServer server(80);
 static bool isSyncRunning = false;
@@ -42,6 +43,9 @@ void startWiFiSync() {
             if(final){
                 request->_tempFile.close();
                 Serial.printf("Upload End: %s, %u B\n", filename.c_str(), index+len);
+                // A book was just added over WiFi - invalidate the cached
+                // library index so the e-reader rescans next time it's opened.
+                AppStorage::markLibraryDirty();
             }
         }
     });

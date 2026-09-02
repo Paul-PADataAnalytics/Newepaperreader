@@ -5,6 +5,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+#include <esp_sleep.h>
 #include "utilities.h"
 #else
 #include <cstdio>
@@ -21,6 +22,19 @@ std::string stripSdPrefix(const std::string& path) {
     }
     return path;
 }
+
+// Turns a scan root path (e.g. "/books") into a filesystem-safe cache
+// filename fragment (e.g. "_books"), so different scanned roots each get
+// their own persisted index file.
+std::string sanitizeRootForFilename(const std::string& rootPath) {
+    std::string out = rootPath;
+    for (char& c : out) {
+        if (c == '/' || c == '\\' || c == ' ') c = '_';
+    }
+    return out;
+}
+
+const char* kLibraryDirtyFlagPath = "/data/library_dirty.flag";
 
 } // namespace
 
@@ -245,6 +259,8 @@ bool copyFile(const std::string& sourcePath, const std::string& destinationPath,
     fclose(source);
     if (!ok) {
         remove(destinationPath.c_str());
+    } else {
+        markLibraryDirty();
     }
     return ok;
 #else
@@ -287,6 +303,8 @@ bool copyFile(const std::string& sourcePath, const std::string& destinationPath,
     source.close();
     if (!ok) {
         SD.remove(destinationPath.c_str());
+    } else {
+        markLibraryDirty();
     }
     return ok;
 #endif
@@ -318,6 +336,7 @@ bool moveFile(const std::string& sourcePath, const std::string& destinationPath,
         return false;
     }
 #endif
+    markLibraryDirty();
     return true;
 }
 
@@ -333,6 +352,7 @@ bool deleteFile(const std::string& path, std::string& error) {
         return false;
     }
 #endif
+    markLibraryDirty();
     return true;
 }
 
@@ -407,6 +427,107 @@ bool clearSystemState() {
     }
     return true;
 #endif
+}
+
+bool wasResumedFromSleep() {
+#ifdef NATIVE_TESTING
+    return false;
+#else
+    return esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0;
+#endif
+}
+
+void markLibraryDirty() {
+    std::string path = toRuntimePath(kLibraryDirtyFlagPath);
+#ifdef NATIVE_TESTING
+    FILE* f = fopen(path.c_str(), "w");
+    if (f) fclose(f);
+#else
+    if (SD.exists(path.c_str())) SD.remove(path.c_str());
+    File f = SD.open(path.c_str(), FILE_WRITE);
+    if (f) f.close();
+#endif
+}
+
+bool saveLibraryIndex(const std::string& rootPath, const std::vector<LibraryIndexEntry>& entries) {
+    std::string path = toRuntimePath("/data/lib_index" + sanitizeRootForFilename(rootPath) + ".txt");
+#ifdef NATIVE_TESTING
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) return false;
+    for (const auto& e : entries) {
+        fprintf(f, "%u\t%s\n", (unsigned)e.size, e.path.c_str());
+    }
+    fclose(f);
+#else
+    if (SD.exists(path.c_str())) SD.remove(path.c_str());
+    File f = SD.open(path.c_str(), FILE_WRITE);
+    if (!f) return false;
+    for (const auto& e : entries) {
+        f.printf("%u\t%s\n", (unsigned)e.size, e.path.c_str());
+    }
+    f.close();
+#endif
+    // A fresh, successfully-saved scan is authoritative again.
+    std::string dirtyPath = toRuntimePath(kLibraryDirtyFlagPath);
+#ifdef NATIVE_TESTING
+    remove(dirtyPath.c_str());
+#else
+    if (SD.exists(dirtyPath.c_str())) SD.remove(dirtyPath.c_str());
+#endif
+    return true;
+}
+
+LibraryIndex loadLibraryIndex(const std::string& rootPath) {
+    LibraryIndex result;
+
+    // A fresh power-on means the SD card could have been swapped or edited
+    // externally - never trust a cached scan in that case, only across a
+    // sleep-resume (where the card was never unmounted).
+    if (!wasResumedFromSleep()) return result;
+
+    std::string dirtyPath = toRuntimePath(kLibraryDirtyFlagPath);
+#ifdef NATIVE_TESTING
+    if (access(dirtyPath.c_str(), F_OK) == 0) return result;
+#else
+    if (SD.exists(dirtyPath.c_str())) return result;
+#endif
+
+    std::string path = toRuntimePath("/data/lib_index" + sanitizeRootForFilename(rootPath) + ".txt");
+#ifdef NATIVE_TESTING
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return result;
+    char lineBuf[600];
+    while (fgets(lineBuf, sizeof(lineBuf), f)) {
+        unsigned size = 0;
+        char pathBuf[512] = {0};
+        if (sscanf(lineBuf, "%u\t%511[^\n]", &size, pathBuf) == 2) {
+            LibraryIndexEntry entry;
+            entry.size = size;
+            entry.path = pathBuf;
+            result.entries.push_back(entry);
+        }
+    }
+    fclose(f);
+    result.valid = true;
+#else
+    if (!SD.exists(path.c_str())) return result;
+    File f = SD.open(path.c_str(), FILE_READ);
+    if (!f) return result;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
+        int tabPos = line.indexOf('\t');
+        if (tabPos < 0) continue;
+        LibraryIndexEntry entry;
+        entry.size = (uint32_t)line.substring(0, tabPos).toInt();
+        entry.path = line.substring(tabPos + 1).c_str();
+        result.entries.push_back(entry);
+    }
+    f.close();
+    result.valid = true;
+#endif
+    return result;
 }
 
 } // namespace AppStorage

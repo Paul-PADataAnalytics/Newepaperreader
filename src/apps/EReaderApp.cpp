@@ -278,16 +278,43 @@ void EReaderApp::updateScanProgressCount(int dirsVisited) {
 }
 
 void EReaderApp::updateLibraryItems() {
-    m_parsedLibraryItems.clear();
+    // A persisted scan is only trusted across a sleep-resume with no content
+    // changes since (see AppStorage::loadLibraryIndex) - on a fresh power-on,
+    // or after any add/move/delete elsewhere marks it dirty, we fall back to
+    // a real scan. This is what keeps "extremely slow" flash re-scans out of
+    // the common case (every wake-from-sleep launch) while still catching a
+    // swapped SD card or newly-synced books.
+    AppStorage::LibraryIndex cached = AppStorage::loadLibraryIndex("/books");
+    if (cached.valid) {
+        m_libraryFiles.clear();
+        for (const auto& e : cached.entries) {
+            FileInfo f;
+            f.path = e.path;
+            size_t slashPos = e.path.find_last_of('/');
+            f.name = (slashPos == std::string::npos) ? e.path : e.path.substr(slashPos + 1);
+            f.isDirectory = false;
+            f.size = e.size;
+            m_libraryFiles.push_back(f);
+        }
+    } else {
+        rescanLibraryFromDisk();
+    }
+
+    rebuildParsedLibraryItems();
+}
+
+void EReaderApp::rescanLibraryFromDisk() {
     m_libraryFiles.clear();
 
     // Recursively scan every subdirectory of /books, not just the top level,
     // so books placed in nested folders (e.g. by genre/author) are found.
     // If the scan takes longer than 250ms, show a "Scanning..." screen so the
     // device doesn't appear frozen; for scans that run much longer than that
-    // (hundreds of books across many folders), keep the folder count updated
-    // periodically (throttled to avoid spending more time redrawing than
-    // scanning) via a cheap scoped partial update rather than a full redraw.
+    // (hundreds of books across many folders, or a single large flat folder -
+    // scanRecursive reports progress per file as well as per directory),
+    // keep the folder count updated periodically (throttled to avoid
+    // spending more time redrawing than scanning) via a cheap scoped partial
+    // update rather than a full redraw.
     uint32_t scanStart = millis();
     uint32_t lastProgressUpdate = 0;
     bool progressShown = false;
@@ -309,9 +336,10 @@ void EReaderApp::updateLibraryItems() {
         }
     });
 
+    std::vector<AppStorage::LibraryIndexEntry> indexEntries;
     for (auto& f : allFiles) {
         if (f.isDirectory) continue;
-        
+
         std::string lowerName = f.name;
         for (char& c : lowerName) c = tolower(c);
         bool isEpub = false;
@@ -322,19 +350,38 @@ void EReaderApp::updateLibraryItems() {
         else continue;
 
         m_libraryFiles.push_back(f);
+        AppStorage::LibraryIndexEntry entry;
+        entry.path = f.path;
+        entry.size = (uint32_t)f.size;
+        indexEntries.push_back(entry);
+    }
+
+    // Persist so the next launch (unless woken from a fresh power-on or
+    // marked dirty by a file change) can skip this scan entirely.
+    AppStorage::saveLibraryIndex("/books", indexEntries);
+}
+
+void EReaderApp::rebuildParsedLibraryItems() {
+    m_parsedLibraryItems.clear();
+
+    EBookmarkManager::getInstance().initialize();
+    const auto& bmarks = EBookmarkManager::getInstance().getBookmarks();
+
+    for (auto& f : m_libraryFiles) {
+        std::string lowerName = f.name;
+        for (char& c : lowerName) c = tolower(c);
+        bool isEpub = lowerName.length() >= 5 && lowerName.substr(lowerName.length() - 5) == ".epub";
 
         LibraryItem item;
         item.file = f;
         item.title = f.name;
         item.author = "Unknown Author";
-        
+
         size_t dotPos = item.title.find_last_of('.');
         if (dotPos != std::string::npos) {
             item.title = item.title.substr(0, dotPos);
         }
-        
-        EBookmarkManager::getInstance().initialize();
-        const auto& bmarks = EBookmarkManager::getInstance().getBookmarks();
+
         for (const auto& b : bmarks) {
             if (b.isbn == item.title) {
                 if (!b.title.empty()) item.title = b.title;
@@ -342,7 +389,7 @@ void EReaderApp::updateLibraryItems() {
                 break;
             }
         }
-        
+
         // Use the file's own fully-qualified path (not "/books/" + name) so
         // bookmarks for books in nested subdirectories resolve correctly.
         std::string runtimePath = AppStorage::toRuntimePath(f.path);
@@ -369,14 +416,14 @@ void EReaderApp::updateLibraryItems() {
                 item.completionPercent = 0;
             }
         }
-        
+
         if (item.completionPercent >= 97) {
             item.completionPercent = -100;
         }
-        
+
         m_parsedLibraryItems.push_back(item);
     }
-    
+
     // Sort
     for (size_t i = 0; i < m_parsedLibraryItems.size(); i++) {
         for (size_t j = i + 1; j < m_parsedLibraryItems.size(); j++) {
@@ -398,10 +445,13 @@ void EReaderApp::updateLibraryItems() {
 }
 
 void EReaderApp::drawLibrary() {
-    // Scan for books BEFORE starting the full-screen draw, since a slow scan
-    // may itself need to show a one-time full-screen "Scanning..." progress
-    // screen (which would conflict with an already-in-progress full-screen draw).
-    updateLibraryItems();
+    // Only rebuild the in-memory list (titles/progress/sort) here - the disk
+    // scan-or-cache decision (updateLibraryItems) already ran once in
+    // onCreate(). Re-running a full recursive SD scan on every library
+    // redraw (sort change, paging, returning from reading) is what made the
+    // library feel like it had crashed; nothing about those interactions can
+    // change which files exist on disk.
+    rebuildParsedLibraryItems();
 
     UIFramework::performFullScreenDraw(framebuffer, [this]() {
         int w = DisplayHAL::getWidth();

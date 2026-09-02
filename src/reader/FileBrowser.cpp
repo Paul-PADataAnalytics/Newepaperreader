@@ -141,6 +141,7 @@ void FileBrowser::scanRecursiveHelper(const std::string& path, std::vector<FileI
 
     File file = dir.openNextFile();
     while (file) {
+        if (onProgress) onProgress();
         std::string rawName = file.name();
         // Arduino's SD library can return either a bare filename or a path;
         // defensively extract just the basename.
@@ -178,6 +179,7 @@ void FileBrowser::scanRecursiveHelper(const std::string& path, std::vector<FileI
     if (d) {
         struct dirent* entry;
         while ((entry = readdir(d)) != nullptr) {
+            if (onProgress) onProgress();
             std::string name = entry->d_name;
             if (name == "." || name == "..") continue;
             if (name.length() > 0 && name[0] == '.') continue;

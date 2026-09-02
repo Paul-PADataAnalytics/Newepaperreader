@@ -85,6 +85,15 @@ private:
 
     void prepareTypographyForReading();
     void updateLibraryItems();
+    // Full recursive SD scan (slow) - only called when a cached index isn't
+    // usable (see AppStorage::loadLibraryIndex). Populates m_libraryFiles and
+    // persists the result so most future launches can skip this entirely.
+    void rescanLibraryFromDisk();
+    // Rebuilds m_parsedLibraryItems (titles/authors/progress %) from the
+    // already-known m_libraryFiles and re-sorts - no disk directory walk, so
+    // it's cheap enough to call on every library redraw (sort/page change,
+    // returning from reading, etc.).
+    void rebuildParsedLibraryItems();
     void drawLibrary();
     void drawReading();
     void openBook(int index);

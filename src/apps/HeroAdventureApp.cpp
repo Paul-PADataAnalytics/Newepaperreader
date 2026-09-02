@@ -63,7 +63,7 @@ void HeroAdventureApp::renderScreenFull() {
         uint8_t fg = UIFramework::getForegroundColor();
         
         // Draw title bar
-        UIFramework::drawTopBar(framebuffer, currentScreen.title.c_str(), 0);
+        UIFramework::drawTopBar(framebuffer, currentScreen.title.c_str());
         
         // Draw main content
         int y = 60;

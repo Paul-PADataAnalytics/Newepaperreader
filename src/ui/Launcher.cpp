@@ -162,38 +162,24 @@ void Launcher::drawMenu() {
         int w = DisplayHAL::getWidth();
         int h = DisplayHAL::getHeight();
 
-        // 1. Top Status Bar: Title + Date & Time
+        // 1. Top Status Bar: Title + shared live Date/Time/Battery status
         typography.setFontSize(34.0f);
         typography.renderText("LilyGo System v2.3.0", 30, 10, framebuffer);
 
-        // Format current date and time
-        time_t rawtime;
-        time(&rawtime);
-        struct tm* timeinfo = localtime(&rawtime);
-        char timeStr[64];
-        if (timeinfo && timeinfo->tm_year > 70) {
-            strftime(timeStr, sizeof(timeStr), "%a %b %d | %I:%M %p", timeinfo);
-        } else {
-            snprintf(timeStr, sizeof(timeStr), "No Time Set");
-        }
+        UIFramework::drawSystemStatus(framebuffer, w - 20, 18, 24.0f, 0x03, /*includeDate=*/true);
 
-        typography.setFontSize(24.0f);
-        typography.renderText(timeStr, 290, 18, framebuffer, 0x03);
-
-        // Render Battery & RAM / System stats on far right
-        char statsStr[128];
-        int battPct = DisplayHAL::getBatteryPercent();
-        const char* chargeIcon = DisplayHAL::isCharging() ? "+" : "";
+        // Render extra Heap / native build stat on its own line beneath the
+        // shared status (heap is a Launcher-only debug stat, not part of the
+        // common system status service).
+        char heapStr[64];
 #ifndef NATIVE_TESTING
-        snprintf(statsStr, sizeof(statsStr), "Batt:%d%%%s | Heap:%dKB", 
-                 battPct, chargeIcon, (int)(ESP.getFreeHeap() / 1024));
+        snprintf(heapStr, sizeof(heapStr), "Heap:%dKB", (int)(ESP.getFreeHeap() / 1024));
 #else
-        snprintf(statsStr, sizeof(statsStr), "Batt:%d%%%s | Native", battPct, chargeIcon);
+        snprintf(heapStr, sizeof(heapStr), "Native");
 #endif
-        typography.setFontSize(18.0f);
-        int statsW = typography.measureText(statsStr);
-        typography.renderText(statsStr, w - statsW - 20, 22, framebuffer, 0x05); // Grey color
-
+        typography.setFontSize(16.0f);
+        int heapW = typography.measureText(heapStr);
+        typography.renderText(heapStr, w - heapW - 20, 42, framebuffer, 0x05); // Grey color
 
         DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
 

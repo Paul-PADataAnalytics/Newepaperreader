@@ -17,11 +17,12 @@ public:
     // right (via drawSystemStatus), and a divider line underneath.
     static void drawTopBar(uint8_t *framebuffer, const char* title);
 
-    // Renders the live system status text ("H:MM AM/PM | NN%[+]") right-aligned
-    // so its right edge sits at `rightX`. This is the single source of truth
-    // for time/battery display — apps must call this rather than hardcoding
+    // Renders the live system status text ("H:MM AM/PM | NN%[+]", or with
+    // includeDate=true "Day Mon DD | H:MM AM/PM | NN%[+]") right-aligned so
+    // its right edge sits at `rightX`. This is the single source of truth for
+    // time/battery display — apps must call this rather than hardcoding
     // placeholder values.
-    static void drawSystemStatus(uint8_t *framebuffer, int rightX, int y, float fontSize, uint8_t color);
+    static void drawSystemStatus(uint8_t *framebuffer, int rightX, int y, float fontSize, uint8_t color, bool includeDate = false);
 
     // Draws a progress bar at the bottom
     static void drawProgressBar(uint8_t *framebuffer, float progress, const char* label);

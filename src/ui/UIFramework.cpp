@@ -12,21 +12,21 @@ void UIFramework::init() {
 // Single source of truth for the "live system status" text (current time +
 // battery). Apps must call this instead of hardcoding time/battery strings.
 // Renders right-aligned so its right edge sits at `rightX`.
-void UIFramework::drawSystemStatus(uint8_t *framebuffer, int rightX, int y, float fontSize, uint8_t color) {
+void UIFramework::drawSystemStatus(uint8_t *framebuffer, int rightX, int y, float fontSize, uint8_t color, bool includeDate) {
     time_t rawtime;
     time(&rawtime);
     struct tm* timeinfo = localtime(&rawtime);
-    char timeStr[16];
+    char timeStr[32];
     if (timeinfo && timeinfo->tm_year > 70) {
-        strftime(timeStr, sizeof(timeStr), "%I:%M %p", timeinfo);
+        strftime(timeStr, sizeof(timeStr), includeDate ? "%a %b %d | %I:%M %p" : "%I:%M %p", timeinfo);
     } else {
-        snprintf(timeStr, sizeof(timeStr), "--:--");
+        snprintf(timeStr, sizeof(timeStr), includeDate ? "No Time Set" : "--:--");
     }
 
     int battPct = DisplayHAL::getBatteryPercent();
     const char* chargeIcon = DisplayHAL::isCharging() ? "+" : "";
 
-    char statusStr[48];
+    char statusStr[64];
     snprintf(statusStr, sizeof(statusStr), "%s | %d%%%s", timeStr, battPct, chargeIcon);
 
     typography.setFontSize(fontSize);

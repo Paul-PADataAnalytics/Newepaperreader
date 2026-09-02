@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'home_screen.dart';
 import 'gutenberg_screen.dart';
 import 'ble_sync_screen.dart';
+import 'device_library_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -16,6 +17,7 @@ class _MainScreenState extends State<MainScreen> {
   final List<Widget> _screens = [
     const HomeScreen(),
     const GutenbergScreen(),
+    const DeviceLibraryScreen(),
     const BleSyncScreen(),
   ];
 
@@ -42,6 +44,10 @@ class _MainScreenState extends State<MainScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.search),
             label: 'Gutenberg',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.sd_storage),
+            label: 'Library',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.bluetooth),

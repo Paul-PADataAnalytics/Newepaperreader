@@ -7,6 +7,30 @@ import '../main.dart';
 import '../models/book_record.dart';
 import 'book_storage_service.dart';
 
+/// A single ebook file as reported by the device's on-SD library index.
+class DeviceLibraryEntry {
+  final String name;
+  final String path;
+  final int size;
+
+  DeviceLibraryEntry({required this.name, required this.path, required this.size});
+
+  factory DeviceLibraryEntry.fromJson(Map<String, dynamic> json) => DeviceLibraryEntry(
+        name: json['name'] ?? '',
+        path: json['path'] ?? '',
+        size: json['size'] ?? 0,
+      );
+}
+
+/// Result of a GET_LIBRARY request: the known books plus whether the
+/// device's cache is stale (it will rescan next time its e-reader app opens).
+class DeviceLibraryResult {
+  final List<DeviceLibraryEntry> books;
+  final bool stale;
+
+  DeviceLibraryResult({required this.books, required this.stale});
+}
+
 class BleService {
   static final BleService _instance = BleService._internal();
   factory BleService() => _instance;
@@ -230,6 +254,51 @@ class BleService {
     final value = await _readCharacteristic!.read();
     if (value.isEmpty) return null;
     return utf8.decode(value);
+  }
+
+  /// Asks the device to report its cached SD card book library (does not
+  /// force a fresh scan - it reuses the same cache the e-reader app itself
+  /// relies on) and returns the parsed entries. Returns an empty list if not
+  /// connected or the response can't be parsed.
+  Future<DeviceLibraryResult> getLibrary() async {
+    if (!isConnected) return DeviceLibraryResult(books: [], stale: false);
+    await _writeJson({"t": "GET_LIBRARY"});
+    // Give the firmware a brief moment to populate the read characteristic
+    // before we read it back.
+    await Future.delayed(const Duration(milliseconds: 200));
+    final jsonStr = await readDeviceProgress();
+    if (jsonStr == null || jsonStr.isEmpty) return DeviceLibraryResult(books: [], stale: false);
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is Map<String, dynamic> && decoded['t'] == 'LIBRARY') {
+        final books = (decoded['books'] as List<dynamic>? ?? [])
+            .map((e) => DeviceLibraryEntry.fromJson(e as Map<String, dynamic>))
+            .toList();
+        return DeviceLibraryResult(books: books, stale: decoded['stale'] == true);
+      }
+    } catch (e) {
+      // Ignore malformed responses; caller sees an empty list.
+    }
+    return DeviceLibraryResult(books: [], stale: false);
+  }
+
+  /// Asks the device to delete a book file (by bare file name, e.g.
+  /// "Dune.epub") from its /books folder. Returns true on success.
+  Future<bool> deleteLibraryFile(String name) async {
+    if (!isConnected) return false;
+    await _writeJson({"t": "DELETE_FILE", "name": name});
+    await Future.delayed(const Duration(milliseconds: 200));
+    final jsonStr = await readDeviceProgress();
+    if (jsonStr == null || jsonStr.isEmpty) return false;
+    try {
+      final decoded = jsonDecode(jsonStr);
+      if (decoded is Map<String, dynamic> && decoded['t'] == 'DELETE_RESULT') {
+        return decoded['ok'] == true;
+      }
+    } catch (e) {
+      // Fall through to false.
+    }
+    return false;
   }
 
   /// Uploads a file to the device over BLE in small chunks.

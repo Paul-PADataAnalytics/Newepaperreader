@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -16,25 +17,45 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
   final _searchController = TextEditingController();
   List<dynamic> _results = [];
   bool _isLoading = false;
+  bool _hasSearched = false;
+  int _searchGeneration = 0;
 
   void _search() async {
     final query = _searchController.text.trim();
-    if (query.isEmpty) return;
+    if (query.isEmpty || _isLoading) return;
 
-    setState(() => _isLoading = true);
+    final int myGeneration = ++_searchGeneration;
+    setState(() {
+      _isLoading = true;
+      _hasSearched = true;
+    });
 
     try {
-      final response = await http.get(Uri.parse('https://gutendex.com/books/?search=$query'));
-      if (!mounted) return;
+      // gutendex.com's search endpoint is frequently slow (tens of seconds),
+      // so give it real room but still fail with a clear message instead of
+      // spinning forever and looking hung.
+      final response = await http
+          .get(Uri.parse('https://gutendex.com/books/?search=${Uri.encodeQueryComponent(query)}'))
+          .timeout(const Duration(seconds: 45));
+      if (!mounted || myGeneration != _searchGeneration) return;
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() => _results = data['results'] as List<dynamic>);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Search failed: HTTP ${response.statusCode}')),
+        );
       }
+    } on TimeoutException {
+      if (!mounted || myGeneration != _searchGeneration) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Project Gutenberg is taking too long to respond. Please try again.'),
+      ));
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || myGeneration != _searchGeneration) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Search error: $e')));
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted && myGeneration == _searchGeneration) setState(() => _isLoading = false);
     }
   }
 
@@ -108,7 +129,7 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Downloading $fileName...')));
 
     try {
-      final response = await http.get(Uri.parse(url));
+      final response = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
       if (response.statusCode == 200 || response.statusCode == 302) {
         Directory? dir = await getDownloadsDirectory();
         dir ??= await getApplicationDocumentsDirectory();
@@ -117,8 +138,38 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
         await file.writeAsBytes(response.bodyBytes);
 
         if (!mounted) return;
+
+        // A plain SnackBarAction is easy to miss and disappears in a few
+        // seconds - ask explicitly (and persistently) whether to upload now
+        // when we're connected, instead of relying on the user catching it.
+        if (canUpload && BleService().isConnected) {
+          final shouldUpload = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              backgroundColor: const Color(0xFF1B263B),
+              title: const Text('Download complete'),
+              content: Text('$fileName was saved. Upload it to your EPD-Reader now?'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Not now')),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF00B4D8)),
+                  child: const Text('Upload to Device'),
+                ),
+              ],
+            ),
+          );
+          if (shouldUpload == true) {
+            await _uploadFile(file, fileName);
+            return;
+          }
+        }
+
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Saved to ${file.path}'),
+          content: Text(canUpload
+              ? 'Saved to ${file.path}. Connect via BLE Sync and upload it from the Library tab any time.'
+              : 'Saved to ${file.path}'),
           action: canUpload && BleService().isConnected
               ? SnackBarAction(
                   label: 'Upload to Device',
@@ -130,6 +181,10 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: ${response.statusCode}')));
         }
+      }
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Download timed out. Please try again.')));
       }
     } catch (e) {
       if (mounted) {
@@ -180,32 +235,52 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
                 const SizedBox(width: 8),
                 IconButton(
                   icon: const Icon(Icons.search, size: 32, color: Color(0xFF00B4D8)),
-                  onPressed: _search,
+                  onPressed: _isLoading ? null : _search,
                 ),
               ],
             ),
           ),
           if (_isLoading)
-            const LinearProgressIndicator(),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _results.length,
-              itemBuilder: (context, index) {
-                final book = _results[index];
-                final authors = (book['authors'] as List).map((a) => a['name']).join(', ');
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  color: const Color(0xFF1B263B),
-                  child: ListTile(
-                    title: Text(book['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text('By $authors\nDownloads: ${book['download_count']}'),
-                    trailing: const Icon(Icons.download),
-                    onTap: () => _showDownloadOptions(book),
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8.0),
+              child: Column(
+                children: [
+                  LinearProgressIndicator(),
+                  SizedBox(height: 8),
+                  Text(
+                    'Searching Project Gutenberg… this can take up to a minute.',
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                    textAlign: TextAlign.center,
                   ),
-                );
-              },
+                ],
+              ),
             ),
-          ),
+          if (!_isLoading && _hasSearched && _results.isEmpty)
+            const Expanded(
+              child: Center(
+                child: Text('No results found.', style: TextStyle(color: Colors.grey)),
+              ),
+            )
+          else
+            Expanded(
+              child: ListView.builder(
+                itemCount: _results.length,
+                itemBuilder: (context, index) {
+                  final book = _results[index];
+                  final authors = (book['authors'] as List).map((a) => a['name']).join(', ');
+                  return Card(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    color: const Color(0xFF1B263B),
+                    child: ListTile(
+                      title: Text(book['title'], style: const TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: Text('By $authors\nDownloads: ${book['download_count']}'),
+                      trailing: const Icon(Icons.download),
+                      onTap: () => _showDownloadOptions(book),
+                    ),
+                  );
+                },
+              ),
+            ),
         ],
       ),
     );

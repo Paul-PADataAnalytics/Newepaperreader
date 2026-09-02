@@ -5,6 +5,8 @@
 #include <mutex>
 #include <string>
 #include <cstring>
+#include <algorithm>
+#include <cctype>
 
 #ifndef NATIVE_TESTING
 #include <sys/time.h>
@@ -122,6 +124,70 @@ static void processIncomingSystemMessage(const std::string& msg) {
 #else
         printf("AppComm: Sent %d bookmarks to companion app\n", (int)books.size());
 #endif
+    } else if (msg.find("\"GET_LIBRARY\"") != std::string::npos) {
+        // Report the last-known set of books on the device. This deliberately
+        // reuses the same cached library index the e-reader app itself relies
+        // on (see AppStorage::loadLibraryIndex) rather than re-scanning the SD
+        // card here - a BLE command handler is the wrong place to pay for a
+        // slow recursive directory walk, and the cache is kept fresh by the
+        // same dirty-marking used everywhere else (uploads, deletes, moves).
+        AppStorage::LibraryIndex index = AppStorage::loadLibraryIndex("/books");
+        JsonDocument doc;
+        JsonObject root = doc.to<JsonObject>();
+        root["t"] = "LIBRARY";
+        root["stale"] = !index.valid;
+        JsonArray arr = root["books"].to<JsonArray>();
+        for (const auto& entry : index.entries) {
+            std::string name = entry.path;
+            size_t slash = name.find_last_of('/');
+            if (slash != std::string::npos) name = name.substr(slash + 1);
+            JsonObject obj = arr.add<JsonObject>();
+            obj["name"] = name;
+            obj["path"] = entry.path;
+            obj["size"] = entry.size;
+        }
+        std::string jsonOut;
+        serializeJson(doc, jsonOut);
+        AppComm::setReadBuffer(jsonOut);
+#ifndef NATIVE_TESTING
+        Serial.printf("AppComm: Sent library (%d books) to companion app\n", (int)index.entries.size());
+#else
+        printf("AppComm: Sent library (%d books) to companion app\n", (int)index.entries.size());
+#endif
+    } else if (msg.find("\"DELETE_FILE\"") != std::string::npos) {
+        JsonDocument doc;
+        if (!deserializeJson(doc, msg)) {
+            std::string type = doc["t"] | "";
+            if (type == "DELETE_FILE") {
+                std::string name = doc["name"] | "";
+                bool ok = false;
+                std::string error = "Empty file name";
+                if (!name.empty()) {
+                    // Names arrive as the bare filename (e.g. "foo.epub");
+                    // reject anything that looks like it's trying to escape
+                    // the books directory.
+                    if (name.find('/') != std::string::npos || name.find("..") != std::string::npos) {
+                        error = "Invalid file name";
+                    } else {
+                        std::string path = AppStorage::toRuntimePath("/books/" + name);
+                        ok = AppStorage::deleteFile(path, error);
+                    }
+                }
+                JsonDocument resultDoc;
+                resultDoc["t"] = "DELETE_RESULT";
+                resultDoc["name"] = name;
+                resultDoc["ok"] = ok;
+                if (!ok) resultDoc["error"] = error;
+                std::string jsonOut;
+                serializeJson(resultDoc, jsonOut);
+                AppComm::setReadBuffer(jsonOut);
+#ifndef NATIVE_TESTING
+                Serial.printf("AppComm: Delete '%s' -> %s\n", name.c_str(), ok ? "ok" : error.c_str());
+#else
+                printf("AppComm: Delete '%s' -> %s\n", name.c_str(), ok ? "ok" : error.c_str());
+#endif
+            }
+        }
     }
 }
 

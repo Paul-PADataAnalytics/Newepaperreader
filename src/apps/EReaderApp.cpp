@@ -203,7 +203,6 @@ void EReaderApp::onCreate() {
 
     NavigationManager::getInstance().navigateTo(NavTarget{0, STATE_LIB, false, ""});
 
-
 #ifndef NATIVE_TESTING
     if (!typography.loadFont("/sd/data/Roboto-Regular.ttf", 48.0f)) {
         typography.loadFontFromMemory(data_Roboto_Regular_ttf, data_Roboto_Regular_ttf_len, 48.0f);
@@ -215,6 +214,15 @@ void EReaderApp::onCreate() {
         }
     }
 #endif
+
+    // Loading the font above is now a cheap no-op after the very first time
+    // (see TypographyEngine::loadFont), so this text is safe to draw
+    // immediately. What's left - the cache-vs-rescan check and per-book
+    // bookmark reads in updateLibraryItems() - still touches the SD card and
+    // can take a perceptible moment even on a cache hit, so give instant
+    // feedback before doing any of that rather than leaving the screen
+    // looking frozen/crashed.
+    drawOpeningLibraryScreen();
 
     updateLibraryItems();
 }
@@ -274,6 +282,27 @@ void EReaderApp::updateScanProgressCount(int dirsVisited) {
         std::string sub = std::to_string(dirsVisited) + " folders scanned so far";
         int subW = typography.measureText(sub);
         typography.renderText(sub, x + (SCAN_PROGRESS_REGION_W - subW) / 2, y, framebuffer, fg);
+    });
+}
+
+void EReaderApp::drawOpeningLibraryScreen() {
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+    const int regionW = 460;
+    const int regionH = 40;
+    int x = (w - regionW) / 2;
+    int y = h / 2 - 20;
+
+    // Fast partial update, not a full-screen draw: this message only needs
+    // to appear quickly, and a second full e-ink refresh right on top of the
+    // one drawLibrary() performs moments later would make entering the app
+    // feel slower, not faster.
+    UIFramework::performFastPartialUpdate(framebuffer, x, y, regionW, regionH, [this, x, y, regionW]() {
+        uint8_t fg = UIFramework::getForegroundColor();
+        typography.setFontSize(28.0f);
+        std::string msg = "Opening library...";
+        int msgW = typography.measureText(msg);
+        typography.renderText(msg, x + (regionW - msgW) / 2, y, framebuffer, fg);
     });
 }
 

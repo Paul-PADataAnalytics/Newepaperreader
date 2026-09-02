@@ -38,6 +38,22 @@ TypographyEngine::~TypographyEngine() {
 }
 
 bool TypographyEngine::loadFont(const char* filepath, float size) {
+    // This engine is a single process-global instance shared by every app,
+    // and main.cpp already loads the one shared UI font into it once at
+    // system boot. Every app used to call loadFont() again unconditionally
+    // on every entry (e.g. EReaderApp::onCreate() on every single launch,
+    // including waking from sleep straight into the library) which re-read
+    // and re-parsed the entire TTF file from SD/flash for no reason - a very
+    // noticeable, avoidable stall - and leaked the previous fontBuffer each
+    // time since nothing freed it before overwriting. Since this class only
+    // ever holds one font at a time, skip straight past the reload once
+    // something is already loaded; callers that just want a different
+    // rendering size should use setFontSize() instead of reloading.
+    if (fontBuffer != nullptr) {
+        this->fontSize = size;
+        return true;
+    }
+
     this->fontSize = size;
     
     FILE* f = fopen(filepath, "rb");

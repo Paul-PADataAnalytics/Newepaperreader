@@ -103,4 +103,10 @@ private:
     void openBookAtRuntimePath(const std::string& path);
     void drawScanningProgressScreen(int dirsVisited);
     void updateScanProgressCount(int dirsVisited);
+    // Immediate "please wait" feedback shown the instant the app is entered,
+    // before any SD card work (font load skip-check, cache load, per-book
+    // bookmark reads) has a chance to run - see onCreate(). Uses a fast
+    // partial update, not a full-screen draw, so it never adds a second
+    // slow e-ink refresh cycle on top of the one drawLibrary() already does.
+    void drawOpeningLibraryScreen();
 };

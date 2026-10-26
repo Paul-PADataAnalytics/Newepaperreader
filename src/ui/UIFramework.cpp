@@ -2,6 +2,7 @@
 extern TypographyEngine typography;
 #include "UIFramework.h"
 #include "DisplayHAL.h"
+#include "UIKit.h"
 #include <time.h>
 #include <cstdio>
 
@@ -35,46 +36,22 @@ void UIFramework::drawSystemStatus(uint8_t *framebuffer, int rightX, int y, floa
 }
 
 void UIFramework::drawTopBar(uint8_t *framebuffer, const char* title) {
-    int w = DisplayHAL::getWidth();
-    uint8_t fg = getForegroundColor();
-
-    typography.setFontSize(34.0f);
-    typography.renderText(title, 30, 10, framebuffer, fg);
-
-    drawSystemStatus(framebuffer, w - 20, 18, 22.0f, fg);
-
-    DisplayHAL::drawHLine(0, 60, w, fg, framebuffer); // Divider under the bar
+    (void)framebuffer;
+    UI::header(title ? title : "", true);
 }
 
 void UIFramework::drawProgressBar(uint8_t *framebuffer, float progress, const char* label) {
-    int barWidth = EPD_WIDTH - 40;
-    int barHeight = 8;
-    int x = 20;
-    int y = EPD_HEIGHT - 20;
-    
-    // Outline
-    DisplayHAL::drawRect(x, y, barWidth, barHeight, 0x00, framebuffer);
-    // Fill based on progress (0.0 to 1.0)
-    int fillWidth = (int)(barWidth * progress);
-    DisplayHAL::fillRect(x, y, fillWidth, barHeight, 0x00, framebuffer);
+    (void)framebuffer;
+    (void)label;
+    int w = DisplayHAL::getWidth();
+    int h = DisplayHAL::getHeight();
+    UI::progressBar(UI::MARGIN, h - 24, w - 2 * UI::MARGIN, 6, progress);
 }
 
 void UIFramework::drawButton(uint8_t *framebuffer, int x, int y, int w, int h, const char* label, bool inverted) {
-    uint8_t bgColor = inverted ? 0x00 : 0xEE; // Black if inverted, very light grey otherwise
-    uint8_t fgColor = inverted ? 0xFF : 0x00; // White text if inverted, black text otherwise
-    
-    // Background
-    DisplayHAL::fillRect(x, y, w, h, bgColor, framebuffer);
-    // Border
-    DisplayHAL::drawRect(x, y, w, h, fgColor, framebuffer);
-    
-    if (label && label[0] != '\0') {
-        typography.setFontSize(22.0f);
-        int tw = typography.measureText(label);
-        int tx = x + (w - tw) / 2;
-        int ty = y + (h - 22) / 2;
-        typography.renderText(label, tx, ty, framebuffer, fgColor);
-    }
+    (void)framebuffer;
+    UI::button(UI::Rect(x, y, w, h), label ? label : "",
+               inverted ? UI::ButtonStyle::PRIMARY : UI::ButtonStyle::SECONDARY);
 }
 
 uint8_t UIFramework::getBackgroundColor() {

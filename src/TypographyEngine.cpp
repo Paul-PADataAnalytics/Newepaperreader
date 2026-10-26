@@ -139,6 +139,74 @@ void TypographyEngine::setFontSize(float size) {
     this->fontSize = size;
 }
 
+void TypographyEngine::setHorizontalMargins(int left, int right) {
+    this->MARGIN_LEFT = left;
+    this->MARGIN_RIGHT = right;
+}
+
+int TypographyEngine::ascent() {
+    if (!fontBuffer) return (int)fontSize;
+    stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
+    float scale = stbtt_ScaleForPixelHeight(info, fontSize);
+    int a, d, g;
+    stbtt_GetFontVMetrics(info, &a, &d, &g);
+    return (int)(a * scale);
+}
+
+int TypographyEngine::lineHeight() {
+    if (!fontBuffer) return (int)fontSize;
+    stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
+    float scale = stbtt_ScaleForPixelHeight(info, fontSize);
+    int a, d, g;
+    stbtt_GetFontVMetrics(info, &a, &d, &g);
+    return (int)(a * scale) - (int)(d * scale) + (int)(g * scale);
+}
+
+int TypographyEngine::renderLine(const char* text, size_t len, int x, int y, uint8_t* framebuffer, uint8_t textColor) {
+    if (!fontBuffer) return 0;
+    textColor &= 0x0F;
+    stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
+    float scale = stbtt_ScaleForPixelHeight(info, fontSize);
+    int asc, desc, gap;
+    stbtt_GetFontVMetrics(info, &asc, &desc, &gap);
+    int baseline = y + (int)(asc * scale);
+    int screenW = DisplayHAL::getWidth();
+    int screenH = DisplayHAL::getHeight();
+    int startX = x;
+
+    size_t i = 0;
+    while (i < len) {
+        uint32_t cp = decodeUTF8(text, len, i);
+        if (cp == '\n' || cp == 0) break;
+        int adv, lsb;
+        stbtt_GetCodepointHMetrics(info, cp, &adv, &lsb);
+        if (x >= screenW) break;
+        int x1, y1, x2, y2;
+        stbtt_GetCodepointBitmapBox(info, cp, scale, scale, &x1, &y1, &x2, &y2);
+        int w = x2 - x1, h = y2 - y1;
+        if (w > 0 && h > 0 && cp != ' ') {
+            uint8_t* bmp = stbtt_GetCodepointBitmap(info, 0, scale, cp, &w, &h, 0, 0);
+            if (bmp) {
+                for (int r = 0; r < h; ++r) {
+                    int py = baseline + y1 + r;
+                    if (py < 0 || py >= screenH) continue;
+                    for (int c = 0; c < w; ++c) {
+                        uint8_t alpha = bmp[r * w + c];
+                        if (!alpha) continue;
+                        int px = x + x1 + c;
+                        if (px < 0 || px >= screenW) continue;
+                        uint8_t bg = getPixel(px, py, framebuffer);
+                        drawPixel(px, py, (uint8_t)((textColor * alpha + bg * (255 - alpha)) / 255), framebuffer);
+                    }
+                }
+                stbtt_FreeBitmap(bmp, nullptr);
+            }
+        }
+        x += (int)(adv * scale);
+    }
+    return x - startX;
+}
+
 void TypographyEngine::setTopMargin(int pixels) {
     this->MARGIN_TOP = pixels;
 }
@@ -153,6 +221,7 @@ void TypographyEngine::renderText(const std::string& text, int startX, int start
 
 void TypographyEngine::renderText(const char* text, size_t len, int startX, int startY, uint8_t* framebuffer, uint8_t textColor) {
     if (!fontBuffer) return; // Font failed to load
+    textColor &= 0x0F; // framebuffer colours are 4-bit; wider values break AA blending
     
     stbtt_fontinfo* info = (stbtt_fontinfo*)fontInfo;
     

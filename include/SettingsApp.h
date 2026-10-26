@@ -3,12 +3,6 @@
 #include "Application.h"
 #include <string>
 
-enum SettingsPage {
-    PAGE_MAIN,
-    PAGE_BLE,
-    PAGE_EREADER
-};
-
 class SettingsApp : public Application {
 public:
     SettingsApp() = default;
@@ -21,18 +15,19 @@ public:
     virtual void handleTouch(int x, int y) override;
     virtual void update() override;
 
-private:
-    SettingsPage m_page = PAGE_MAIN;
-    bool m_bleActive = false;
-    std::string m_syncStatus = "";
-    bool m_processingTouch = false;
-    bool m_lastDrawnBleActive = false;
-    std::string m_lastDrawnStatus = "";
-    bool m_hasDrawn = false;
-    SettingsPage m_lastDrawnPage = PAGE_MAIN;
+    // Makes the next SettingsApp instance open on the Bluetooth tab.
+    static void openOnBluetoothTab() { s_openBluetooth = true; }
 
-    void drawMainSettings();
-    void drawBleSettings(bool forceFullRefresh);
-    void drawEReaderSettings();
-    void drawLogLineOnly();
+private:
+    enum Tab { TAB_DISPLAY = 0, TAB_POWER, TAB_BLUETOOTH, TAB_ABOUT, TAB_COUNT };
+
+    static bool s_openBluetooth;
+    Tab m_tab = TAB_DISPLAY;
+    std::string m_lastBleStatus;
+    uint32_t m_lastStatusCheck = 0;
+
+    void drawContent();
+    void redrawContent();
+    std::string bleStatusText() const;
+    void drawBleStatusCard(int y);
 };

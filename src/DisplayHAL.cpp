@@ -8,9 +8,12 @@ static TouchDrvGT911 touch;
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
 #include <Wire.h>
+#include <driver/gpio.h>
 #include "utilities.h"
+#include "PowerManager.h"
 #else
 #include <unistd.h>
+#include <string.h>
 #endif
 
 static int simulatedTouchX = -1;
@@ -123,15 +126,43 @@ bool DisplayHAL::getTouch(int &x, int &y) {
 }
 
 #ifndef NATIVE_TESTING
-#include <Arduino.h>
 
+// The panel's high-voltage rails (and the battery sense divider, which sits
+// behind the same POWER_EN switch) are only switched on while the panel is
+// actually being driven. They used to stay on for the whole time the device
+// was awake, which kept the boost converters running for no reason.
+static int s_epdPowerDepth = 0;
+static float s_battVoltage = -1.0f;
+static uint32_t s_battSampleMs = 0;
+static const uint32_t BATTERY_SAMPLE_INTERVAL_MS = 60000;
+
+static void sampleBatteryWhilePowered() {
+    uint32_t mv = analogReadMilliVolts(BATT_PIN);
+    s_battVoltage = (mv * 2) / 1000.0f; // 1:2 divider
+    s_battSampleMs = millis();
+    if (s_battSampleMs == 0) s_battSampleMs = 1;
+}
+
+struct EpdPowerScope {
+    EpdPowerScope() {
+        if (s_epdPowerDepth++ == 0) {
+            PowerManager::boostCpu();
+            epd_poweron();
+        }
+    }
+    ~EpdPowerScope() {
+        if (--s_epdPowerDepth == 0) {
+            if (s_battSampleMs == 0 || millis() - s_battSampleMs > BATTERY_SAMPLE_INTERVAL_MS) {
+                sampleBatteryWhilePowered();
+            }
+            epd_poweroff();
+        }
+    }
+};
+#define EPD_POWER_SCOPE() EpdPowerScope _epdPowerScope
 
 void DisplayHAL::init() {
     epd_init();
-    
-    pinMode(TOUCH_INT, INPUT_PULLUP);
-    gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
-    gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
 
     // NOTE: GPIO0 must NEVER be touched here (pinMode/pullup/etc) - it is
     // hard-wired on this board to the 74HCT4094D CFG_STR line used
@@ -141,69 +172,101 @@ void DisplayHAL::init() {
     // strobe its config register - code runs with no crash/error, but the
     // panel never visibly updates again. Confirmed via git bisect + GPIO map
     // in .pio/libdeps/*/LilyGo-EPD47/README.MD ("0 | 74HCT4094D CFG_STR | Free: no").
-    
+
+    // The GT911 is put into its sleep mode before deep sleep (see
+    // prepareForDeepSleep()); a high pulse on INT wakes it back up. Harmless
+    // when it was already awake (cold boot).
+    pinMode(TOUCH_INT, OUTPUT);
+    digitalWrite(TOUCH_INT, HIGH);
+    delay(10);
+    pinMode(TOUCH_INT, INPUT_PULLUP);
+    gpio_pullup_en(static_cast<gpio_num_t>(TOUCH_INT));
+    gpio_pulldown_dis(static_cast<gpio_num_t>(TOUCH_INT));
+
     Wire.begin(BOARD_SDA, BOARD_SCL);
-    
+
     uint8_t touchAddress = 0x14;
     Wire.beginTransmission(0x14);
     if (Wire.endTransmission() == 0) touchAddress = 0x14;
     Wire.beginTransmission(0x5D);
     if (Wire.endTransmission() == 0) touchAddress = 0x5D;
-    
+
     touch.setPins(-1, TOUCH_INT);
     if (touch.begin(Wire, touchAddress, BOARD_SDA, BOARD_SCL)) {
         touch.setMaxCoordinates(EPD_WIDTH, EPD_HEIGHT);
         touch.setSwapXY(true);
         touch.setMirrorXY(false, true);
     } else {
-        printf("Touch initialization failed!\\n");
+        printf("Touch initialization failed!\n");
     }
+    // touch.begin() may have reconfigured INT; restore the pull-up input.
+    pinMode(TOUCH_INT, INPUT_PULLUP);
 }
 
 void DisplayHAL::powerOn() {
-    epd_poweron();
+    // Rails are now switched automatically around every panel operation.
 }
 
 void DisplayHAL::powerOff() {
-    epd_poweroff();
+    if (s_epdPowerDepth == 0) epd_poweroff();
+}
+
+void DisplayHAL::prepareForDeepSleep() {
+    gpio_intr_disable(static_cast<gpio_num_t>(TOUCH_INT));
+    // Zero the whole EPD config register (not just the HV rails), as the
+    // LilyGo deep-sleep reference does - this is what gets the board down
+    // to its ~0.4mA sleep figure.
+    epd_poweroff_all();
+    s_epdPowerDepth = 0;
+    // Command the GT911 into sleep (INT is driven low by sleep()); it would
+    // otherwise keep scanning the panel at several mA all night.
+    touch.sleep();
+    delay(20);
+    Wire.end();
+    gpio_hold_en(static_cast<gpio_num_t>(TOUCH_INT));
+}
+
+void DisplayHAL::dumpVisible(const char* filepath) {
+    (void)filepath;
 }
 
 float DisplayHAL::getBatteryVoltage() {
-    // LilyGo T5 EPD47 S3 battery ADC voltage divider configuration
-    // Battery ADC pin is GPIO 14 (or BATT_PIN / BATT_ADC_PIN depending on board revision)
-    #ifndef BATT_PIN
-    #define BATT_PIN 14
-    #endif
-    
-    // Read raw ADC value (12-bit ADC: 0..4095)
-    uint32_t raw = analogRead(BATT_PIN);
-    
-    // Voltage divider: 2 * (raw / 4095.0) * 3.3V (with 1.1V attenuation factor / divider)
-    float voltage = (float)raw / 4095.0f * 2.0f * 3.3f * 1.1f;
-    return voltage;
+    if (s_battSampleMs == 0 || millis() - s_battSampleMs > BATTERY_SAMPLE_INTERVAL_MS * 5) {
+        EPD_POWER_SCOPE();
+        delay(10); // let the divider settle after POWER_EN switches on
+        sampleBatteryWhilePowered();
+    }
+    return s_battVoltage;
 }
 
 int DisplayHAL::getBatteryPercent() {
+    // Typical single-cell LiPo resting discharge curve.
+    static const float kVolts[] = {4.20f, 4.10f, 4.00f, 3.92f, 3.87f, 3.82f, 3.79f, 3.77f, 3.74f, 3.68f, 3.45f, 3.30f};
+    static const int   kPct[]   = {100,   90,    80,    70,    60,    50,    40,    30,    20,    10,    5,     0};
     float v = getBatteryVoltage();
-    // 820mAh LiPo cell discharge curve mapping: 4.2V = 100%, 3.3V = 0%
-    if (v >= 4.2f) return 100;
-    if (v <= 3.3f) return 0;
-    int pct = (int)(((v - 3.3f) / (4.2f - 3.3f)) * 100.0f);
-    return pct;
+    if (v >= kVolts[0]) return 100;
+    for (int i = 1; i < 12; i++) {
+        if (v >= kVolts[i]) {
+            float t = (v - kVolts[i]) / (kVolts[i - 1] - kVolts[i]);
+            return kPct[i] + (int)(t * (kPct[i - 1] - kPct[i]) + 0.5f);
+        }
+    }
+    return 0;
 }
 
 bool DisplayHAL::isCharging() {
-    // Returns true if battery voltage is at/near charging cutoff threshold (>= 4.25V)
-    return getBatteryVoltage() >= 4.25f;
+    return PowerManager::isUsbConnected() || getBatteryVoltage() >= 4.25f;
 }
 
 
 void DisplayHAL::clear() {
+    EPD_POWER_SCOPE();
     epd_clear();
 }
 
 
 void DisplayHAL::display(uint8_t* framebuffer) {
+    EPD_POWER_SCOPE();
     uint8_t* targetFb = framebuffer;
     uint8_t* invertedFb = nullptr;
     int fbSize = getWidth() * getHeight() / 2;
@@ -221,29 +284,20 @@ void DisplayHAL::display(uint8_t* framebuffer) {
     if (_isPortrait) {
         uint8_t* rotated = allocateFramebuffer();
         if (rotated) {
-            memset(rotated, 0xFF, 960 * 540 / 2);
-            for (int ly = 0; ly < 960; ly++) {
+            // Logical portrait (lx, ly) maps to physical (tx = ly, ty = 539 - lx).
+            // Walk two logical rows at a time so every physical output byte
+            // (two horizontally adjacent physical pixels = two adjacent
+            // logical rows) is written exactly once.
+            for (int ly = 0; ly < 960; ly += 2) {
+                const uint8_t* rowA = targetFb + (ly * 540) / 2;
+                const uint8_t* rowB = targetFb + ((ly + 1) * 540) / 2;
+                int tx = ly; // even
                 for (int lx = 0; lx < 540; lx++) {
-                    int l_idx = (ly * 540 + lx) / 2;
-                    bool l_isOdd = (lx % 2 != 0);
-                    uint8_t color;
-                    // Hardware expects even pixels (x=0) in the LOWER nibble, odd in UPPER nibble
-                    if (l_isOdd) {
-                        color = (targetFb[l_idx] & 0xF0) >> 4;
-                    } else {
-                        color = targetFb[l_idx] & 0x0F;
-                    }
-                    
-                    int tx = ly;
+                    uint8_t a = (lx & 1) ? (rowA[lx >> 1] >> 4) : (rowA[lx >> 1] & 0x0F);
+                    uint8_t b = (lx & 1) ? (rowB[lx >> 1] >> 4) : (rowB[lx >> 1] & 0x0F);
                     int ty = 539 - lx;
-                    int t_idx = (ty * 960 + tx) / 2;
-                    bool t_isOdd = (tx % 2 != 0);
-                    
-                    if (t_isOdd) {
-                        rotated[t_idx] = (rotated[t_idx] & 0x0F) | (color << 4);
-                    } else {
-                        rotated[t_idx] = (rotated[t_idx] & 0xF0) | color;
-                    }
+                    // Hardware expects even pixels in the LOWER nibble.
+                    rotated[(ty * 960 + tx) >> 1] = (uint8_t)((b << 4) | a);
                 }
             }
             epd_draw_grayscale_image(epd_full_screen(), rotated);
@@ -273,9 +327,18 @@ void DisplayHAL::freeFramebuffer(uint8_t* framebuffer) {
 #include <string.h>
 #include <stdio.h>
 
+#define EPD_POWER_SCOPE() do {} while (0)
+
 #ifdef HAS_SDL
 #include <SDL2/SDL.h>
 #endif
+
+// The simulator window is portrait (540 x 960), matching how the device is
+// held. Every frame is converted into this 8-bit "visible" image, which is
+// also what dumpVisible() writes out for automated screenshots.
+static const int VIS_W = EPD_HEIGHT;
+static const int VIS_H = EPD_WIDTH;
+static uint8_t s_visible[EPD_WIDTH * EPD_HEIGHT];
 
 #ifdef HAS_SDL
 static SDL_Window* window = nullptr;
@@ -286,82 +349,61 @@ static bool shouldClose = false;
 
 void DisplayHAL::init() {
     printf("Native DisplayHAL: init()\n");
+    memset(s_visible, 0xFF, sizeof(s_visible));
 #ifdef HAS_SDL
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
         return;
     }
-    window = SDL_CreateWindow("LilyGo-EPD47 Native Mock", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, EPD_WIDTH, EPD_HEIGHT, SDL_WINDOW_SHOWN);
+    window = SDL_CreateWindow("LilyGo-EPD47 Native Mock", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, VIS_W, VIS_H, SDL_WINDOW_SHOWN);
     if (!window) {
         printf("Window could not be created! SDL_Error: %s\n", SDL_GetError());
         return;
     }
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, EPD_WIDTH, EPD_HEIGHT);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, VIS_W, VIS_H);
 #endif
 }
 
 void DisplayHAL::powerOn() {
-    printf("Native DisplayHAL: powerOn()\n");
 }
 
 void DisplayHAL::powerOff() {
-    printf("Native DisplayHAL: powerOff()\n");
+}
+
+void DisplayHAL::prepareForDeepSleep() {
+    printf("Native DisplayHAL: prepareForDeepSleep()\n");
+}
+
+void DisplayHAL::dumpVisible(const char* filepath) {
+    FILE* f = fopen(filepath, "wb");
+    if (!f) return;
+    fprintf(f, "P5\n%d %d\n255\n", VIS_W, VIS_H);
+    fwrite(s_visible, 1, sizeof(s_visible), f);
+    fclose(f);
 }
 
 float DisplayHAL::getBatteryVoltage() {
-    return 4.15f; // Mock nominal 4.15V LiPo battery
+    return 4.05f; // Mock LiPo voltage
 }
 
 int DisplayHAL::getBatteryPercent() {
-    return 95; // Mock 95% battery capacity
+    return 85; // Mock battery capacity
 }
 
 bool DisplayHAL::isCharging() {
     return false; // Mock not charging
 }
 
-
-void DisplayHAL::clear() {
-    printf("Native DisplayHAL: clear()\n");
-#ifdef HAS_SDL
-    if (renderer) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        SDL_RenderClear(renderer);
-        SDL_RenderPresent(renderer);
-    }
-#endif
-}
-
-void DisplayHAL::display(uint8_t* framebuffer) {
-    printf("Native DisplayHAL: display() - updating SDL texture\n");
+static void presentVisible() {
 #ifdef HAS_SDL
     if (!texture || !renderer) return;
-    
-    uint32_t* pixels = new uint32_t[EPD_WIDTH * EPD_HEIGHT];
-    for (int ly = 0; ly < (_isPortrait ? EPD_WIDTH : EPD_HEIGHT); ly++) {
-        for (int lx = 0; lx < (_isPortrait ? EPD_HEIGHT : EPD_WIDTH); lx++) {
-            int l_idx = (ly * (_isPortrait ? EPD_HEIGHT : EPD_WIDTH) + lx) / 2;
-            bool l_isLower = (lx % 2 != 0);
-            uint8_t byteVal = s_darkMode ? ~framebuffer[l_idx] : framebuffer[l_idx];
-            uint8_t color;
-            if (l_isLower) {
-                color = byteVal & 0x0F;
-            } else {
-                color = (byteVal & 0xF0) >> 4;
-            }
-            
-            // Expand to 8-bit
-            uint8_t p = (color << 4) | color;
-            uint32_t argb = (0xFF << 24) | (p << 16) | (p << 8) | p;
-            
-            int tx = _isPortrait ? ly : lx;
-            int ty = _isPortrait ? (EPD_HEIGHT - 1 - lx) : ly;
-            pixels[ty * EPD_WIDTH + tx] = argb;
-        }
+    uint32_t* pixels = new uint32_t[VIS_W * VIS_H];
+    for (int i = 0; i < VIS_W * VIS_H; i++) {
+        uint8_t p = s_visible[i];
+        pixels[i] = (0xFFu << 24) | (p << 16) | (p << 8) | p;
     }
-    
-    SDL_UpdateTexture(texture, nullptr, pixels, EPD_WIDTH * sizeof(uint32_t));
+    SDL_UpdateTexture(texture, nullptr, pixels, VIS_W * sizeof(uint32_t));
     SDL_RenderClear(renderer);
     SDL_RenderCopy(renderer, texture, nullptr, nullptr);
     SDL_RenderPresent(renderer);
@@ -369,33 +411,42 @@ void DisplayHAL::display(uint8_t* framebuffer) {
 #endif
 }
 
+void DisplayHAL::clear() {
+    memset(s_visible, 0xFF, sizeof(s_visible));
+    presentVisible();
+}
+
+void DisplayHAL::display(uint8_t* framebuffer) {
+    int lw = _isPortrait ? EPD_HEIGHT : EPD_WIDTH;
+    int lh = _isPortrait ? EPD_WIDTH : EPD_HEIGHT;
+    for (int ly = 0; ly < lh; ly++) {
+        for (int lx = 0; lx < lw; lx++) {
+            int l_idx = (ly * lw + lx) / 2;
+            uint8_t byteVal = s_darkMode ? (uint8_t)~framebuffer[l_idx] : framebuffer[l_idx];
+            // Native mock packs even pixels in the UPPER nibble.
+            uint8_t color = (lx % 2 != 0) ? (byteVal & 0x0F) : ((byteVal & 0xF0) >> 4);
+            int vx, vy;
+            if (_isPortrait) {
+                vx = lx;
+                vy = ly;
+            } else {
+                // Physical landscape buffer seen on a portrait-held panel.
+                vx = (EPD_HEIGHT - 1) - ly;
+                vy = lx;
+            }
+            s_visible[vy * VIS_W + vx] = (uint8_t)((color << 4) | color);
+        }
+    }
+    presentVisible();
+}
+
 uint8_t* DisplayHAL::allocateFramebuffer() {
-    printf("Native DisplayHAL: allocateFramebuffer()\n");
     return (uint8_t*)malloc(EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
 void DisplayHAL::freeFramebuffer(uint8_t* framebuffer) {
-    printf("Native DisplayHAL: freeFramebuffer()\n");
     free(framebuffer);
 }
-
-// Simple implementations of primitives for the mocked framebuffer
-static void setPixel(int x, int y, uint8_t color, uint8_t* framebuffer) {
-    if (x < 0 || x >= EPD_WIDTH || y < 0 || y >= EPD_HEIGHT) return;
-    int index = (y * EPD_WIDTH + x) / 2;
-    bool isLower = (x % 2 != 0); // Depend on endianness of epd_driver, this is a guess
-    
-    // We only care about 0xFF (white) and 0x00 (black) for UI elements anyway for now.
-    uint8_t c = color & 0x0F;
-    if (isLower) {
-        framebuffer[index] = (framebuffer[index] & 0xF0) | c;
-    } else {
-        framebuffer[index] = (framebuffer[index] & 0x0F) | (c << 4);
-    }
-}
-
-
-
 
 void DisplayHAL::handleEvents() {
 #ifdef HAS_SDL
@@ -404,8 +455,11 @@ void DisplayHAL::handleEvents() {
         if (e.type == SDL_QUIT) {
             shouldClose = true;
         } else if (e.type == SDL_MOUSEBUTTONDOWN) {
-            simulatedTouchX = e.button.x;
-            simulatedTouchY = e.button.y;
+            // Window is portrait; convert to the raw (landscape) touch
+            // controller coordinates that getTouch() expects, exactly like
+            // the real GT911 reports them.
+            simulatedTouchX = e.button.y;
+            simulatedTouchY = (EPD_HEIGHT - 1) - e.button.x;
         }
     }
 #endif
@@ -490,6 +544,7 @@ void DisplayHAL::fillRect(int x, int y, int width, int height, uint8_t color, ui
 
 void DisplayHAL::updateScreenFull() {
     if (!frontBuffer || !backBuffer) return;
+    EPD_POWER_SCOPE();
     
 #ifdef NATIVE_TESTING
     if (s_debugScreen) {
@@ -512,6 +567,7 @@ void DisplayHAL::updateScreenFull() {
 
 void DisplayHAL::updateScreenPartial() {
     if (!frontBuffer || !backBuffer) return;
+    EPD_POWER_SCOPE();
     int w = getWidth();
     int h = getHeight();
     
@@ -596,6 +652,7 @@ void DisplayHAL::updateScreenPartial() {
 
 void DisplayHAL::updateScreenFast() {
     if (!frontBuffer || !backBuffer) return;
+    EPD_POWER_SCOPE();
     int w = getWidth();
     int h = getHeight();
     

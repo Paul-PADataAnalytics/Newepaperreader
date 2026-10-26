@@ -1,582 +1,628 @@
 #include "AppComm.h"
 #include "EBookmarkManager.h"
-#include "reader/AppStorage.h"
+#include "PowerManager.h"
+#include "SystemSettings.h"
 #include "DisplayHAL.h"
-#include <ArduinoJson.h>
+#include "reader/AppStorage.h"
+#include "reader/FileBrowser.h"
 #include <ArduinoJson.h>
 #include <mutex>
+#include <deque>
+#include <vector>
 #include <string>
 #include <cstring>
-#include <algorithm>
-#include <cctype>
+#include <cstdlib>
+#include <ctime>
 
 #ifndef NATIVE_TESTING
+#include <Arduino.h>
+#include <SD.h>
 #include <sys/time.h>
-#include <time.h>
-#endif
-
-#define MAX_RING_SLOTS 8
-#define MAX_MSG_BYTES 512
-
-static char g_msg_ring[MAX_RING_SLOTS][MAX_MSG_BYTES];
-static int g_ring_head = 0;
-static int g_ring_tail = 0;
-static int g_ring_count = 0;
-static std::mutex g_ring_mutex;
-
-static std::string read_buffer = "";
-static bool is_comm_init = false;
-
-static void ring_push(const char* data, size_t len) {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    if (g_ring_count >= MAX_RING_SLOTS) {
-        g_ring_tail = (g_ring_tail + 1) % MAX_RING_SLOTS;
-        g_ring_count--;
-    }
-    size_t copy_len = len < (MAX_MSG_BYTES - 1) ? len : (MAX_MSG_BYTES - 1);
-    memcpy(g_msg_ring[g_ring_head], data, copy_len);
-    g_msg_ring[g_ring_head][copy_len] = '\0';
-    g_ring_head = (g_ring_head + 1) % MAX_RING_SLOTS;
-    g_ring_count++;
-}
-
-static bool ring_pop(std::string& out_msg) {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    if (g_ring_count == 0) return false;
-    out_msg = g_msg_ring[g_ring_tail];
-    g_ring_tail = (g_ring_tail + 1) % MAX_RING_SLOTS;
-    g_ring_count--;
-    return true;
-}
-
-static bool ring_has_data() {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    return g_ring_count > 0;
-}
-
-static void processIncomingSystemMessage(const std::string& msg) {
-    if (msg.empty()) return;
-
-    if (msg.find("\"TIME\"") != std::string::npos) {
-        JsonDocument doc;
-        if (!deserializeJson(doc, msg)) {
-            std::string type = doc["t"] | "";
-            if (type == "TIME") {
-                uint32_t val = doc["val"] | 0;
-                if (val > 0) {
-#ifndef NATIVE_TESTING
-                    struct timeval tv;
-                    tv.tv_sec = val;
-                    tv.tv_usec = 0;
-                    settimeofday(&tv, NULL);
-                    Serial.printf("AppComm: System RTC clock set to %u\n", (unsigned int)val);
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#include <BLE2902.h>
+#define COMM_LOG(...) Serial.printf(__VA_ARGS__)
 #else
-                    printf("AppComm: Native system RTC clock set to %u\n", (unsigned int)val);
-#endif
-                }
-            }
-        }
-    } else if (msg.find("\"BOOK\"") != std::string::npos) {
-        JsonDocument doc;
-        if (!deserializeJson(doc, msg)) {
-            std::string type = doc["t"] | "";
-            if (type == "BOOK") {
-                std::string isbn = doc["isbn"] | "";
-                std::string title = doc["title"] | "";
-                std::string author = doc["author"] | "";
-                std::string genre = doc["genre"] | "";
-                int page = doc["page"] | 0;
-                int total = doc["total"] | 0;
-                if (!isbn.empty()) {
-                    EBookmarkManager::getInstance().initialize();
-                    EBookmarkManager::getInstance().addOrUpdateBook(isbn, title, author, genre, page, total);
-                    EBookmarkManager::getInstance().save();
-#ifndef NATIVE_TESTING
-                    Serial.printf("AppComm: Auto-synced book '%s' p.%d/%d\n", title.c_str(), page, total);
-#else
-                    printf("AppComm: Auto-synced book '%s' p.%d/%d\n", title.c_str(), page, total);
-#endif
-                }
-            }
-        }
-    } else if (msg.find("\"GET_BOOKMARKS\"") != std::string::npos) {
-        EBookmarkManager::getInstance().initialize();
-        const auto& books = EBookmarkManager::getInstance().getBookmarks();
-        JsonDocument doc;
-        JsonArray arr = doc.to<JsonArray>();
-        for (const auto& b : books) {
-            JsonObject obj = arr.add<JsonObject>();
-            obj["isbn"] = b.isbn;
-            obj["title"] = b.title;
-            obj["author"] = b.author;
-            obj["genre"] = b.genre;
-            obj["page"] = b.currentPage;
-            obj["total"] = b.totalPages;
-            uint32_t latestTs = 0;
-            for (const auto& h : b.history) {
-                if (h.timestamp > latestTs) latestTs = h.timestamp;
-            }
-            obj["ts"] = latestTs;
-        }
-        std::string jsonOut;
-        serializeJson(doc, jsonOut);
-        AppComm::setReadBuffer(jsonOut);
-#ifndef NATIVE_TESTING
-        Serial.printf("AppComm: Sent %d bookmarks to companion app\n", (int)books.size());
-#else
-        printf("AppComm: Sent %d bookmarks to companion app\n", (int)books.size());
-#endif
-    } else if (msg.find("\"GET_LIBRARY\"") != std::string::npos) {
-        // Report the last-known set of books on the device. This deliberately
-        // reuses the same cached library index the e-reader app itself relies
-        // on (see AppStorage::loadLibraryIndex) rather than re-scanning the SD
-        // card here - a BLE command handler is the wrong place to pay for a
-        // slow recursive directory walk, and the cache is kept fresh by the
-        // same dirty-marking used everywhere else (uploads, deletes, moves).
-        AppStorage::LibraryIndex index = AppStorage::loadLibraryIndex("/books");
-        JsonDocument doc;
-        JsonObject root = doc.to<JsonObject>();
-        root["t"] = "LIBRARY";
-        root["stale"] = !index.valid;
-        JsonArray arr = root["books"].to<JsonArray>();
-        for (const auto& entry : index.entries) {
-            std::string name = entry.path;
-            size_t slash = name.find_last_of('/');
-            if (slash != std::string::npos) name = name.substr(slash + 1);
-            JsonObject obj = arr.add<JsonObject>();
-            obj["name"] = name;
-            obj["path"] = entry.path;
-            obj["size"] = entry.size;
-        }
-        std::string jsonOut;
-        serializeJson(doc, jsonOut);
-        AppComm::setReadBuffer(jsonOut);
-#ifndef NATIVE_TESTING
-        Serial.printf("AppComm: Sent library (%d books) to companion app\n", (int)index.entries.size());
-#else
-        printf("AppComm: Sent library (%d books) to companion app\n", (int)index.entries.size());
-#endif
-    } else if (msg.find("\"DELETE_FILE\"") != std::string::npos) {
-        JsonDocument doc;
-        if (!deserializeJson(doc, msg)) {
-            std::string type = doc["t"] | "";
-            if (type == "DELETE_FILE") {
-                std::string name = doc["name"] | "";
-                bool ok = false;
-                std::string error = "Empty file name";
-                if (!name.empty()) {
-                    // Names arrive as the bare filename (e.g. "foo.epub");
-                    // reject anything that looks like it's trying to escape
-                    // the books directory.
-                    if (name.find('/') != std::string::npos || name.find("..") != std::string::npos) {
-                        error = "Invalid file name";
-                    } else {
-                        std::string path = AppStorage::toRuntimePath("/books/" + name);
-                        ok = AppStorage::deleteFile(path, error);
-                    }
-                }
-                JsonDocument resultDoc;
-                resultDoc["t"] = "DELETE_RESULT";
-                resultDoc["name"] = name;
-                resultDoc["ok"] = ok;
-                if (!ok) resultDoc["error"] = error;
-                std::string jsonOut;
-                serializeJson(resultDoc, jsonOut);
-                AppComm::setReadBuffer(jsonOut);
-#ifndef NATIVE_TESTING
-                Serial.printf("AppComm: Delete '%s' -> %s\n", name.c_str(), ok ? "ok" : error.c_str());
-#else
-                printf("AppComm: Delete '%s' -> %s\n", name.c_str(), ok ? "ok" : error.c_str());
-#endif
-            }
-        }
-    }
-}
-
-#ifdef NATIVE_TESTING
-
+#include <cstdio>
 #include <iostream>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <fcntl.h>
-
-static int server_fd = -1;
-static int client_socket = -1;
-
-void AppComm::init() {
-    is_comm_init = true;
-    server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == 0) {
-        std::cerr << "Socket creation failed" << std::endl;
-        return;
-    }
-
-    int opt = 1;
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt))) {
-        std::cerr << "setsockopt failed" << std::endl;
-        return;
-    }
-
-    struct sockaddr_in address;
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
-    address.sin_port = htons(9876);
-
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        std::cerr << "Bind failed" << std::endl;
-        return;
-    }
-
-    if (listen(server_fd, 3) < 0) {
-        std::cerr << "Listen failed" << std::endl;
-        return;
-    }
-
-    fcntl(server_fd, F_SETFL, O_NONBLOCK);
-    std::cout << "Native TCP Mock listening on port 9876..." << std::endl;
+#include <errno.h>
+#include <chrono>
+#define COMM_LOG(...) printf(__VA_ARGS__)
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
+#endif
 
-void AppComm::deinit() {
-    is_comm_init = false;
-    if (client_socket >= 0) {
-        close(client_socket);
-        client_socket = -1;
-    }
-    if (server_fd >= 0) {
-        close(server_fd);
-        server_fd = -1;
-    }
-    std::cout << "Native TCP Mock stopped." << std::endl;
-}
+// ---------------------------------------------------------------------------
+// Protocol constants (keep in sync with android_app/lib/services/ble_service.dart
+// and docs/companion_protocol.md)
+// ---------------------------------------------------------------------------
+static const int PROTOCOL_VERSION = 2;
+static const char* FIRMWARE_VERSION = "3.0.0";
+static const uint8_t FRAME_FILE_DATA = 0x01;
+static const size_t INBOX_CAPACITY = 32;
+static const size_t RESPONSE_BUDGET = 460; // stays under the 512-byte ATT value cap
+static const uint32_t UPLOAD_STALL_TIMEOUT_MS = 30000;
 
-void AppComm::poll() {
-    if (server_fd < 0) return;
+// ---------------------------------------------------------------------------
+// Inbox shared between the radio task and the main loop
+// ---------------------------------------------------------------------------
+static std::mutex g_inboxMutex;
+static std::deque<std::string> g_inbox;
+static bool is_comm_init = false;
+static volatile bool g_peerDropped = false;
 
-    if (client_socket < 0) {
-        struct sockaddr_in address;
-        int addrlen = sizeof(address);
-        client_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
-        if (client_socket >= 0) {
-            std::cout << "Client connected to TCP Mock" << std::endl;
-            fcntl(client_socket, F_SETFL, O_NONBLOCK);
-        }
-    } else {
-        char buffer[2048] = {0};
-        int valread = read(client_socket, buffer, sizeof(buffer) - 1);
-        if (valread > 0) {
-            std::string msg(buffer, valread);
-            std::cout << "Received from app: " << msg << std::endl;
-            
-            // Try to parse as JSON for test commands
-            JsonDocument doc;
-            if (!deserializeJson(doc, msg)) {
-                std::string cmd = doc["cmd"] | "";
-                
-                if (cmd == "touch") {
-                    int x = doc["x"] | -1;
-                    int y = doc["y"] | -1;
-                    if (x >= 0 && y >= 0) {
-                        DisplayHAL::injectTouch(x, y);
-                        std::string ack = "ACK: {\"cmd\": \"touch\", \"x\": " + std::to_string(x) + ", \"y\": " + std::to_string(y) + "}";
-                        sendData(ack);
-                    }
-                } else if (cmd == "get_screen_state") {
-                    // Return a simple acknowledgment - screen state is internal to display
-                    std::string response = "ACK: {\"cmd\": \"get_screen_state\"}";
-                    sendData(response);
-                } else if (msg == "READ") {
-                    sendData(read_buffer);
-                } else {
-                    ring_push(buffer, valread);
-                    std::string ack = "ACK: " + msg;
-                    sendData(ack);
-                }
-            } else {
-                // Not JSON, handle as before
-                if (msg == "READ") {
-                    sendData(read_buffer);
-                } else {
-                    ring_push(buffer, valread);
-                    std::string ack = "ACK: " + msg;
-                    sendData(ack);
-                }
+static uint32_t s_bookmarksRev = 0;
+static uint32_t s_libraryRev = 0;
+static std::string s_lastEvent;
+
+// Pushes one received message. Blocks the radio task (up to ~5s) while the
+// inbox is full: the ATT write response is delayed, which throttles the
+// phone instead of silently dropping file chunks.
+static bool inboxPush(const std::string& msg) {
+    for (int attempt = 0; attempt < 1000; attempt++) {
+        {
+            std::lock_guard<std::mutex> lock(g_inboxMutex);
+            if (g_inbox.size() < INBOX_CAPACITY) {
+                g_inbox.push_back(msg);
+                return true;
             }
-        } else if (valread == 0) {
-            std::cout << "Client disconnected" << std::endl;
-            close(client_socket);
-            client_socket = -1;
         }
+#ifndef NATIVE_TESTING
+        vTaskDelay(pdMS_TO_TICKS(5));
+#else
+        usleep(5000);
+#endif
     }
-
-    std::string msg;
-    while (ring_pop(msg)) {
-        processIncomingSystemMessage(msg);
-    }
+    return false;
 }
 
-void AppComm::sendData(const std::string& data) {
-    if (client_socket >= 0) {
-        send(client_socket, data.c_str(), data.length(), 0);
-    }
-}
-
-bool AppComm::hasData() {
-    return ring_has_data();
-}
-
-std::string AppComm::getNextMessage() {
-    std::string msg;
-    if (ring_pop(msg)) {
-        processIncomingSystemMessage(msg);
-        return msg;
-    }
-    return "";
-}
-
-void AppComm::setReadBuffer(const std::string& data) {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    read_buffer = data;
-}
-
-std::string AppComm::getReadBuffer() {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    return read_buffer;
-}
-
-void AppComm::startFileUpload(const std::string& name, int totalChunks) {
-    std::cout << "Native mock: start file upload " << name << " (" << totalChunks << " chunks)" << std::endl;
-}
-
-void AppComm::appendFileChunk(int chunkIndex, const std::vector<uint8_t>& data) {
-    std::cout << "Native mock: received chunk " << chunkIndex << " (" << data.size() << " bytes)" << std::endl;
-}
-
-bool AppComm::finishFileUpload() {
-    std::cout << "Native mock: finish file upload" << std::endl;
+static bool inboxPop(std::string& out) {
+    std::lock_guard<std::mutex> lock(g_inboxMutex);
+    if (g_inbox.empty()) return false;
+    out.swap(g_inbox.front());
+    g_inbox.pop_front();
     return true;
 }
 
-void AppComm::cancelFileUpload() {
-    std::cout << "Native mock: cancel file upload" << std::endl;
-}
+// ---------------------------------------------------------------------------
+// Platform transport
+// ---------------------------------------------------------------------------
+static void transportRespond(const std::string& json);
+static void transportNotifyDelta(const std::string& json);
+static bool transportConnected();
+#ifdef NATIVE_TESTING
+static void nativePump();
+#endif
 
+// ---------------------------------------------------------------------------
+// Small file helpers (SD-root-relative paths like "/books/foo.epub")
+// ---------------------------------------------------------------------------
+namespace {
+
+#ifndef NATIVE_TESTING
+File g_uploadFile;
 #else
+FILE* g_uploadFile = nullptr;
+#endif
 
-// Real ESP32 implementation (BLE)
-#include <Arduino.h>
-#include <BLEDevice.h>
-#include <BLEUtils.h>
-#include <BLEServer.h>
-#include <SD.h>
-
-static BLECharacteristic* pWriteChar = nullptr;
-static BLECharacteristic* pReadChar = nullptr;
-
-static std::string file_upload_name;
-static std::vector<uint8_t> file_upload_buffer;
-static int file_upload_expected_chunks = -1;
-static int file_upload_received_chunks = 0;
-
-bool deviceConnected = false;
-
-class MyWriteCallbacks : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic* pCharacteristic) override {
-        std::string value = pCharacteristic->getValue();
-        if (value.length() > 0) {
-            ring_push(value.c_str(), value.length());
-        }
-    }
-};
-
-class MyServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) override {
-        deviceConnected = true;
-        Serial.println("AppComm: Companion app connected!");
-    }
-    void onDisconnect(BLEServer* pServer) override {
-        deviceConnected = false;
-        Serial.println("AppComm: Companion app disconnected. Auto-restarting advertising...");
-        BLEDevice::startAdvertising();
-    }
-};
-
-void AppComm::init() {
-    if (is_comm_init) {
-        Serial.println("AppComm BLE server already initialized.");
-        return;
-    }
-    Serial.println("AppComm BLE server initializing as system background service...");
-    BLEDevice::init("EPD-Reader");
-    BLEServer* pServer = BLEDevice::createServer();
-    pServer->setCallbacks(new MyServerCallbacks());
-
-    BLEService* pService = pServer->createService("12345678-1234-1234-1234-123456789abc");
-
-    pWriteChar = pService->createCharacteristic(
-        "12345678-1234-1234-1234-123456789001",
-        BLECharacteristic::PROPERTY_WRITE
-    );
-    pWriteChar->setCallbacks(new MyWriteCallbacks());
-
-    pReadChar = pService->createCharacteristic(
-        "12345678-1234-1234-1234-123456789002",
-        BLECharacteristic::PROPERTY_READ
-    );
-    pReadChar->setValue("");
-
-    pService->start();
-
-    BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID("12345678-1234-1234-1234-123456789abc");
-    pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);
-    pAdvertising->setMinPreferred(0x12);
-    BLEDevice::startAdvertising();
-
-    is_comm_init = true;
-    Serial.println("AppComm BLE system service active and advertising as 'EPD-Reader'");
+bool fsExists(const std::string& path) {
+#ifndef NATIVE_TESTING
+    return SD.exists(path.c_str());
+#else
+    return access(AppStorage::toRuntimePath(path).c_str(), F_OK) == 0;
+#endif
 }
 
-void AppComm::deinit() {
-    if (!is_comm_init) {
-        return;
+bool fsRemove(const std::string& path) {
+#ifndef NATIVE_TESTING
+    return SD.remove(path.c_str());
+#else
+    return remove(AppStorage::toRuntimePath(path).c_str()) == 0;
+#endif
+}
+
+bool fsRename(const std::string& from, const std::string& to) {
+#ifndef NATIVE_TESTING
+    return SD.rename(from.c_str(), to.c_str());
+#else
+    return rename(AppStorage::toRuntimePath(from).c_str(), AppStorage::toRuntimePath(to).c_str()) == 0;
+#endif
+}
+
+void fsEnsureDir(const std::string& dir) {
+#ifndef NATIVE_TESTING
+    if (!SD.exists(dir.c_str())) SD.mkdir(dir.c_str());
+#else
+    (void)dir;
+#endif
+}
+
+bool uploadOpen(const std::string& path) {
+#ifndef NATIVE_TESTING
+    g_uploadFile = SD.open(path.c_str(), FILE_WRITE);
+    return (bool)g_uploadFile;
+#else
+    g_uploadFile = fopen(AppStorage::toRuntimePath(path).c_str(), "wb");
+    return g_uploadFile != nullptr;
+#endif
+}
+
+size_t uploadWrite(const uint8_t* data, size_t len) {
+#ifndef NATIVE_TESTING
+    return g_uploadFile ? g_uploadFile.write(data, len) : 0;
+#else
+    return g_uploadFile ? fwrite(data, 1, len, g_uploadFile) : 0;
+#endif
+}
+
+void uploadClose() {
+#ifndef NATIVE_TESTING
+    if (g_uploadFile) g_uploadFile.close();
+#else
+    if (g_uploadFile) fclose(g_uploadFile);
+    g_uploadFile = nullptr;
+#endif
+}
+
+bool hasBookExtension(const std::string& name) {
+    std::string lower = name;
+    for (char& c : lower) c = (char)tolower((unsigned char)c);
+    auto ends = [&](const char* ext) {
+        size_t n = strlen(ext);
+        return lower.size() >= n && lower.compare(lower.size() - n, n, ext) == 0;
+    };
+    return ends(".epub") || ends(".txt") || ends(".md") || ends(".rtf");
+}
+
+bool isSafeFileName(const std::string& name) {
+    if (name.empty() || name.size() > 120) return false;
+    if (name[0] == '.') return false;
+    if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) return false;
+    if (name.find("..") != std::string::npos) return false;
+    for (char c : name) {
+        if ((unsigned char)c < 0x20) return false;
     }
-    is_comm_init = false;
-    Serial.println("AppComm BLE server deinitializing...");
-    BLEDevice::getAdvertising()->stop();
-    BLEDevice::deinit(true);
-    pWriteChar = nullptr;
-    pReadChar = nullptr;
-}
-
-void AppComm::poll() {
-    std::string msg;
-    while (ring_pop(msg)) {
-        processIncomingSystemMessage(msg);
-    }
-}
-
-void AppComm::sendData(const std::string& data) {
-    setReadBuffer(data);
-}
-
-bool AppComm::hasData() {
-    return ring_has_data();
-}
-
-std::string AppComm::getNextMessage() {
-    std::string msg;
-    if (ring_pop(msg)) {
-        processIncomingSystemMessage(msg);
-        return msg;
-    }
-    return "";
-}
-
-void AppComm::setReadBuffer(const std::string& data) {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    read_buffer = data;
-    if (pReadChar) {
-        pReadChar->setValue(read_buffer);
-    }
-}
-
-std::string AppComm::getReadBuffer() {
-    std::lock_guard<std::mutex> lock(g_ring_mutex);
-    return read_buffer;
-}
-
-void AppComm::startFileUpload(const std::string& name, int totalChunks) {
-    file_upload_name = name;
-    file_upload_expected_chunks = totalChunks;
-    file_upload_received_chunks = 0;
-    file_upload_buffer.clear();
-    Serial.printf("Starting BLE file upload: %s (%d chunks)\n", name.c_str(), totalChunks);
-}
-
-void AppComm::appendFileChunk(int chunkIndex, const std::vector<uint8_t>& data) {
-    if (chunkIndex != file_upload_received_chunks) {
-        Serial.printf("BLE file chunk out of order: expected %d got %d\n",
-                      file_upload_received_chunks, chunkIndex);
-        return;
-    }
-    file_upload_buffer.insert(file_upload_buffer.end(), data.begin(), data.end());
-    file_upload_received_chunks++;
-}
-
-bool AppComm::finishFileUpload() {
-    if (file_upload_expected_chunks > 0 &&
-        file_upload_received_chunks != file_upload_expected_chunks) {
-        Serial.printf("BLE file upload incomplete: %d/%d chunks\n",
-                      file_upload_received_chunks, file_upload_expected_chunks);
-        return false;
-    }
-
-    std::string path = "/books/" + file_upload_name;
-    File f = SD.open(path.c_str(), FILE_WRITE);
-    if (!f) {
-        Serial.printf("Failed to open %s for writing\n", path.c_str());
-        return false;
-    }
-    f.write(file_upload_buffer.data(), file_upload_buffer.size());
-    f.close();
-
-    Serial.printf("Saved uploaded file: %s (%u bytes)\n",
-                  path.c_str(), file_upload_buffer.size());
-    // A book was just added over BLE - the library index cached from a
-    // previous scan no longer reflects what's on disk.
-    AppStorage::markLibraryDirty();
-    cancelFileUpload();
     return true;
 }
 
-void AppComm::cancelFileUpload() {
-    file_upload_name.clear();
-    file_upload_buffer.clear();
-    file_upload_expected_chunks = -1;
-    file_upload_received_chunks = 0;
+std::string baseName(const std::string& path) {
+    size_t slash = path.find_last_of('/');
+    return slash == std::string::npos ? path : path.substr(slash + 1);
 }
 
-#endif
-
-bool AppComm::isInitialized() {
-    return is_comm_init;
-}
-
-bool AppComm::isConnected() {
-#ifndef NATIVE_TESTING
-    extern bool deviceConnected;
-    return is_comm_init && deviceConnected;
-#else
-    extern int client_socket;
-    return is_comm_init && client_socket >= 0;
-#endif
-}
-
-void AppComm::sendDeltaSync(const std::string& jsonMessage) {
-    if (!isInitialized()) return;
-#ifndef NATIVE_TESTING
-    if (pReadChar && isConnected()) {
-        pReadChar->setValue(jsonMessage);
-        pReadChar->notify();
-    }
-#else
-    sendData(jsonMessage);
-#endif
-}
-
-void AppComm::sendBookDelta(const std::string& isbn, const std::string& title, const std::string& author, int page, int total) {
-    if (!isInitialized()) return;
-    uint32_t ts = 0;
+uint32_t nowEpoch() {
 #ifndef NATIVE_TESTING
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    ts = tv.tv_sec;
+    return (uint32_t)tv.tv_sec;
 #else
-    ts = (uint32_t)time(NULL);
+    return (uint32_t)time(nullptr);
 #endif
+}
 
+// Packs as many pre-serialized items as fit in one response, starting at `off`.
+std::string buildPage(const char* type, int rid, const std::vector<std::string>& items, int off) {
+    if (off < 0) off = 0;
+    std::string head = std::string("{\"t\":\"") + type + "\",\"rid\":" + std::to_string(rid) +
+                       ",\"total\":" + std::to_string(items.size()) + ",\"off\":" + std::to_string(off) +
+                       ",\"items\":[";
+    std::string body;
+    size_t i = (size_t)off;
+    while (i < items.size()) {
+        size_t add = items[i].size() + (body.empty() ? 0 : 1);
+        if (!body.empty() && head.size() + body.size() + add + 16 > RESPONSE_BUDGET) break;
+        if (!body.empty()) body += ',';
+        body += items[i];
+        i++;
+    }
+    int next = i < items.size() ? (int)i : -1;
+    return head + body + "],\"next\":" + std::to_string(next) + "}";
+}
+
+// --- Library listing --------------------------------------------------------
+
+std::vector<AppStorage::LibraryIndexEntry> g_library;
+bool g_libraryValid = false;
+
+void invalidateLibrary() {
+    g_libraryValid = false;
+    s_libraryRev++;
+    AppStorage::markLibraryDirty();
+}
+
+const std::vector<AppStorage::LibraryIndexEntry>& getLibrary() {
+    if (g_libraryValid) return g_library;
+
+    AppStorage::LibraryIndex cached = AppStorage::loadLibraryIndex("/books");
+    if (cached.valid) {
+        g_library = cached.entries;
+    } else {
+        // The e-reader's cached index is only trusted after a sleep-resume,
+        // so on a fresh boot do a real scan rather than reporting nothing.
+        g_library.clear();
+        FileBrowser browser;
+        std::vector<FileInfo> files = browser.scanRecursive("/books");
+        for (const auto& f : files) {
+            if (f.isDirectory || !hasBookExtension(f.name)) continue;
+            AppStorage::LibraryIndexEntry e;
+            e.path = f.path;
+            e.size = (uint32_t)f.size;
+            g_library.push_back(e);
+        }
+        AppStorage::saveLibraryIndex("/books", g_library);
+    }
+    g_libraryValid = true;
+    return g_library;
+}
+
+// --- Upload state machine ---------------------------------------------------
+
+struct UploadState {
+    bool active = false;
+    std::string name;
+    std::string partPath;
+    std::string finalPath;
+    uint32_t expected = 0;
+    uint32_t written = 0;
+    bool failed = false;
+    std::string error;
+    uint32_t lastActivityMs = 0;
+};
+UploadState g_upload;
+
+void uploadReset() {
+    uploadClose();
+    if (g_upload.active && !g_upload.partPath.empty() && fsExists(g_upload.partPath)) {
+        fsRemove(g_upload.partPath);
+    }
+    g_upload = UploadState();
+    PowerManager::setBusy(false);
+}
+
+void respond(JsonDocument& doc) {
+    std::string out;
+    serializeJson(doc, out);
+    transportRespond(out);
+}
+
+void respondError(const char* type, int rid, const std::string& error) {
+    JsonDocument doc;
+    doc["t"] = type;
+    doc["rid"] = rid;
+    doc["ok"] = false;
+    doc["error"] = error;
+    respond(doc);
+}
+
+void handleFileData(const std::string& frame) {
+    if (!g_upload.active) return;
+    if (frame.size() < 5) return;
+    const uint8_t* p = (const uint8_t*)frame.data();
+    uint32_t offset = (uint32_t)p[1] | ((uint32_t)p[2] << 8) | ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24);
+    size_t len = frame.size() - 5;
+    g_upload.lastActivityMs = millis();
+    PowerManager::noteUserActivity();
+
+    if (g_upload.failed) return;
+    if (offset < g_upload.written) return; // retransmitted chunk, already stored
+    if (offset > g_upload.written) {
+        g_upload.failed = true;
+        g_upload.error = "Missing data at offset " + std::to_string(g_upload.written);
+        return;
+    }
+    if (g_upload.written + len > g_upload.expected) {
+        g_upload.failed = true;
+        g_upload.error = "More data than announced";
+        return;
+    }
+    if (uploadWrite(p + 5, len) != len) {
+        g_upload.failed = true;
+        g_upload.error = "SD card write failed";
+        return;
+    }
+    g_upload.written += (uint32_t)len;
+}
+
+void handleJson(const std::string& msg) {
+    JsonDocument doc;
+    if (deserializeJson(doc, msg)) return;
+    std::string type = doc["t"] | "";
+    int rid = doc["rid"] | 0;
+
+    // Background bookmark polling must not keep the device awake; anything
+    // else is the user actively doing something in the companion app.
+    if (type != "GET_BOOKMARKS" && type != "TIME") {
+        PowerManager::noteUserActivity();
+    }
+
+    if (type == "HELLO") {
+        JsonDocument r;
+        r["t"] = "HELLO";
+        r["rid"] = rid;
+        r["proto"] = PROTOCOL_VERSION;
+        r["fw"] = FIRMWARE_VERSION;
+        r["batt"] = DisplayHAL::getBatteryPercent();
+        r["usb"] = PowerManager::isUsbConnected();
+#ifndef NATIVE_TESTING
+        r["free"] = (double)(SD.totalBytes() - SD.usedBytes());
+#endif
+        respond(r);
+        s_lastEvent = "Companion app connected";
+    } else if (type == "TIME") {
+        uint32_t val = doc["val"] | 0;
+        if (doc["tz"].is<int>()) {
+            int tz = doc["tz"] | 0;
+            if (tz != SystemSettings::get().tzOffsetMin) {
+                SystemSettings::get().tzOffsetMin = tz;
+                SystemSettings::applyTimezone();
+                SystemSettings::save();
+            }
+        }
+        if (val > 0) {
+#ifndef NATIVE_TESTING
+            struct timeval tv;
+            tv.tv_sec = val;
+            tv.tv_usec = 0;
+            settimeofday(&tv, NULL);
+#endif
+            COMM_LOG("AppComm: clock set to %u\n", (unsigned)val);
+        }
+        if (rid) {
+            JsonDocument r;
+            r["t"] = "TIME";
+            r["rid"] = rid;
+            r["ok"] = true;
+            respond(r);
+        }
+    } else if (type == "BOOK") {
+        std::string isbn = doc["isbn"] | "";
+        if (isbn.empty()) return;
+        std::string title = doc["title"] | "";
+        std::string author = doc["author"] | "";
+        std::string genre = doc["genre"] | "";
+        int page = doc["page"] | 0;
+        int total = doc["total"] | 0;
+        uint32_t ts = doc["ts"] | 0;
+
+        EBookmarkManager& mgr = EBookmarkManager::getInstance();
+        mgr.initialize();
+        // Last-change-wins per book.
+        uint32_t localTs = 0;
+        for (const auto& b : mgr.getBookmarks()) {
+            if (b.isbn == isbn && !b.history.empty()) {
+                localTs = b.history.back().timestamp;
+                break;
+            }
+        }
+        bool applied = false;
+        if (ts == 0 || ts >= localTs) {
+            mgr.addOrUpdateBook(isbn, title, author, genre, page, total);
+            if (ts > 0) mgr.updatePage(isbn, page, ts);
+            s_bookmarksRev++;
+            applied = true;
+            s_lastEvent = "Synced \"" + title + "\"";
+        }
+        if (rid) {
+            JsonDocument r;
+            r["t"] = "BOOK";
+            r["rid"] = rid;
+            r["ok"] = true;
+            r["applied"] = applied;
+            respond(r);
+        }
+    } else if (type == "GET_BOOKMARKS") {
+        EBookmarkManager& mgr = EBookmarkManager::getInstance();
+        mgr.initialize();
+        std::vector<std::string> items;
+        for (const auto& b : mgr.getBookmarks()) {
+            JsonDocument item;
+            item["isbn"] = b.isbn;
+            item["title"] = b.title;
+            item["author"] = b.author;
+            item["genre"] = b.genre;
+            item["page"] = b.currentPage;
+            item["total"] = b.totalPages;
+            uint32_t latest = 0;
+            for (const auto& h : b.history) {
+                if (h.timestamp > latest) latest = h.timestamp;
+            }
+            item["ts"] = latest;
+            std::string s;
+            serializeJson(item, s);
+            items.push_back(s);
+        }
+        transportRespond(buildPage("BOOKMARKS", rid, items, doc["off"] | 0));
+    } else if (type == "GET_LIBRARY") {
+        int off = doc["off"] | 0;
+        if (off == 0 && (doc["refresh"] | false)) g_libraryValid = false;
+        const auto& lib = getLibrary();
+        std::vector<std::string> items;
+        items.reserve(lib.size());
+        for (const auto& e : lib) {
+            JsonDocument item;
+            item["n"] = baseName(e.path);
+            item["p"] = e.path;
+            item["s"] = e.size;
+            std::string s;
+            serializeJson(item, s);
+            items.push_back(s);
+        }
+        transportRespond(buildPage("LIBRARY", rid, items, off));
+        if (off == 0) s_lastEvent = "Library listed (" + std::to_string(lib.size()) + " books)";
+    } else if (type == "DELETE_FILE") {
+        // Accept either a full path under /books or a bare file name.
+        std::string path = doc["path"] | "";
+        std::string name = doc["name"] | "";
+        if (path.empty() && !name.empty()) path = "/books/" + name;
+        bool ok = false;
+        std::string error;
+        if (path.rfind("/books/", 0) != 0 || path.find("..") != std::string::npos) {
+            error = "Invalid path";
+        } else {
+            ok = AppStorage::deleteFile(path, error);
+            if (ok) {
+                // Bookmarks live alongside books.
+                std::string bmk = AppStorage::toBookmarkPath(path);
+                if (fsExists(bmk)) fsRemove(bmk);
+                invalidateLibrary();
+                s_lastEvent = "Deleted " + baseName(path);
+            }
+        }
+        JsonDocument r;
+        r["t"] = "DELETE_RESULT";
+        r["rid"] = rid;
+        r["path"] = path;
+        r["ok"] = ok;
+        if (!ok) r["error"] = error;
+        respond(r);
+    } else if (type == "FILE_BEGIN") {
+        if (g_upload.active) uploadReset();
+        std::string name = doc["name"] | "";
+        uint32_t size = doc["size"] | 0;
+        std::string dir = doc["dir"] | "books";
+        if (dir != "books" && dir != "images") {
+            respondError("FILE_READY", rid, "Unsupported folder");
+            return;
+        }
+        if (!isSafeFileName(name)) {
+            respondError("FILE_READY", rid, "Invalid file name");
+            return;
+        }
+#ifndef NATIVE_TESTING
+        uint64_t freeBytes = SD.totalBytes() - SD.usedBytes();
+        if ((uint64_t)size + 65536 > freeBytes) {
+            respondError("FILE_READY", rid, "Not enough space on SD card");
+            return;
+        }
+#endif
+        fsEnsureDir("/" + dir);
+        g_upload.partPath = "/" + dir + "/.upload.part";
+        g_upload.finalPath = "/" + dir + "/" + name;
+        if (fsExists(g_upload.partPath)) fsRemove(g_upload.partPath);
+        if (!uploadOpen(g_upload.partPath)) {
+            g_upload = UploadState();
+            respondError("FILE_READY", rid, "Could not create file on SD card");
+            return;
+        }
+        g_upload.active = true;
+        g_upload.name = name;
+        g_upload.expected = size;
+        g_upload.lastActivityMs = millis();
+        PowerManager::setBusy(true);
+        s_lastEvent = "Receiving " + name;
+        JsonDocument r;
+        r["t"] = "FILE_READY";
+        r["rid"] = rid;
+        r["ok"] = true;
+        respond(r);
+        COMM_LOG("AppComm: upload started %s (%u bytes)\n", name.c_str(), (unsigned)size);
+    } else if (type == "FILE_END") {
+        JsonDocument r;
+        r["t"] = "FILE_RESULT";
+        r["rid"] = rid;
+        if (!g_upload.active) {
+            r["ok"] = false;
+            r["error"] = "No transfer in progress";
+            respond(r);
+            return;
+        }
+        uploadClose();
+        bool ok = !g_upload.failed && g_upload.written == g_upload.expected;
+        std::string error = g_upload.failed ? g_upload.error
+                          : ("Received " + std::to_string(g_upload.written) + " of " + std::to_string(g_upload.expected) + " bytes");
+        if (ok) {
+            if (fsExists(g_upload.finalPath)) fsRemove(g_upload.finalPath);
+            ok = fsRename(g_upload.partPath, g_upload.finalPath);
+            if (!ok) error = "Could not rename file";
+        }
+        r["ok"] = ok;
+        r["size"] = g_upload.written;
+        r["path"] = g_upload.finalPath;
+        if (!ok) r["error"] = error;
+        COMM_LOG("AppComm: upload %s -> %s\n", g_upload.name.c_str(), ok ? "ok" : error.c_str());
+        s_lastEvent = ok ? ("Received " + g_upload.name) : ("Upload failed: " + error);
+        if (ok) {
+            g_upload.partPath.clear(); // nothing to clean up
+            if (g_upload.finalPath.rfind("/books/", 0) == 0) invalidateLibrary();
+        }
+        uploadReset();
+        respond(r);
+    } else if (type == "FILE_ABORT") {
+        uploadReset();
+        s_lastEvent = "Upload cancelled";
+        if (rid) {
+            JsonDocument r;
+            r["t"] = "FILE_ABORT";
+            r["rid"] = rid;
+            r["ok"] = true;
+            respond(r);
+        }
+    }
+}
+
+void handleMessage(const std::string& msg) {
+    if (msg.empty()) return;
+    if ((uint8_t)msg[0] == FRAME_FILE_DATA) {
+        handleFileData(msg);
+    } else {
+        handleJson(msg);
+    }
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// Common API
+// ---------------------------------------------------------------------------
+
+void AppComm::poll() {
+    if (!is_comm_init) return;
+#ifdef NATIVE_TESTING
+    nativePump();
+#endif
+    std::string msg;
+    // Bound the work per loop iteration so a fast upload can't starve the UI.
+    for (int i = 0; i < 24 && inboxPop(msg); i++) {
+        handleMessage(msg);
+    }
+    if (g_upload.active) {
+        if (g_peerDropped || millis() - g_upload.lastActivityMs > UPLOAD_STALL_TIMEOUT_MS) {
+            COMM_LOG("AppComm: upload abandoned\n");
+            s_lastEvent = "Upload interrupted";
+            uploadReset();
+        }
+    }
+    g_peerDropped = false;
+}
+
+bool AppComm::isInitialized() { return is_comm_init; }
+
+bool AppComm::hasPending() {
+    std::lock_guard<std::mutex> lock(g_inboxMutex);
+    return !g_inbox.empty();
+}
+
+bool AppComm::isConnected() { return is_comm_init && transportConnected(); }
+
+uint32_t AppComm::bookmarksRevision() { return s_bookmarksRev; }
+uint32_t AppComm::libraryRevision() { return s_libraryRev; }
+bool AppComm::isTransferActive() { return g_upload.active; }
+int AppComm::transferPercent() {
+    if (!g_upload.active || g_upload.expected == 0) return 0;
+    return (int)((uint64_t)g_upload.written * 100 / g_upload.expected);
+}
+std::string AppComm::transferName() { return g_upload.name; }
+std::string AppComm::lastEvent() { return s_lastEvent; }
+
+void AppComm::sendBookDelta(const std::string& isbn, const std::string& title, const std::string& author, int page, int total) {
+    if (!isConnected()) return;
     JsonDocument doc;
     doc["t"] = "BOOK";
     doc["isbn"] = isbn;
@@ -584,9 +630,227 @@ void AppComm::sendBookDelta(const std::string& isbn, const std::string& title, c
     doc["author"] = author;
     doc["page"] = page;
     doc["total"] = total;
-    doc["ts"] = ts;
-
+    doc["ts"] = nowEpoch();
     std::string payload;
     serializeJson(doc, payload);
-    sendDeltaSync(payload);
+    transportNotifyDelta(payload);
 }
+
+#ifndef NATIVE_TESTING
+// ---------------------------------------------------------------------------
+// BLE transport (ESP32)
+// ---------------------------------------------------------------------------
+static const char* SERVICE_UUID = "12345678-1234-1234-1234-123456789abc";
+static const char* WRITE_UUID   = "12345678-1234-1234-1234-123456789001";
+static const char* NOTIFY_UUID  = "12345678-1234-1234-1234-123456789002";
+static const char* RESP_UUID    = "12345678-1234-1234-1234-123456789003";
+
+static BLEServer* pServer = nullptr;
+static BLECharacteristic* pWriteChar = nullptr;
+static BLECharacteristic* pNotifyChar = nullptr;
+static BLECharacteristic* pRespChar = nullptr;
+
+class CommWriteCallbacks : public BLECharacteristicCallbacks {
+    void onWrite(BLECharacteristic* c) override {
+        std::string value = c->getValue();
+        if (!value.empty()) inboxPush(value);
+    }
+};
+
+class CommServerCallbacks : public BLEServerCallbacks {
+    void onConnect(BLEServer* server) override {
+        (void)server;
+        Serial.println("AppComm: companion connected");
+    }
+    void onDisconnect(BLEServer* server) override {
+        (void)server;
+        g_peerDropped = true;
+        Serial.println("AppComm: companion disconnected, advertising again");
+        BLEDevice::startAdvertising();
+    }
+};
+
+static void transportRespond(const std::string& json) {
+    if (!pRespChar) return;
+    pRespChar->setValue(json);
+    if (transportConnected()) pRespChar->notify();
+}
+
+static void transportNotifyDelta(const std::string& json) {
+    if (!pNotifyChar) return;
+    pNotifyChar->setValue(json);
+    pNotifyChar->notify();
+}
+
+static bool transportConnected() {
+    return pServer && pServer->getConnectedCount() > 0;
+}
+
+void AppComm::init() {
+    if (is_comm_init) return;
+    Serial.println("AppComm: starting BLE service");
+    BLEDevice::init("EPD-Reader");
+    BLEDevice::setMTU(517);
+    pServer = BLEDevice::createServer();
+    pServer->setCallbacks(new CommServerCallbacks());
+
+    BLEService* service = pServer->createService(SERVICE_UUID);
+
+    pWriteChar = service->createCharacteristic(WRITE_UUID, BLECharacteristic::PROPERTY_WRITE);
+    pWriteChar->setCallbacks(new CommWriteCallbacks());
+
+    pNotifyChar = service->createCharacteristic(NOTIFY_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    pNotifyChar->addDescriptor(new BLE2902());
+    pNotifyChar->setValue("");
+
+    pRespChar = service->createCharacteristic(RESP_UUID,
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY);
+    pRespChar->addDescriptor(new BLE2902());
+    pRespChar->setValue("");
+
+    service->start();
+
+    BLEAdvertising* adv = BLEDevice::getAdvertising();
+    adv->addServiceUUID(SERVICE_UUID);
+    adv->setScanResponse(true);
+    // 250-500ms advertising interval (units of 0.625ms). The library default
+    // of 20-40ms keeps the radio busy ~10x more for no practical benefit -
+    // phones still find the device within a second or two.
+    adv->setMinInterval(0x190);
+    adv->setMaxInterval(0x320);
+    adv->setMinPreferred(0x06);
+    adv->setMaxPreferred(0x12);
+    BLEDevice::startAdvertising();
+
+    is_comm_init = true;
+    Serial.println("AppComm: advertising as 'EPD-Reader'");
+}
+
+void AppComm::deinit() {
+    if (!is_comm_init) return;
+    uploadReset();
+    is_comm_init = false;
+    BLEDevice::getAdvertising()->stop();
+    BLEDevice::deinit(false);
+    pServer = nullptr;
+    pWriteChar = nullptr;
+    pNotifyChar = nullptr;
+    pRespChar = nullptr;
+    Serial.println("AppComm: BLE stopped");
+}
+
+#else
+// ---------------------------------------------------------------------------
+// TCP transport (native simulator). Frames in both directions are a 2-byte
+// little-endian length followed by the payload, mirroring one BLE write /
+// notification each.
+// ---------------------------------------------------------------------------
+static int server_fd = -1;
+static int client_socket = -1;
+static std::string tcp_rx;
+
+static void tcpSendFrame(const std::string& payload) {
+    if (client_socket < 0) return;
+    uint8_t hdr[2] = {(uint8_t)(payload.size() & 0xFF), (uint8_t)(payload.size() >> 8)};
+    send(client_socket, hdr, 2, MSG_NOSIGNAL);
+    send(client_socket, payload.data(), payload.size(), MSG_NOSIGNAL);
+}
+
+static void transportRespond(const std::string& json) { tcpSendFrame(json); }
+static void transportNotifyDelta(const std::string& json) { tcpSendFrame(json); }
+static bool transportConnected() { return client_socket >= 0; }
+
+// Simulator-only test hooks: {"cmd":"touch","x":..,"y":..} taps at logical
+// (as-displayed) coordinates; {"cmd":"dump","path":".."} writes a PGM of the
+// screen; {"cmd":"idle"} reports whether the main loop has nothing queued.
+static bool handleSimCommand(const std::string& msg) {
+    if (msg.empty() || msg[0] != '{' || msg.find("\"cmd\"") == std::string::npos) return false;
+    JsonDocument doc;
+    if (deserializeJson(doc, msg)) return false;
+    std::string cmd = doc["cmd"] | "";
+    if (cmd == "touch") {
+        int x = doc["x"] | -1;
+        int y = doc["y"] | -1;
+        if (DisplayHAL::isPortrait()) {
+            // getTouch() rotates raw controller coordinates for portrait.
+            DisplayHAL::injectTouch(y, (EPD_HEIGHT - 1) - x);
+        } else {
+            DisplayHAL::injectTouch(x, y);
+        }
+    } else if (cmd == "dump") {
+        std::string path = doc["path"] | "screen.pgm";
+        DisplayHAL::dumpVisible(path.c_str());
+    }
+    tcpSendFrame("{\"t\":\"ACK\",\"cmd\":\"" + cmd + "\"}");
+    return true;
+}
+
+void AppComm::init() {
+    if (is_comm_init) return;
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) return;
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    struct sockaddr_in address;
+    memset(&address, 0, sizeof(address));
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    int port = 9876;
+    if (const char* env = getenv("EPD_SIM_PORT")) port = atoi(env);
+    address.sin_port = htons(port);
+    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0 || listen(server_fd, 1) < 0) {
+        std::cerr << "AppComm: TCP bind/listen failed" << std::endl;
+        close(server_fd);
+        server_fd = -1;
+        return;
+    }
+    fcntl(server_fd, F_SETFL, O_NONBLOCK);
+    is_comm_init = true;
+    std::cout << "AppComm: native TCP mock listening on port " << port << std::endl;
+}
+
+void AppComm::deinit() {
+    if (!is_comm_init) return;
+    uploadReset();
+    is_comm_init = false;
+    if (client_socket >= 0) close(client_socket);
+    if (server_fd >= 0) close(server_fd);
+    client_socket = server_fd = -1;
+}
+
+// Runs before the common poll(): moves bytes from the socket into the inbox.
+static void nativePump() {
+    if (server_fd < 0) return;
+    if (client_socket < 0) {
+        client_socket = accept(server_fd, nullptr, nullptr);
+        if (client_socket >= 0) {
+            fcntl(client_socket, F_SETFL, O_NONBLOCK);
+            tcp_rx.clear();
+        }
+        return;
+    }
+    char buf[4096];
+    for (;;) {
+        ssize_t n = read(client_socket, buf, sizeof(buf));
+        if (n > 0) {
+            tcp_rx.append(buf, (size_t)n);
+            continue;
+        }
+        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            close(client_socket);
+            client_socket = -1;
+            g_peerDropped = true;
+        }
+        break;
+    }
+    while (tcp_rx.size() >= 2) {
+        size_t len = (uint8_t)tcp_rx[0] | ((size_t)(uint8_t)tcp_rx[1] << 8);
+        if (tcp_rx.size() < 2 + len) break;
+        std::string frame = tcp_rx.substr(2, len);
+        tcp_rx.erase(0, 2 + len);
+        if (!handleSimCommand(frame)) inboxPush(frame);
+    }
+}
+
+#endif

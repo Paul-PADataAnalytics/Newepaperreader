@@ -1,20 +1,15 @@
 #include "AppScreens.h"
 #include "UIFramework.h"
-#include "DisplayHAL.h"
-#include "TypographyEngine.h"
-
-extern TypographyEngine typography;
+#include "UIKit.h"
 
 namespace AppScreens {
 
 void drawLoading(uint8_t* framebuffer, const char* title) {
-    UIFramework::performFullScreenDraw(framebuffer, [framebuffer, title]() {
-        uint8_t fg = UIFramework::getForegroundColor();
-        UIFramework::drawTopBar(framebuffer, title);
-        typography.setFontSize(32.0f);
-        int tw = typography.measureText("Loading...");
-        int w = DisplayHAL::getWidth();
-        typography.renderText("Loading...", (w - tw) / 2, 200, framebuffer, fg);
+    UIFramework::performFullScreenDraw(framebuffer, [title]() {
+        using namespace UI;
+        statusBar();
+        textCentered("Opening", W / 2, H / 2 - 70, FONT_SMALL, DARK);
+        textWrapped(title ? title : "", MARGIN * 2, H / 2 - 30, W - MARGIN * 4, FONT_TITLE, BLACK, 3, 6, true);
     });
 }
 

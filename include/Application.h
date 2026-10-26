@@ -5,10 +5,13 @@
 enum class LibrarySort {
     AUTHOR,
     GENRE,
-    COMPLETION
+    COMPLETION,
+    TITLE,
+    RECENT
 };
 
-// UI Layout Constants
+// Legacy landscape layout constants (kept only for code that has not been
+// ported to the portrait UI kit in src/ui/UIKit.h).
 constexpr int LIB_TOP_H = 54;
 constexpr int LIB_SIDE_W = 144;
 constexpr int LIB_SIDE_X = 960 - LIB_SIDE_W;
@@ -33,4 +36,12 @@ public:
     virtual void draw() = 0;
     virtual void handleTouch(int x, int y) = 0;
     virtual void update() {}
+
+    // System back button (the chevron in UI::header, top-left). The Launcher
+    // intercepts taps there while wantsSystemBack() is true and calls
+    // onBack(); returning false (the default) closes the app and returns
+    // to the home screen, returning true means the app navigated within
+    // itself (e.g. from a detail view back to its list).
+    virtual bool wantsSystemBack() const { return true; }
+    virtual bool onBack() { return false; }
 };

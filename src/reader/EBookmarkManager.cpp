@@ -140,7 +140,6 @@ bool EBookmarkManager::save() {
 
     std::string jsonStr;
     serializeJson(doc, jsonStr);
-    AppComm::setReadBuffer(jsonStr);
     return writeStringToFile(path, jsonStr);
 }
 

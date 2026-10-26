@@ -5,9 +5,12 @@
 #include "reader/AppStorage.h"
 #include "embedded_font.h"
 #include "Launcher.h"
-#include "NavigationManager.h"
+#include "ui/UIKit.h"
+#include "SystemSettings.h"
 #include "EBookmarkManager.h"
 #include <cstring>
+#include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #ifndef NATIVE_TESTING
@@ -25,6 +28,7 @@ extern uint8_t *framebuffer;
 extern TypographyEngine typography;
 
 float EReaderApp::s_readingFontSize = 28.0f;
+LibrarySort EReaderApp::s_librarySort = LibrarySort::COMPLETION;
 
 void EReaderApp::setReadingFontSize(float pt) {
     s_readingFontSize = pt;
@@ -195,39 +199,40 @@ static bool isPreferredEpubChapter(const std::string& chapterPath) {
            lower.find("part") != std::string::npos;
 }
 
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
+namespace {
+using namespace UI;
+constexpr int READ_MARGIN_X = 36;
+constexpr int READ_TOP = 62;
+constexpr int READ_BOTTOM = 66;
+constexpr int TAP_MENU_BAND = 110;
+constexpr int MENU_PANEL_H = 230;
+const Rect kSortRect(MARGIN, HEADER_H + 16, W - 2 * MARGIN, 50);
+constexpr int LIST_TOP = HEADER_H + 82;
+const char* kSortLabels[] = {"Progress", "Title", "Author"};
+
+Rect fontMinusRect() { return Rect(W - MARGIN - 250, H - MENU_PANEL_H + 22, 84, 58); }
+Rect fontPlusRect() { return Rect(W - MARGIN - 84, H - MENU_PANEL_H + 22, 84, 58); }
+} // namespace
+
 // App Lifecycles
 void EReaderApp::onCreate() {
     m_state = STATE_LIB;
     m_libraryPage = 0;
-    m_librarySort = LibrarySort::AUTHOR;
+    m_menuOpen = false;
 
-    NavigationManager::getInstance().navigateTo(NavTarget{0, STATE_LIB, false, ""});
-
-#ifndef NATIVE_TESTING
-    if (!typography.loadFont("/sd/data/Roboto-Regular.ttf", 48.0f)) {
-        typography.loadFontFromMemory(data_Roboto_Regular_ttf, data_Roboto_Regular_ttf_len, 48.0f);
-    }
-#else
-    if (!typography.loadFont("data/Roboto-Regular.ttf", 32)) {
-        if (!typography.loadFont("Roboto-Regular.ttf", 32)) {
-            printf("Failed to load Roboto-Regular.ttf\n");
-        }
-    }
-#endif
-
-    // Loading the font above is now a cheap no-op after the very first time
-    // (see TypographyEngine::loadFont), so this text is safe to draw
-    // immediately. What's left - the cache-vs-rescan check and per-book
-    // bookmark reads in updateLibraryItems() - still touches the SD card and
-    // can take a perceptible moment even on a cache hit, so give instant
-    // feedback before doing any of that rather than leaving the screen
-    // looking frozen/crashed.
+    // Feedback before any SD work (cache check, per-book bookmark reads).
     drawOpeningLibraryScreen();
-
     updateLibraryItems();
 }
 
 void EReaderApp::onDestroy() {
+    if (m_state == STATE_READ) {
+        saveCurrentPosition();
+        rememberLastBook();
+    }
     if (m_currentBookText) {
         free(m_currentBookText);
         m_currentBookText = nullptr;
@@ -235,7 +240,7 @@ void EReaderApp::onDestroy() {
     }
     m_textReader.closeFile();
     m_epubParser.close();
-    DisplayHAL::setPortrait(false);
+    restoreTypographyDefaults();
 }
 
 void EReaderApp::draw() {
@@ -246,63 +251,25 @@ void EReaderApp::draw() {
     }
 }
 
-// Fixed region (below the main "Scanning library..." message) used to show a
-// live folder count while a long scan is in progress. Kept separate from
-// drawScanningProgressScreen() so repeat updates can go through the cheap
-// scoped partial-update path instead of a full-screen clear each time.
-static const int SCAN_PROGRESS_REGION_W = 400;
-static const int SCAN_PROGRESS_REGION_H = 30;
-
 void EReaderApp::drawScanningProgressScreen(int dirsVisited) {
     UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        int w = DisplayHAL::getWidth();
-        int h = DisplayHAL::getHeight();
-        uint8_t fg = UIFramework::getForegroundColor();
-
-        typography.setFontSize(32.0f);
-        std::string msg = "Scanning library...";
-        int msgW = typography.measureText(msg);
-        typography.renderText(msg, (w - msgW) / 2, h / 2 - 40, framebuffer, fg);
+        header("Library", true);
+        textCentered("Scanning your books...", W / 2, H / 2 - 60, FONT_BODY, BLACK, true);
     });
     updateScanProgressCount(dirsVisited);
 }
 
 void EReaderApp::updateScanProgressCount(int dirsVisited) {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-    int x = (w - SCAN_PROGRESS_REGION_W) / 2;
-    int y = h / 2;
-
-    // Cheap scoped update (same fast partial-update path used by Calculator,
-    // fixed in the previous punch-list item) so a long scan can show live
-    // progress without paying for a full-screen e-ink clear on every tick.
-    UIFramework::performFastPartialUpdate(framebuffer, x, y, SCAN_PROGRESS_REGION_W, SCAN_PROGRESS_REGION_H, [this, dirsVisited, x, y]() {
-        uint8_t fg = UIFramework::getForegroundColor();
-        typography.setFontSize(20.0f);
-        std::string sub = std::to_string(dirsVisited) + " folders scanned so far";
-        int subW = typography.measureText(sub);
-        typography.renderText(sub, x + (SCAN_PROGRESS_REGION_W - subW) / 2, y, framebuffer, fg);
+    UIFramework::performFastPartialUpdate(framebuffer, 0, H / 2 - 10, W, 40, [dirsVisited]() {
+        textCentered(std::to_string(dirsVisited) + " items checked", W / 2, H / 2 - 6, FONT_SMALL, DARK);
     });
 }
 
 void EReaderApp::drawOpeningLibraryScreen() {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-    const int regionW = 460;
-    const int regionH = 40;
-    int x = (w - regionW) / 2;
-    int y = h / 2 - 20;
-
-    // Fast partial update, not a full-screen draw: this message only needs
-    // to appear quickly, and a second full e-ink refresh right on top of the
-    // one drawLibrary() performs moments later would make entering the app
-    // feel slower, not faster.
-    UIFramework::performFastPartialUpdate(framebuffer, x, y, regionW, regionH, [this, x, y, regionW]() {
-        uint8_t fg = UIFramework::getForegroundColor();
-        typography.setFontSize(28.0f);
-        std::string msg = "Opening library...";
-        int msgW = typography.measureText(msg);
-        typography.renderText(msg, x + (regionW - msgW) / 2, y, framebuffer, fg);
+    UIFramework::performFastPartialUpdate(framebuffer, 0, H / 2 - 40, W, 80, []() {
+        fillRoundRect(MARGIN * 3, H / 2 - 36, W - MARGIN * 6, 72, 16, WHITE);
+        strokeRoundRect(MARGIN * 3, H / 2 - 36, W - MARGIN * 6, 72, 16, 2, BLACK);
+        textCentered("Opening library...", W / 2, H / 2 - 16, FONT_BODY, BLACK, true);
     });
 }
 
@@ -453,208 +420,277 @@ void EReaderApp::rebuildParsedLibraryItems() {
         m_parsedLibraryItems.push_back(item);
     }
 
-    // Sort
-    for (size_t i = 0; i < m_parsedLibraryItems.size(); i++) {
-        for (size_t j = i + 1; j < m_parsedLibraryItems.size(); j++) {
-            bool swap = false;
-            if (m_librarySort == LibrarySort::COMPLETION) {
-                swap = m_parsedLibraryItems[j].completionPercent > m_parsedLibraryItems[i].completionPercent;
-            } else if (m_librarySort == LibrarySort::AUTHOR) {
-                swap = m_parsedLibraryItems[j].author < m_parsedLibraryItems[i].author;
-            } else {
-                swap = m_parsedLibraryItems[j].title < m_parsedLibraryItems[i].title;
+    // Progress order: books in progress (most-read first), then unread,
+    // then finished (completionPercent == -100).
+    auto lower = [](const std::string& s) {
+        std::string o = s;
+        for (char& c : o) c = (char)tolower((unsigned char)c);
+        return o;
+    };
+    std::stable_sort(m_parsedLibraryItems.begin(), m_parsedLibraryItems.end(),
+        [&](const LibraryItem& a, const LibraryItem& b) {
+            if (s_librarySort == LibrarySort::COMPLETION) {
+                if (a.completionPercent != b.completionPercent) return a.completionPercent > b.completionPercent;
+                return lower(a.title) < lower(b.title);
             }
-            if (swap) {
-                LibraryItem temp = m_parsedLibraryItems[i];
-                m_parsedLibraryItems[i] = m_parsedLibraryItems[j];
-                m_parsedLibraryItems[j] = temp;
+            if (s_librarySort == LibrarySort::AUTHOR) {
+                std::string la = lower(a.author), lb = lower(b.author);
+                if (la != lb) return la < lb;
             }
-        }
-    }
+            return lower(a.title) < lower(b.title);
+        });
+}
+
+int EReaderApp::libraryRowsPerPage() const {
+    return (H - FOOTER_H - LIST_TOP) / ROW_H;
 }
 
 void EReaderApp::drawLibrary() {
-    // Only rebuild the in-memory list (titles/progress/sort) here - the disk
-    // scan-or-cache decision (updateLibraryItems) already ran once in
-    // onCreate(). Re-running a full recursive SD scan on every library
-    // redraw (sort change, paging, returning from reading) is what made the
-    // library feel like it had crashed; nothing about those interactions can
-    // change which files exist on disk.
+    // Only rebuilds titles/progress/sort - the disk scan-or-cache decision
+    // already ran once in onCreate().
     rebuildParsedLibraryItems();
 
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        int w = DisplayHAL::getWidth();
-        uint8_t fg = UIFramework::getForegroundColor();
+    int perPage = libraryRowsPerPage();
+    int pages = ((int)m_parsedLibraryItems.size() + perPage - 1) / perPage;
+    if (pages < 1) pages = 1;
+    if (m_libraryPage >= pages) m_libraryPage = pages - 1;
 
-        typography.setFontSize(48.0f);
-        typography.renderText("Library", 70, 2, framebuffer, fg);
+    UIFramework::performFullScreenDraw(framebuffer, [this, perPage, pages]() {
+        std::string title = "Library";
+        if (!m_parsedLibraryItems.empty()) title += "  (" + std::to_string(m_parsedLibraryItems.size()) + ")";
+        header(title, true);
 
-        typography.setFontSize(28.0f);
-        UIFramework::drawSystemStatus(framebuffer, w - 60, 12, 28.0f, fg);
-        UIFramework::drawIcon16x16(framebuffer, 920, 18, COG_ICON, fg);
-        DisplayHAL::drawHLine(0, LIB_TOP_H - 1, w, fg, framebuffer);
-
-        DisplayHAL::drawRect(LIB_SIDE_X, LIB_MAIN_Y, LIB_SIDE_W, LIB_MAIN_H, fg, framebuffer);
-
-        std::vector<std::pair<std::string, std::string>> buttons = {
-            {"Sort:", "Author"},
-            {"Sort:", "Genre"},
-            {"Sort:", "Prog %"},
-            {"Exit to", "Launcher"}
-        };
-        int btnH = LIB_MAIN_H / 4;
-        typography.setFontSize(24.0f);
-        for (size_t i = 0; i < buttons.size() && i < 4; i++) {
-            int by = LIB_MAIN_Y + (i * btnH);
-            UIFramework::drawButton(framebuffer, LIB_SIDE_X + 10, by + 10, LIB_SIDE_W - 20, btnH - 20, "");
-
-            int tw1 = typography.measureText(buttons[i].first);
-            int tw2 = typography.measureText(buttons[i].second);
-            int tx1 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw1) / 2;
-            int tx2 = LIB_SIDE_X + 10 + (LIB_SIDE_W - 20 - tw2) / 2;
-            int ty = by + 25;
-            typography.renderText(buttons[i].first, tx1, ty, framebuffer, fg);
-            typography.renderText(buttons[i].second, tx2, ty + 30, framebuffer, fg);
-        }
-        typography.setFontSize(32.0f);
-
-        DisplayHAL::fillRect(0, LIB_MAIN_Y, LIB_MAIN_W, LIB_MAIN_H, 0xDD, framebuffer);
-
-        int pBtnW = LIB_PAGING_W - 20;
-        int pBtnH = LIB_MAIN_H / 2 - 20;
-        int symbolHeight = 24;
-
-        int upY = LIB_MAIN_Y + 10;
-        UIFramework::drawButton(framebuffer, 25, upY, pBtnW, pBtnH, "");
-        std::string upSymbol = "/\\";
-        int twUp = typography.measureText(upSymbol);
-        typography.renderText(upSymbol, 25 + (pBtnW - twUp) / 2, upY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
-
-        int dnY = LIB_MAIN_Y + LIB_MAIN_H / 2 + 10;
-        UIFramework::drawButton(framebuffer, 25, dnY, pBtnW, pBtnH, "");
-        std::string dnSymbol = "\\/";
-        int twDn = typography.measureText(dnSymbol);
-        typography.renderText(dnSymbol, 25 + (pBtnW - twDn) / 2, dnY + (pBtnH - symbolHeight) / 2, framebuffer, fg);
-
-        int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
-        int startIndex = m_libraryPage * itemsPerPage;
-        int y = LIB_MAIN_Y;
-        typography.setFontSize(40.0f);
-
-        for (int i = 0; i < itemsPerPage && (startIndex + i) < m_parsedLibraryItems.size(); i++) {
-            LibraryItem& item = m_parsedLibraryItems[startIndex + i];
-            int rowY = y + 20;
-
-            std::string leftText = item.title + " - " + item.author;
-            int maxW = LIB_LIST_W - 100;
-            while (leftText.length() > 3 && typography.measureText(leftText + "...") > maxW) {
-                leftText.pop_back();
-            }
-            if (leftText.length() < item.title.length() + item.author.length() + 3) {
-                leftText += "...";
-            }
-
-            std::string rightText = item.completionPercent == -100 ? "100%" : std::to_string(item.completionPercent) + "%";
-            int rw = typography.measureText(rightText);
-            typography.renderText(leftText, LIB_LIST_X + 20, rowY, framebuffer, fg);
-            typography.renderText(rightText, LIB_LIST_X + LIB_LIST_W - rw - 20, rowY, framebuffer, fg);
-            y += LIB_ROW_H;
-        }
+        int sel = s_librarySort == LibrarySort::TITLE ? 1 : (s_librarySort == LibrarySort::AUTHOR ? 2 : 0);
+        segmented(kSortRect, {kSortLabels[0], kSortLabels[1], kSortLabels[2]}, sel);
 
         if (m_parsedLibraryItems.empty()) {
-            typography.renderText("No books found.", LIB_LIST_X + 20, LIB_MAIN_Y + 50, framebuffer, fg);
-        }
-        typography.setFontSize(32.0f);
-    });
-}
-
-void EReaderApp::drawReading() {
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        int w = DisplayHAL::getWidth();
-        int h = DisplayHAL::getHeight();
-        uint8_t fg = UIFramework::getForegroundColor();
-
-        prepareTypographyForReading();
-
-        if (m_currentBookText) {
-            static bool s_lastPortrait = DisplayHAL::isPortrait();
-            static float s_lastFontSize = getReadingFontSize();
-            
-            if (s_lastPortrait != DisplayHAL::isPortrait() || s_lastFontSize != getReadingFontSize()) {
-                m_pageHistory.clear();
-                s_lastPortrait = DisplayHAL::isPortrait();
-                s_lastFontSize = getReadingFontSize();
-            }
-
-            size_t remainingLen = m_currentBookTextLen - m_currentReadingOffset;
-            size_t endOffset = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
-            printf("[EReader] Rendering page starting at offset: %d, ending at (next page start): %zu\n", (int)m_currentReadingOffset, endOffset);
-            typography.renderText(m_currentBookText + m_currentReadingOffset, remainingLen, 20, 60, framebuffer, fg);
+            emptyState(H / 2, "No books yet",
+                       "Copy EPUB, TXT, MD or RTF files into /books on the SD card, or send them from the companion app's Library tab.");
+            return;
         }
 
-        // Draw [Back] button in top-left bar
-        UIFramework::drawButton(framebuffer, 10, 10, 80, 40, "");
-        typography.setFontSize(22.0f);
-        int btw = typography.measureText("Back");
-        typography.renderText("Back", 10 + (80 - btw) / 2, 18, framebuffer, fg);
-
-        std::string infoStr = m_currentBookTitle;
-        if (!m_currentBookAuthor.empty() && m_currentBookAuthor != "Unknown Author") {
-            infoStr += " - " + m_currentBookAuthor;
-        }
-
-        typography.setFontSize(24.0f);
-        int maxW = w - 190;
-        std::string dispStr = infoStr;
-        if (typography.measureText(dispStr) > maxW) {
-            while (dispStr.length() > 3 && typography.measureText(dispStr + "...") > maxW) {
-                dispStr.pop_back();
-            }
-            dispStr += "...";
-        }
-        typography.renderText(dispStr, 100, 20, framebuffer, 0x05);
-
-        typography.setFontSize(32.0f);
-        UIFramework::drawButton(framebuffer, w - 80, 10, 70, 40, "");
-        int tw = typography.measureText("ROT");
-        typography.renderText("ROT", w - 80 + (70 - tw) / 2, 16, framebuffer, fg);
-
-        float progress = 0;
-        if (m_currentBookTextLen > 0) {
-            if (m_textReader.isOpen()) {
-                progress = (float)m_textReader.getPosition() / (float)m_textReader.getFileSize();
+        int start = m_libraryPage * perPage;
+        for (int i = 0; i < perPage && start + i < (int)m_parsedLibraryItems.size(); i++) {
+            const LibraryItem& item = m_parsedLibraryItems[start + i];
+            std::string trailing;
+            float progress = -1.0f;
+            if (item.completionPercent == -100) {
+                trailing = "Done";
+            } else if (item.completionPercent > 0) {
+                trailing = std::to_string(item.completionPercent) + "%";
+                progress = item.completionPercent / 100.0f;
             } else {
-                progress = (float)m_currentReadingOffset / (float)m_currentBookTextLen;
+                trailing = "New";
             }
+            std::string sub = item.author == "Unknown Author" ? "" : item.author;
+            if (sub.empty()) {
+                // No metadata: show where it lives and what it is instead.
+                std::string ext;
+                size_t dot = item.file.name.find_last_of('.');
+                if (dot != std::string::npos) ext = item.file.name.substr(dot + 1);
+                for (char& c : ext) c = (char)toupper((unsigned char)c);
+                char size[24];
+                if (item.file.size >= 1024 * 1024) snprintf(size, sizeof(size), "%.1f MB", item.file.size / 1048576.0);
+                else snprintf(size, sizeof(size), "%u KB", (unsigned)((item.file.size + 1023) / 1024));
+                std::string folder;
+                size_t lastSlash = item.file.path.find_last_of('/');
+                if (lastSlash != std::string::npos && lastSlash > 7) { // deeper than "/books/"
+                    std::string dir = item.file.path.substr(0, lastSlash);
+                    folder = dir.substr(dir.find_last_of('/') + 1) + "  \xC2\xB7  ";
+                }
+                sub = folder + ext + "  \xC2\xB7  " + size;
+            }
+            listRow(LIST_TOP + i * ROW_H, item.title, sub, trailing, false, progress);
         }
-        if (progress > 1.0f) progress = 1.0f;
-
-        int scrollBarHeight = h * 0.01;
-        int scrollBarY = h - h * 0.03;
-        int scrollBarX = w * 0.10;
-
-        char progStr[16];
-        snprintf(progStr, sizeof(progStr), "%d%%", (int)(progress * 100));
-        int pw = typography.measureText(progStr);
-        int barEnd = w - w * 0.10 - pw - 10;
-        int actualBarWidth = barEnd - scrollBarX;
-
-        if (actualBarWidth > 0) {
-            DisplayHAL::drawRect(scrollBarX, scrollBarY, actualBarWidth, scrollBarHeight, fg, framebuffer);
-            DisplayHAL::fillRect(scrollBarX, scrollBarY, (int)(actualBarWidth * progress), scrollBarHeight, fg, framebuffer);
-            typography.renderText(progStr, barEnd + 10, scrollBarY + scrollBarHeight - 2, framebuffer, fg);
-        }
+        pager(m_libraryPage, pages);
     });
 }
 
 void EReaderApp::prepareTypographyForReading() {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-    typography.setTopMargin(60);
-    typography.setBottomMargin(h * 0.05);
+    typography.setTopMargin(READ_TOP);
+    typography.setBottomMargin(READ_BOTTOM);
+    typography.setHorizontalMargins(READ_MARGIN_X, READ_MARGIN_X);
     typography.setFontSize(getReadingFontSize());
 }
 
+void EReaderApp::restoreTypographyDefaults() {
+    typography.setTopMargin(20);
+    typography.setBottomMargin(20);
+    typography.setHorizontalMargins(20, 20);
+}
+
+float EReaderApp::currentProgress() const {
+    if (m_textReader.isOpen()) {
+        size_t size = m_textReader.getFileSize();
+        if (size == 0) return 0.0f;
+        float p = (float)(m_textReader.getPosition() + (size_t)m_currentReadingOffset) / (float)size;
+        return p > 1.0f ? 1.0f : p;
+    }
+    if (m_chapters.empty() || m_currentChapterIndex < 0) {
+        return m_currentBookTextLen ? (float)m_currentReadingOffset / (float)m_currentBookTextLen : 0.0f;
+    }
+    float within = m_currentBookTextLen ? (float)m_currentReadingOffset / (float)m_currentBookTextLen : 0.0f;
+    float p = (m_currentChapterIndex + within) / (float)m_chapters.size();
+    return p > 1.0f ? 1.0f : p;
+}
+
+void EReaderApp::rememberLastBook() {
+    if (m_currentBookPath.empty()) return;
+    AppStorage::LastBook last;
+    last.path = m_currentBookPath;
+    last.title = m_currentBookTitle;
+    last.author = m_currentBookAuthor;
+    last.percent = (int)(currentProgress() * 100.0f + 0.5f);
+    last.valid = true;
+    AppStorage::saveLastBook(last);
+}
+
+void EReaderApp::drawReading() {
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        prepareTypographyForReading();
+
+        if (m_currentBookText) {
+            static float s_lastFontSize = getReadingFontSize();
+            if (s_lastFontSize != getReadingFontSize()) {
+                m_pageHistory.clear();
+                s_lastFontSize = getReadingFontSize();
+            }
+            size_t remainingLen = m_currentBookTextLen - m_currentReadingOffset;
+            typography.setFontSize(getReadingFontSize());
+            typography.renderText(m_currentBookText + m_currentReadingOffset, remainingLen,
+                                  READ_MARGIN_X, READ_TOP, framebuffer, BLACK);
+        } else {
+            emptyState(H / 2, "Couldn't open this book", "The file may be damaged or in an unsupported format.");
+        }
+
+        // Running header and footer
+        text(ellipsize(m_currentBookTitle, W - 2 * READ_MARGIN_X, FONT_CAPTION), READ_MARGIN_X, 20, FONT_CAPTION, DARK);
+        float progress = currentProgress();
+        int pct = (int)(progress * 100.0f + 0.5f);
+        if (!m_chapters.empty() && m_currentChapterIndex >= 0) {
+            text("Chapter " + std::to_string(m_currentChapterIndex + 1) + " of " + std::to_string(m_chapters.size()),
+                 READ_MARGIN_X, H - 50, FONT_CAPTION, DARK);
+        }
+        textRight(std::to_string(pct) + "%", W - READ_MARGIN_X, H - 50, FONT_CAPTION, DARK);
+        fillRect(READ_MARGIN_X, H - 20, W - 2 * READ_MARGIN_X, 2, LIGHT);
+        fillRect(READ_MARGIN_X, H - 21, (int)((W - 2 * READ_MARGIN_X) * progress), 4, BLACK);
+
+        if (m_menuOpen) drawReadingMenu();
+    });
+}
+
+void EReaderApp::drawReadingMenu() {
+    // Top: standard header with a back chevron to the library.
+    fillRect(0, 0, W, HEADER_H, WHITE);
+    header(m_currentBookTitle, true);
+
+    // Bottom panel: text size and position.
+    int top = H - MENU_PANEL_H;
+    fillRect(0, top, W, MENU_PANEL_H, WHITE);
+    fillRect(0, top, W, 2, BLACK);
+    text("Text size", MARGIN, top + 38, FONT_BODY, BLACK, true);
+    Rect minus = fontMinusRect();
+    Rect plus = fontPlusRect();
+    float size = getReadingFontSize();
+    button(minus, "A-", ButtonStyle::SECONDARY, FONT_SMALL + 2, size > 16.0f);
+    button(plus, "A+", ButtonStyle::SECONDARY, FONT_BODY, size < 48.0f);
+    textCentered(std::to_string((int)size), (minus.x + minus.w + plus.x) / 2, top + 38, FONT_BODY, BLACK, true);
+
+    float progress = currentProgress();
+    std::string where = std::to_string((int)(progress * 100.0f + 0.5f)) + "% read";
+    if (!m_chapters.empty() && m_currentChapterIndex >= 0) {
+        where = "Chapter " + std::to_string(m_currentChapterIndex + 1) + " of " +
+                std::to_string(m_chapters.size()) + "  \xC2\xB7  " + where;
+    }
+    text(where, MARGIN, top + 112, FONT_SMALL, INK);
+    progressBar(MARGIN, top + 150, W - 2 * MARGIN, 8, progress);
+    textCentered("Tap the page to keep reading", W / 2, top + 182, FONT_CAPTION, MID);
+}
+
+void EReaderApp::leaveReading() {
+    saveCurrentPosition();
+    rememberLastBook();
+    m_textReader.closeFile();
+    m_state = STATE_LIB;
+    m_menuOpen = false;
+    restoreTypographyDefaults();
+    drawLibrary();
+}
+
+void EReaderApp::turnPage(bool forward) {
+    prepareTypographyForReading();
+    if (forward) {
+        if (m_textReader.isOpen()) {
+            size_t nextStart = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
+            if (nextStart > (size_t)m_currentReadingOffset && nextStart < m_currentBookTextLen) {
+                m_pageHistory.push_back(m_currentReadingOffset);
+                m_currentReadingOffset = nextStart;
+            } else {
+                m_pageHistory.clear();
+                m_textReader.nextPage();
+                std::string text = m_textReader.getPageText();
+                if (m_currentBookText) free(m_currentBookText);
+                m_currentBookTextLen = text.length();
+#ifndef NATIVE_TESTING
+                m_currentBookText = (char*)ps_malloc(m_currentBookTextLen + 1);
+                if (!m_currentBookText) m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
+#else
+                m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
+#endif
+                if (m_currentBookText) memcpy(m_currentBookText, text.c_str(), m_currentBookTextLen + 1);
+                m_currentReadingOffset = 0;
+            }
+        } else {
+            size_t nextStart = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
+            if (nextStart > (size_t)m_currentReadingOffset && nextStart < m_currentBookTextLen) {
+                m_pageHistory.push_back(m_currentReadingOffset);
+                m_currentReadingOffset = nextStart;
+            } else if (m_currentChapterIndex >= 0 && m_currentChapterIndex + 1 < (int)m_chapters.size()) {
+                m_currentChapterIndex++;
+                loadChapter(m_currentChapterIndex);
+                m_currentReadingOffset = 0;
+            }
+        }
+    } else {
+        if (m_textReader.isOpen()) {
+            if (!m_pageHistory.empty()) {
+                m_currentReadingOffset = m_pageHistory.back();
+                m_pageHistory.pop_back();
+            } else if (m_textReader.getPosition() > 0) {
+                m_textReader.prevPage();
+                std::string text = m_textReader.getPageText();
+                if (m_currentBookText) free(m_currentBookText);
+                m_currentBookTextLen = text.length();
+#ifndef NATIVE_TESTING
+                m_currentBookText = (char*)ps_malloc(m_currentBookTextLen + 1);
+                if (!m_currentBookText) m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
+#else
+                m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
+#endif
+                if (m_currentBookText) {
+                    memcpy(m_currentBookText, text.c_str(), m_currentBookTextLen + 1);
+                    m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentBookTextLen);
+                }
+            } else {
+                m_currentReadingOffset = 0;
+            }
+        } else {
+            if (!m_pageHistory.empty()) {
+                m_currentReadingOffset = m_pageHistory.back();
+                m_pageHistory.pop_back();
+            } else if (m_currentReadingOffset == 0 && m_currentChapterIndex > 0) {
+                m_currentChapterIndex--;
+                loadChapter(m_currentChapterIndex);
+                m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentBookTextLen);
+                m_pageHistory.clear();
+            } else {
+                m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
+            }
+        }
+    }
+    saveCurrentPosition();
+    drawReading();
+}
 
 void EReaderApp::loadChapter(int index) {
     if (m_chapters.empty() || index < 0 || index >= (int)m_chapters.size()) return;
@@ -748,7 +784,7 @@ void EReaderApp::saveCurrentPosition() {
 }
 
 void EReaderApp::openBookAtRuntimePath(const std::string& path) {
-    AppScreens::drawLoading(framebuffer, "Loading...");
+    AppScreens::drawLoading(framebuffer, m_currentBookTitle.c_str());
 
     bool isText = false;
     if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
@@ -858,46 +894,35 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
     }
 
     m_state = STATE_READ;
-    NavigationManager::getInstance().navigateTo(NavTarget{0, STATE_READ, DisplayHAL::isPortrait(), path});
+    m_menuOpen = false;
+    rememberLastBook();
     drawReading();
 }
 
 void EReaderApp::handleTouch(int x, int y) {
     if (m_state == STATE_LIB) {
-        if (x >= 900 && y <= LIB_TOP_H) {
-            Launcher::getInstance().switchToApp(2);
+        int seg = hitSegmented(kSortRect, 3, x, y);
+        if (seg >= 0) {
+            LibrarySort next = seg == 0 ? LibrarySort::COMPLETION : (seg == 1 ? LibrarySort::TITLE : LibrarySort::AUTHOR);
+            if (next != s_librarySort) {
+                s_librarySort = next;
+                m_libraryPage = 0;
+                drawLibrary();
+            }
             return;
         }
-        if (x >= LIB_SIDE_X && y >= LIB_MAIN_Y) {
-            int btnIndex = (y - LIB_MAIN_Y) / (LIB_MAIN_H / 4);
-            if (btnIndex == 0) m_librarySort = LibrarySort::AUTHOR;
-            else if (btnIndex == 1) m_librarySort = LibrarySort::GENRE;
-            else if (btnIndex == 2) m_librarySort = LibrarySort::COMPLETION;
-            else if (btnIndex == 3) {
-                // Exit E-Reader to system Launcher
-                onDestroy();
-                // External trigger through Singleton
-                extern void exitToSystemLauncher();
-                exitToSystemLauncher();
-                return;
-            }
-            m_libraryPage = 0;
+        int perPage = libraryRowsPerPage();
+        int pages = ((int)m_parsedLibraryItems.size() + perPage - 1) / perPage;
+        int dir = hitPager(x, y, m_libraryPage, pages);
+        if (dir != 0) {
+            m_libraryPage += dir;
             drawLibrary();
-        } else if (x <= LIB_PAGING_W && y >= LIB_MAIN_Y) {
-            if (y < LIB_MAIN_Y + LIB_MAIN_H / 2) {
-                if (m_libraryPage > 0) m_libraryPage--;
-            } else {
-                int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
-                int maxPage = m_parsedLibraryItems.size() / itemsPerPage;
-                if (m_libraryPage < maxPage) m_libraryPage++;
-            }
-            drawLibrary();
-        } else if (x > LIB_PAGING_W && x < LIB_SIDE_X && y >= LIB_MAIN_Y) {
-            int itemsPerPage = LIB_MAIN_H / LIB_ROW_H;
-            int itemIndex = (y - LIB_MAIN_Y) / LIB_ROW_H;
-            int globalIndex = m_libraryPage * itemsPerPage + itemIndex;
-            if (globalIndex >= 0 && globalIndex < (int)m_parsedLibraryItems.size()) {
-                std::string targetPath = m_parsedLibraryItems[globalIndex].file.path;
+            return;
+        }
+        if (y >= LIST_TOP && y < H - FOOTER_H) {
+            int idx = m_libraryPage * perPage + (y - LIST_TOP) / ROW_H;
+            if (idx >= 0 && idx < (int)m_parsedLibraryItems.size()) {
+                std::string targetPath = m_parsedLibraryItems[idx].file.path;
                 for (size_t i = 0; i < m_libraryFiles.size(); i++) {
                     if (m_libraryFiles[i].path == targetPath) {
                         openBook((int)i);
@@ -906,104 +931,47 @@ void EReaderApp::handleTouch(int x, int y) {
                 }
             }
         }
-    } else if (m_state == STATE_READ) {
-        int w = DisplayHAL::getWidth();
-        int h = DisplayHAL::getHeight();
-        if (y < 60 && x < 100) {
-            if (m_textReader.isOpen()) {
-                AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition());
-                m_textReader.closeFile();
-            } else {
-                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
-                    m_currentChapterIndex, (int)m_chapters.size());
-            }
-            if (!NavigationManager::getInstance().goBack()) {
-                DisplayHAL::setPortrait(false);
-                m_state = STATE_LIB;
-                drawLibrary();
-            }
-        } else if (y < 60 && x > w - 80) {
-            DisplayHAL::setPortrait(!DisplayHAL::isPortrait());
-            drawReading();
-        } else if (x > w / 2) {
-            prepareTypographyForReading();
-            if (m_textReader.isOpen()) {
-                size_t nextStart = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
-                if (nextStart > (size_t)m_currentReadingOffset && nextStart < m_currentBookTextLen) {
-                    m_pageHistory.push_back(m_currentReadingOffset);
-                    m_currentReadingOffset = nextStart;
-                    AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition() - (m_currentBookTextLen - m_currentReadingOffset));
-                } else {
-                    m_pageHistory.clear();
-                    m_textReader.nextPage();
-                    std::string text = m_textReader.getPageText();
-                    if (m_currentBookText) free(m_currentBookText);
-                    m_currentBookTextLen = text.length();
-#ifndef NATIVE_TESTING
-                    m_currentBookText = (char*)ps_malloc(m_currentBookTextLen + 1);
-                    if (!m_currentBookText) m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
-#else
-                    m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
-#endif
-                    if (m_currentBookText) memcpy(m_currentBookText, text.c_str(), m_currentBookTextLen + 1);
-                    AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition());
-                    m_currentReadingOffset = 0;
-                }
-            } else {
-                size_t nextStart = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
-                if (nextStart > (size_t)m_currentReadingOffset && nextStart < m_currentBookTextLen) {
-                    m_pageHistory.push_back(m_currentReadingOffset);
-                    m_currentReadingOffset = nextStart;
-                } else if (m_currentChapterIndex >= 0 && m_currentChapterIndex + 1 < (int)m_chapters.size()) {
-                    m_currentChapterIndex++;
-                    loadChapter(m_currentChapterIndex);
-                    m_currentReadingOffset = 0;
-                }
-                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
-                    m_currentChapterIndex, (int)m_chapters.size());
-            }
-            drawReading();
-        } else {
-            prepareTypographyForReading();
-            if (m_textReader.isOpen()) {
-                if (!m_pageHistory.empty()) {
-                    m_currentReadingOffset = m_pageHistory.back();
-                    m_pageHistory.pop_back();
-                } else {
-                    m_pageHistory.clear();
-                    m_textReader.prevPage();
-                    std::string text = m_textReader.getPageText();
-                    if (m_currentBookText) free(m_currentBookText);
-                    m_currentBookTextLen = text.length();
-#ifndef NATIVE_TESTING
-                    m_currentBookText = (char*)ps_malloc(m_currentBookTextLen + 1);
-                    if (!m_currentBookText) m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
-#else
-                    m_currentBookText = (char*)malloc(m_currentBookTextLen + 1);
-#endif
-                    if (m_currentBookText) {
-                        memcpy(m_currentBookText, text.c_str(), m_currentBookTextLen + 1);
-                        m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentBookTextLen);
-                    }
-                    AppStorage::saveBookmark(m_currentBookPath, m_textReader.getPosition());
-                }
-            } else {
-                if (!m_pageHistory.empty()) {
-                    m_currentReadingOffset = m_pageHistory.back();
-                    m_pageHistory.pop_back();
-                } else if (m_currentReadingOffset == 0 && m_currentChapterIndex > 0) {
-                    m_currentChapterIndex--;
-                    loadChapter(m_currentChapterIndex);
-                    m_currentReadingOffset = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentBookTextLen);
-                    m_pageHistory.clear();
-                } else {
-                    size_t prevStart = typography.findPreviousPageStart(m_currentBookText, m_currentBookTextLen, m_currentReadingOffset);
-                    m_currentReadingOffset = prevStart;
-                }
-                AppStorage::saveBookmark(m_currentBookPath, m_currentReadingOffset,
-                    m_currentChapterIndex, (int)m_chapters.size());
-            }
-            drawReading();
-        }
+        return;
     }
+
+    // Reading
+    if (m_menuOpen) {
+        if (hitBack(x, y)) {
+            leaveReading();
+            return;
+        }
+        if (y >= H - MENU_PANEL_H) {
+            float size = getReadingFontSize();
+            float next = size;
+            if (fontMinusRect().contains(x, y) && size > 16.0f) next = size - 2.0f;
+            if (fontPlusRect().contains(x, y) && size < 48.0f) next = size + 2.0f;
+            if (next != size) {
+                setReadingFontSize(next);
+                SystemSettings::get().readingFontSize = next;
+                SystemSettings::save();
+                m_pageHistory.clear();
+                drawReading();
+            }
+            return;
+        }
+        if (y < HEADER_H) return;
+        m_menuOpen = false;
+        drawReading();
+        return;
+    }
+
+    if (y < TAP_MENU_BAND) {
+        m_menuOpen = true;
+        // Only the overlay areas change - no need for a full-page flash.
+        UIFramework::performFastPartialUpdate(framebuffer, 0, 0, W, HEADER_H, [this]() {
+            header(m_currentBookTitle, true);
+        });
+        UIFramework::performFastPartialUpdate(framebuffer, 0, H - MENU_PANEL_H, W, MENU_PANEL_H, [this]() {
+            int top = H - MENU_PANEL_H;
+            fillRect(0, top, W, MENU_PANEL_H, WHITE);
+            drawReadingMenu();
+        });
+        return;
+    }
+    turnPage(x >= W * 35 / 100);
 }

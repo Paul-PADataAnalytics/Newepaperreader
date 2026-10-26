@@ -29,7 +29,7 @@ bool NavigationManager::goBack() {
         NavTarget home{-1, 0, false, ""};
         m_stack.push_back(home);
 
-        DisplayHAL::setPortrait(false);
+        DisplayHAL::setPortrait(true);
         Launcher::getInstance().exitCurrentApp();
         return false;
     }
@@ -40,7 +40,7 @@ bool NavigationManager::goBack() {
     // Target to restore
     NavTarget prev = m_stack.back();
 
-    DisplayHAL::setPortrait(prev.isPortrait);
+    DisplayHAL::setPortrait(true);
 
     if (prev.appIndex < 0) {
         Launcher::getInstance().exitCurrentApp();

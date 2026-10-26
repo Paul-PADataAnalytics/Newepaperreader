@@ -55,6 +55,18 @@ struct SavedSystemState {
 };
 
 bool saveSystemState(const SavedSystemState& state);
+
+// The most recently opened book, shown on the home screen's "Continue
+// reading" card. `percent` is 0..100.
+struct LastBook {
+    std::string path;
+    std::string title;
+    std::string author;
+    int percent = 0;
+    bool valid = false;
+};
+bool saveLastBook(const LastBook& book);
+LastBook loadLastBook();
 SavedSystemState loadSystemState();
 bool clearSystemState();
 

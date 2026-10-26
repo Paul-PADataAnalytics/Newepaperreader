@@ -21,6 +21,7 @@ public:
 
     virtual void draw() override;
     virtual void handleTouch(int x, int y) override;
+    virtual bool wantsSystemBack() const override { return m_state == STATE_LIB; }
 
     // True while a book page is actively displayed (STATE_READ), as opposed
     // to the library/file list view. Used by main.cpp to exempt active
@@ -31,6 +32,7 @@ public:
     // (empty if none). Used by main.cpp to save a resume breadcrumb before
     // entering deep-sleep lock mode.
     const std::string& getCurrentBookPath() const { return m_currentBookPath; }
+    const std::string& getCurrentBookTitle() const { return m_currentBookTitle; }
 
     // Jumps directly into reading the book at the given runtime path,
     // skipping the library view - used to resume reading after a
@@ -46,6 +48,9 @@ public:
     // forward/back page turn happened to save one. No-op if not currently
     // reading a book.
     void saveCurrentPosition();
+
+    // Persists the position and the home screen's "continue reading" info.
+    void prepareForSleep() { saveCurrentPosition(); rememberLastBook(); }
 
 private:
     enum ReaderState {
@@ -71,7 +76,8 @@ private:
     std::string m_currentBookTitle = "";
     std::string m_currentBookAuthor = "";
     int m_libraryPage = 0;
-    LibrarySort m_librarySort = LibrarySort::AUTHOR;
+    static LibrarySort s_librarySort;
+    bool m_menuOpen = false;
 
     std::vector<std::string> m_chapters;
     int m_currentChapterIndex = -1;
@@ -84,6 +90,14 @@ private:
     static float s_readingFontSize;
 
     void prepareTypographyForReading();
+    void restoreTypographyDefaults();
+    // Whole-book progress 0..1 (chapter-aware for EPUB).
+    float currentProgress() const;
+    void rememberLastBook();
+    void leaveReading();
+    void turnPage(bool forward);
+    void drawReadingMenu();
+    int libraryRowsPerPage() const;
     void updateLibraryItems();
     // Full recursive SD scan (slow) - only called when a cached index isn't
     // usable (see AppStorage::loadLibraryIndex). Populates m_libraryFiles and

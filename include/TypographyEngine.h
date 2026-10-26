@@ -34,6 +34,19 @@ public:
     int measureText(const std::string& text);
     int measureText(const char* text, size_t len);
 
+    // Single line of UI text: no word wrapping and no page margins, only
+    // clipped to the screen. `y` is the top of the line box (baseline is
+    // y + ascent). Returns the advance width in pixels.
+    int renderLine(const char* text, size_t len, int x, int y, uint8_t* framebuffer, uint8_t textColor = 0);
+
+    // Metrics for the current font size.
+    int ascent();
+    int lineHeight();
+    float getFontSize() const { return fontSize; }
+
+    // Text-area margins used by the page layout functions above.
+    void setHorizontalMargins(int left, int right);
+
     // Override margins at runtime (used to reserve space for UI elements)
     void setTopMargin(int pixels);
     void setBottomMargin(int pixels);
@@ -47,7 +60,7 @@ private:
     // Globally fixed margins
     int       MARGIN_TOP    = 20;   // mutable — can be overridden at runtime
     int       MARGIN_BOTTOM = 20;   // mutable — can be overridden at runtime
-    const int MARGIN_LEFT   = 20;
-    const int MARGIN_RIGHT  = 20;
+    int       MARGIN_LEFT   = 20;
+    int       MARGIN_RIGHT  = 20;
     const int LINE_SPACING  = 5;
 };

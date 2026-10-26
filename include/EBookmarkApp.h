@@ -29,8 +29,7 @@ private:
     int m_ebookmarkPage = 0;
     LibrarySort m_librarySort = LibrarySort::AUTHOR;
 
-    // Last known database state for automatic two-way sync.
-    std::string m_lastSyncedJson;
+    uint32_t m_seenRevision = 0;
     uint32_t m_lastLocalUpdateTs = 0;
 
     void updateEBookmarkItems();

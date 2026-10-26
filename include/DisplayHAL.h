@@ -55,6 +55,15 @@ public:
     static int getBatteryPercent();
     static bool isCharging();
 
+    // Shuts down every peripheral this HAL owns (EPD rails + config shift
+    // register, GT911 touch controller, I2C) and latches the touch INT line
+    // low through deep sleep so the controller stays in its sleep mode.
+    static void prepareForDeepSleep();
+
+    // Writes what is currently on screen, in the orientation the user sees
+    // it, as an 8-bit PGM (width x height header included).
+    static void dumpVisible(const char* filepath);
+
 #ifdef NATIVE_TESTING
     static void handleEvents();
     static bool windowShouldClose();

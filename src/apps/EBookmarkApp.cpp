@@ -35,17 +35,8 @@ void EBookmarkApp::onCreate() {
     m_selectedBookmarkIndex = -1;
     m_librarySort = LibrarySort::AUTHOR;
     m_lastLocalUpdateTs = 0;
-
     EBookmarkManager::getInstance().initialize();
-    // Pre-populate read characteristic buffer with loaded database
-    EBookmarkManager::getInstance().save();
-    m_lastSyncedJson = AppComm::getReadBuffer();
-
-    // When the eBookmark app opens, immediately advertise our local state to
-    // the phone so automatic two-way sync can begin.
-    if (AppComm::isInitialized()) {
-        syncToApp();
-    }
+    m_seenRevision = AppComm::bookmarksRevision();
 }
 
 void EBookmarkApp::onDestroy() {
@@ -60,77 +51,20 @@ void EBookmarkApp::draw() {
 }
 
 void EBookmarkApp::update() {
-    if (!AppComm::isInitialized()) return;
-
-    AppComm::poll();
-    bool localChanged = false;
-
-    while (AppComm::hasData()) {
-        std::string msg = AppComm::getNextMessage();
-        if (msg.empty()) continue;
-
-        JsonDocument doc;
-        DeserializationError err = deserializeJson(doc, msg);
-        if (err) continue;
-
-        std::string type = doc["t"] | "";
-        if (type == "BOOK") {
-            std::string isbn = doc["isbn"] | "";
-            std::string title = doc["title"] | "";
-            std::string author = doc["author"] | "";
-            std::string genre = doc["genre"] | "";
-            int page = doc["page"] | 0;
-            int total = doc["total"] | 0;
-            uint32_t ts = doc["ts"] | 0;
-
-            if (!isbn.empty()) {
-                // Last-change-wins per book: only apply the phone's update if it
-                // is newer than the book's most recent local history entry.
-                uint32_t localTs = 0;
-                for (const auto& book : EBookmarkManager::getInstance().getBookmarks()) {
-                    if (book.isbn == isbn && !book.history.empty()) {
-                        localTs = book.history.back().timestamp;
-                        break;
-                    }
-                }
-                if (ts >= localTs) {
-                    EBookmarkManager::getInstance().addOrUpdateBook(isbn, title, author, genre, page, total);
-                    if (ts > 0) {
-                        EBookmarkManager::getInstance().updatePage(isbn, page, ts);
-                    }
-                    localChanged = true;
-                }
-            }
-        } else if (type == "GET_BOOKMARKS") {
-            syncToApp();
-        } else if (type == "TIME") {
-            uint32_t val = doc["val"] | 0;
-            if (val > 0) {
-#ifndef NATIVE_TESTING
-                struct timeval tv;
-                tv.tv_sec = val;
-                tv.tv_usec = 0;
-                settimeofday(&tv, NULL);
-#endif
-            }
-        }
-    }
-
-    // If the local database changed (from touch or from an incoming message),
-    // push the latest state to the phone's read characteristic.
-    if (localChanged) {
-        syncToApp();
+    // Incoming phone changes are applied centrally by AppComm::poll(); just
+    // redraw when the database revision moves on.
+    uint32_t rev = AppComm::bookmarksRevision();
+    if (rev != m_seenRevision) {
+        m_seenRevision = rev;
         draw();
     }
 }
 
 void EBookmarkApp::syncToApp() {
     EBookmarkManager::getInstance().save();
-    m_lastSyncedJson = AppComm::getReadBuffer();
 }
 
 void EBookmarkApp::syncFromApp() {
-    // Not used directly; incoming BOOK messages are handled in update().
 }
 
 void EBookmarkApp::updateEBookmarkItems() {

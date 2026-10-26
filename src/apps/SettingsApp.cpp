@@ -1,442 +1,313 @@
 #include "SettingsApp.h"
 #include "EReaderApp.h"
 #include "DisplayHAL.h"
-#include "TypographyEngine.h"
-#include "ui/UIFramework.h"
 #include "AppComm.h"
-#include "EBookmarkManager.h"
-#include "Launcher.h"
-#include "NavigationManager.h"
-
-
-#include <ArduinoJson.h>
+#include "PowerManager.h"
+#include "SystemSettings.h"
+#include "ui/UIFramework.h"
+#include "ui/UIKit.h"
+#include <cstdio>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
-#include <sys/time.h>
-#include <base64.h>
+#include <SD.h>
 #else
-#include <stdio.h>
-#include <iostream>
+#include <chrono>
+static uint32_t millis() {
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
 #endif
 
-extern uint8_t *framebuffer;
-extern TypographyEngine typography;
-
-// Region occupied by the status/log line
-static constexpr int LOG_X = 100;
-static constexpr int LOG_Y = 355;
-static constexpr int LOG_H = 30;
+extern uint8_t* framebuffer;
+void requestSleepNow();
 
 namespace {
-// Decode a base64 string into bytes. Works on native builds; on ESP32 the
-// Arduino core's base64.h is preferred but this fallback is always available.
-std::vector<uint8_t> decodeBase64(const std::string& input) {
-    static const char table[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    std::vector<int> t(256, -1);
-    for (int i = 0; i < 64; ++i) t[(unsigned char)table[i]] = i;
+using namespace UI;
 
-    std::vector<uint8_t> out;
-    int val = 0, valb = -8;
-    for (unsigned char c : input) {
-        if (c == '=') break;
-        if (t[c] == -1) continue;
-        val = (val << 6) + t[c];
-        valb += 6;
-        if (valb >= 0) {
-            out.push_back(uint8_t((val >> valb) & 0xFF));
-            valb -= 8;
-        }
-    }
-    return out;
+const Rect kTabs(MARGIN, HEADER_H + 16, W - 2 * MARGIN, 52);
+constexpr int CONTENT_Y = HEADER_H + 92;
+constexpr int ROW = 104;
+
+const int kSleepOptions[] = {1, 2, 5, 10, 30, 0};
+constexpr int kSleepOptionCount = 6;
+
+// Display tab
+Rect darkToggle() { return Rect(W - MARGIN - TOGGLE_W, CONTENT_Y + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
+Rect fontMinus() { return Rect(W - MARGIN - 210, CONTENT_Y + ROW + 22, 70, 58); }
+Rect fontPlus() { return Rect(W - MARGIN - 70, CONTENT_Y + ROW + 22, 70, 58); }
+Rect brightnessSeg() { return Rect(MARGIN, CONTENT_Y + 2 * ROW + 76, W - 2 * MARGIN, 54); }
+
+// Power tab
+Rect sleepSeg() { return Rect(MARGIN, CONTENT_Y + 76, W - 2 * MARGIN, 54); }
+constexpr int POWER_ROW2 = CONTENT_Y + 150;
+Rect usbToggle() { return Rect(W - MARGIN - TOGGLE_W, POWER_ROW2 + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
+Rect alwaysToggle() { return Rect(W - MARGIN - TOGGLE_W, POWER_ROW2 + ROW + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
+constexpr int POWER_ROW4 = POWER_ROW2 + 2 * ROW;
+Rect sleepScreenSeg() { return Rect(MARGIN, POWER_ROW4 + 50, W - 2 * MARGIN, 54); }
+constexpr int POWER_BATT = POWER_ROW4 + 130;
+Rect sleepNowBtn() { return Rect(MARGIN, H - 100, W - 2 * MARGIN, 64); }
+
+// Bluetooth tab
+Rect bleToggle() { return Rect(W - MARGIN - TOGGLE_W, CONTENT_Y + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
+constexpr int BLE_CARD_Y = CONTENT_Y + ROW + 16;
+constexpr int BLE_CARD_H = 200;
+
+int sleepOptionIndex(int minutes) {
+    for (int i = 0; i < kSleepOptionCount; i++) if (kSleepOptions[i] == minutes) return i;
+    return 2;
+}
+
+void fontSizeRow(int y) {
+    float size = EReaderApp::getReadingFontSize();
+    settingLabel(y, ROW, "Text size", "Font size for books");
+    Rect m = fontMinus(), p = fontPlus();
+    button(m, "A-", ButtonStyle::SECONDARY, FONT_SMALL, size > 16.0f);
+    button(p, "A+", ButtonStyle::SECONDARY, FONT_BODY, size < 48.0f);
+    textCentered(std::to_string((int)size), (m.x + m.w + p.x) / 2, y + (ROW - lineHeight(FONT_BODY)) / 2, FONT_BODY, BLACK, true);
 }
 } // namespace
 
+bool SettingsApp::s_openBluetooth = false;
+
 void SettingsApp::onCreate() {
-    m_bleActive = AppComm::isInitialized();
-    m_lastDrawnBleActive = m_bleActive;
-    m_syncStatus = m_bleActive ? "Ready for connection" : "BLE Radio is Off";
-    m_lastDrawnStatus = m_syncStatus;
-    m_processingTouch = false;
-    m_hasDrawn = false;
+    m_tab = s_openBluetooth ? TAB_BLUETOOTH : TAB_DISPLAY;
+    s_openBluetooth = false;
+    m_lastBleStatus = bleStatusText();
 }
 
-void SettingsApp::onDestroy() {
-    // Keep BLE running if active so they can continue syncing, or we can close it on exit.
-    // Standard approach: leave it as the user toggled it.
+void SettingsApp::onDestroy() {}
+
+std::string SettingsApp::bleStatusText() const {
+    if (!AppComm::isInitialized()) return "Off";
+    std::string s = AppComm::isConnected() ? "Connected" : "Waiting for phone";
+    if (AppComm::isTransferActive()) {
+        s += " | Receiving " + AppComm::transferName() + " " + std::to_string(AppComm::transferPercent()) + "%";
+    }
+    s += " | " + AppComm::lastEvent();
+    return s;
+}
+
+void SettingsApp::drawBleStatusCard(int y) {
+    strokeRoundRect(MARGIN, y, W - 2 * MARGIN, BLE_CARD_H, 16, 2, BLACK);
+    int x = MARGIN + 24;
+    int w = W - 2 * MARGIN - 48;
+    if (!AppComm::isInitialized()) {
+        text("Bluetooth is off", x, y + 24, FONT_BODY, BLACK, true);
+        textWrapped("Turn it on to sync bookmarks and send books from the companion app.", x, y + 70, w, FONT_SMALL, DARK, 3);
+        return;
+    }
+    bool connected = AppComm::isConnected();
+    icon(ICON_BLUETOOTH, x - 6, y + 18, 40, connected ? BLACK : MID);
+    text(connected ? "Phone connected" : "Ready to connect", x + 42, y + 24, FONT_BODY, BLACK, true);
+    text(connected ? "Companion app is linked" : "Visible as \"EPD-Reader\"", x, y + 72, FONT_SMALL, DARK);
+    if (AppComm::isTransferActive()) {
+        text(ellipsize("Receiving " + AppComm::transferName(), w, FONT_SMALL), x, y + 112, FONT_SMALL, INK);
+        progressBar(x, y + 152, w, 10, AppComm::transferPercent() / 100.0f);
+    } else {
+        std::string ev = AppComm::lastEvent();
+        if (!ev.empty()) textWrapped("Last: " + ev, x, y + 112, w, FONT_SMALL, INK, 2);
+    }
+}
+
+void SettingsApp::drawContent() {
+    SystemSettingsData& s = SystemSettings::get();
+    segmented(kTabs, {"Display", "Power", "Bluetooth", "About"}, m_tab);
+
+    switch (m_tab) {
+    case TAB_DISPLAY: {
+        int y = CONTENT_Y;
+        settingLabel(y, ROW, "Dark mode", "White text on black");
+        Rect t = darkToggle();
+        toggle(t.x, t.y, DisplayHAL::isDarkMode());
+        hRule(y + ROW - 1);
+        y += ROW;
+        fontSizeRow(y);
+        hRule(y + ROW - 1);
+        y += ROW;
+        settingLabel(y, 72, "Picture brightness", "Lightens photos and sleep pictures");
+        segmented(brightnessSeg(), {"Original", "Light", "Lighter", "Lightest"}, s.imageBrightness, FONT_CAPTION + 1);
+        break;
+    }
+    case TAB_POWER: {
+        settingLabel(CONTENT_Y, 72, "Auto-sleep", "After this long without a touch");
+        segmented(sleepSeg(), {"1m", "2m", "5m", "10m", "30m", "Never"}, sleepOptionIndex(s.sleepTimeoutMin));
+        hRule(POWER_ROW2 - 1);
+        settingLabel(POWER_ROW2, ROW, "Stay awake on USB", "While plugged into a computer");
+        Rect u = usbToggle();
+        toggle(u.x, u.y, s.stayAwakeOnUsb);
+        hRule(POWER_ROW2 + ROW - 1);
+        settingLabel(POWER_ROW2 + ROW, ROW, "Always on", "Developer: never auto-sleep");
+        Rect a = alwaysToggle();
+        toggle(a.x, a.y, s.alwaysOn);
+        hRule(POWER_ROW4 - 1);
+        text("Sleep screen", MARGIN, POWER_ROW4 + 12, FONT_BODY, BLACK);
+        segmented(sleepScreenSeg(), {"Pictures", "Book & battery"}, s.sleepShowsImages ? 0 : 1);
+
+        char batt[64];
+        snprintf(batt, sizeof(batt), "%.2f V%s", DisplayHAL::getBatteryVoltage(),
+                 PowerManager::isUsbConnected() ? "  |  USB connected" : "");
+        settingLabel(POWER_BATT, 80, "Battery", batt);
+        textRight(std::to_string(DisplayHAL::getBatteryPercent()) + "%", W - MARGIN, POWER_BATT + 24, FONT_BODY, BLACK, true);
+        button(sleepNowBtn(), "Sleep now", ButtonStyle::PRIMARY, FONT_BODY);
+        break;
+    }
+    case TAB_BLUETOOTH: {
+        settingLabel(CONTENT_Y, ROW, "Bluetooth sync", "Companion app connection");
+        Rect t = bleToggle();
+        toggle(t.x, t.y, AppComm::isInitialized());
+        drawBleStatusCard(BLE_CARD_Y);
+        int y = BLE_CARD_Y + BLE_CARD_H + 36;
+        sectionLabel(y, "How to connect");
+        textWrapped("1. Open the companion app on your phone.\n2. Go to the Device tab and tap Connect.\n"
+                    "3. Use the Library tab to browse, send or delete books.",
+                    MARGIN, y + 36, W - 2 * MARGIN, FONT_SMALL, INK, 0, 10);
+        break;
+    }
+    case TAB_ABOUT: {
+        int y = CONTENT_Y;
+        auto row = [&](const std::string& label, const std::string& value) {
+            text(label, MARGIN, y + 22, FONT_BODY, BLACK);
+            textRight(value, W - MARGIN, y + 24, FONT_SMALL + 2, INK, true);
+            hRule(y + 75);
+            y += 76;
+        };
+        row("Firmware", "v3.0.0");
+#ifndef NATIVE_TESTING
+        char buf[48];
+        snprintf(buf, sizeof(buf), "%u KB", (unsigned)(ESP.getFreeHeap() / 1024));
+        row("Free memory", buf);
+        snprintf(buf, sizeof(buf), "%u KB", (unsigned)(ESP.getFreePsram() / 1024));
+        row("Free PSRAM", buf);
+        uint64_t total = SD.totalBytes(), used = SD.usedBytes();
+        snprintf(buf, sizeof(buf), "%.1f of %.1f GB free", (total - used) / 1073741824.0, total / 1073741824.0);
+        row("SD card", buf);
+        snprintf(buf, sizeof(buf), "%u min", (unsigned)(millis() / 60000));
+        row("Awake for", buf);
+#else
+        row("Platform", "Desktop simulator");
+#endif
+        row("Display", "4.7\" 540 x 960, 16 greys");
+        sectionLabel(y + 24, "Tips");
+        textWrapped("Press the side button to sleep or wake. Waking returns you to the same page. "
+                    "Tap the top of a book page for text size and progress.",
+                    MARGIN, y + 60, W - 2 * MARGIN, FONT_SMALL, INK, 0, 8);
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 void SettingsApp::draw() {
-    m_bleActive = AppComm::isInitialized();
-    bool stateChanged = (m_bleActive != m_lastDrawnBleActive);
-    bool statusChanged = (m_syncStatus != m_lastDrawnStatus);
-    bool pageChanged = (m_page != m_lastDrawnPage);
-
-    // Page changes are handled by the destination page's performFullScreenDraw,
-    // which includes a mandatory hardware clear. No direct clear needed here.
-
-    if (pageChanged || !m_hasDrawn) {
-        if (m_page == PAGE_MAIN) {
-            drawMainSettings();
-        } else if (m_page == PAGE_BLE) {
-            drawBleSettings(false);
-        } else if (m_page == PAGE_EREADER) {
-            drawEReaderSettings();
-        }
-        m_hasDrawn = true;
-    } else if (m_page == PAGE_BLE && (stateChanged || statusChanged)) {
-        if (stateChanged) {
-            drawBleSettings(true);
-        } else {
-            drawLogLineOnly();
-        }
-    } else if (m_page == PAGE_MAIN && (stateChanged || statusChanged)) {
-        drawMainSettings();
-    }
-
-    m_lastDrawnBleActive = m_bleActive;
-    m_lastDrawnStatus = m_syncStatus;
-    m_lastDrawnPage = m_page;
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        header("Settings", true);
+        drawContent();
+    });
+    m_lastBleStatus = bleStatusText();
 }
 
-void SettingsApp::drawLogLineOnly() {
-    int w = DisplayHAL::getWidth();
-    uint8_t fg = UIFramework::getForegroundColor();
-    UIFramework::perform2PassPartialUpdate(framebuffer, 0, 280, w, 80, [this, fg]() {
-        typography.setFontSize(20.0f);
-        if (m_bleActive) {
-            typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
-        }
-        typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, fg);
+void SettingsApp::redrawContent() {
+    UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+        drawContent();
     });
+    m_lastBleStatus = bleStatusText();
 }
 
 void SettingsApp::update() {
-    m_bleActive = AppComm::isInitialized();
-    if (m_bleActive) {
-        AppComm::poll();
-    }
-}
-
-void SettingsApp::drawMainSettings() {
-    UIFramework::performFullScreenDraw(framebuffer, [&]() {
-        int w = DisplayHAL::getWidth();
-        uint8_t fg = UIFramework::getForegroundColor();
-
-        // 1. Header Title
-        typography.setFontSize(40.0f);
-        typography.renderText("System Settings", 70, 10, framebuffer, fg);
-        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
-
-        // 2. Line 1: BLE Settings: Connected/Disconnected  [Open BLE Settings]
-        int line1Y = 130;
-        std::string bleStateStr = m_bleActive ? "Connected" : "Disconnected";
-        uint8_t bleColor = m_bleActive ? fg : 0x06;
-
-        typography.setFontSize(26.0f);
-        typography.renderText("BLE Settings:", 70, line1Y + 10, framebuffer, fg);
-        typography.renderText(bleStateStr, 250, line1Y + 10, framebuffer, bleColor);
-
-        int btnW = 280;
-        int btnH = 50;
-        int btn1X = 600;
-        int btn1Y = line1Y;
-
-        UIFramework::drawButton(framebuffer, btn1X, btn1Y, btnW, btnH, "");
-        typography.setFontSize(22.0f);
-        int tw1 = typography.measureText("Open BLE Settings");
-        typography.renderText("Open BLE Settings", btn1X + (btnW - tw1) / 2, btn1Y + 14, framebuffer, fg);
-
-        DisplayHAL::drawHLine(50, 210, w - 100, 0x03, framebuffer);
-
-        // 3. Line 2: Light/Dark Mode: Light Mode / Dark Mode  [Toggle Mode]
-        int line2Y = 240;
-        std::string modeStateStr = DisplayHAL::isDarkMode() ? "Dark Mode" : "Light Mode";
-
-        typography.setFontSize(26.0f);
-        typography.renderText("Light/Dark Mode:", 70, line2Y + 10, framebuffer, fg);
-        typography.renderText(modeStateStr, 310, line2Y + 10, framebuffer, fg);
-
-        int btn2X = 600;
-        int btn2Y = line2Y;
-
-        UIFramework::drawButton(framebuffer, btn2X, btn2Y, btnW, btnH, "");
-        typography.setFontSize(22.0f);
-        int tw2 = typography.measureText("Toggle Mode");
-        typography.renderText("Toggle Mode", btn2X + (btnW - tw2) / 2, btn2Y + 14, framebuffer, fg);
-
-        DisplayHAL::drawHLine(50, 310, w - 100, 0x03, framebuffer);
-
-        // 4. Line 3: E-Reader Settings: Font Size XXpt  [Open E-Reader Settings]
-        int line3Y = 350;
-        int currentFontSize = (int)EReaderApp::getReadingFontSize();
-        std::string ereaderText = "E-Reader Settings: Font Size " + std::to_string(currentFontSize) + "pt";
-
-        typography.setFontSize(26.0f);
-        typography.renderText(ereaderText, 70, line3Y + 10, framebuffer, fg);
-
-        int btn3X = 600;
-        int btn3Y = line3Y;
-
-        UIFramework::drawButton(framebuffer, btn3X, btn3Y, btnW, btnH, "");
-        typography.setFontSize(22.0f);
-        int tw3 = typography.measureText("Open E-Reader Settings");
-        typography.renderText("Open E-Reader Settings", btn3X + (btnW - tw3) / 2, btn3Y + 14, framebuffer, fg);
-
-        DisplayHAL::drawHLine(50, 420, w - 100, 0x03, framebuffer);
-
-        // 5. Exit Settings Button
-        int exitX = (w - 240) / 2;
-        int exitY = 445;
-        int exitW = 240;
-        int exitH = 50;
-        UIFramework::drawButton(framebuffer, exitX, exitY, exitW, exitH, "");
-        typography.setFontSize(24.0f);
-        int btw = typography.measureText("Exit Settings");
-        typography.renderText("Exit Settings", exitX + (exitW - btw) / 2, exitY + 12, framebuffer, fg);
+    if (m_tab != TAB_BLUETOOTH) return;
+    uint32_t now = millis();
+    if (now - m_lastStatusCheck < 1000) return;
+    m_lastStatusCheck = now;
+    std::string status = bleStatusText();
+    if (status == m_lastBleStatus) return;
+    m_lastBleStatus = status;
+    UIFramework::performFastPartialUpdate(framebuffer, 0, BLE_CARD_Y - 4, W, BLE_CARD_H + 8, [this]() {
+        drawBleStatusCard(BLE_CARD_Y);
     });
-}
-
-void SettingsApp::drawBleSettings(bool forceFullRefresh) {
-    (void)forceFullRefresh;
-    UIFramework::performFullScreenDraw(framebuffer, [&]() {
-        int w = DisplayHAL::getWidth();
-        uint8_t fg = UIFramework::getForegroundColor();
-
-        // Header Title & Back Button
-        typography.setFontSize(40.0f);
-        typography.renderText("BLE Settings", 70, 10, framebuffer, fg);
-
-        int backX = w - 120;
-        int backY = 10;
-        int backW = 100;
-        int backH = 40;
-        UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
-        typography.setFontSize(24.0f);
-        int btw = typography.measureText("Back");
-        typography.renderText("Back", backX + (backW - btw) / 2, backY + 8, framebuffer, fg);
-
-        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
-
-        // BLE Toggle Card
-        int cardX = 100;
-        int cardY = 110;
-        int cardW = w - 200;
-        int cardH = 160;
-
-        UIFramework::drawButton(framebuffer, cardX, cardY, cardW, cardH, "");
-
-        typography.setFontSize(28.0f);
-        typography.renderText("BLE Sync Server Broadcast", cardX + 30, cardY + 30, framebuffer, fg);
-
-        std::string stateStr = m_bleActive ? "ENABLED (ON)" : "DISABLED (OFF)";
-        uint8_t stateColor = m_bleActive ? fg : 0x06;
-        typography.setFontSize(24.0f);
-        typography.renderText("Status: " + stateStr, cardX + 30, cardY + 90, framebuffer, stateColor);
-
-        int btnW = 160;
-        int btnH = 60;
-        int btnX = cardX + cardW - btnW - 30;
-        int btnY = cardY + (cardH - btnH) / 2;
-
-        UIFramework::drawButton(framebuffer, btnX, btnY, btnW, btnH, "", m_bleActive);
-
-        typography.setFontSize(22.0f);
-        std::string btnText = m_bleActive ? "Turn OFF" : "Turn ON";
-        int tw = typography.measureText(btnText);
-        typography.renderText(btnText, btnX + (btnW - tw) / 2, btnY + 18, framebuffer, m_bleActive ? 0xFF : fg);
-
-        // Broadcast info & Log output
-        typography.setFontSize(20.0f);
-        if (m_bleActive) {
-            typography.renderText("Advertising BLE Device: EPD-Reader", 100, 300, framebuffer, 0x03);
-        }
-        typography.renderText("Log: " + m_syncStatus, LOG_X, LOG_Y, framebuffer, fg);
-    });
-}
-
-void SettingsApp::drawEReaderSettings() {
-    UIFramework::performFullScreenDraw(framebuffer, [&]() {
-        int w = DisplayHAL::getWidth();
-        uint8_t fg = UIFramework::getForegroundColor();
-
-        // Header Title & Back Button
-        typography.setFontSize(40.0f);
-        typography.renderText("E-Reader Settings", 70, 10, framebuffer, fg);
-
-        int backX = 820;
-        int backY = 10;
-        int backW = 100;
-        int backH = 40;
-        UIFramework::drawButton(framebuffer, backX, backY, backW, backH, "");
-        typography.setFontSize(24.0f);
-        int btw = typography.measureText("Back");
-        typography.renderText("Back", backX + (backW - btw) / 2, backY + 8, framebuffer, fg);
-
-        DisplayHAL::drawHLine(0, 60, w, fg, framebuffer);
-
-        // Current Font Size Display
-        float curSize = EReaderApp::getReadingFontSize();
-        typography.setFontSize(28.0f);
-        std::string currentStr = "Reading Font Size: " + std::to_string((int)curSize) + "pt";
-        typography.renderText(currentStr, 70, 100, framebuffer, fg);
-
-        // Controls Row 1: [-] and [+] Step Buttons
-        UIFramework::drawButton(framebuffer, 70, 160, 100, 60, "");
-        typography.setFontSize(36.0f);
-        int minusW = typography.measureText("-");
-        typography.renderText("-", 70 + (100 - minusW) / 2, 160 + 10, framebuffer, fg);
-
-        UIFramework::drawButton(framebuffer, 200, 160, 100, 60, "");
-        int plusW = typography.measureText("+");
-        typography.renderText("+", 200 + (100 - plusW) / 2, 160 + 10, framebuffer, fg);
-
-        // Section Label: Preset Font Sizes
-        typography.setFontSize(26.0f);
-        typography.renderText("Presets:", 70, 260, framebuffer, fg);
-
-        // Controls Row 2: Preset buttons (20pt, 24pt, 28pt, 32pt, 36pt, 40pt)
-        static const int presets[] = {20, 24, 28, 32, 36, 40};
-        int presetBtnW = 110;
-        int presetBtnH = 55;
-        int startX = 70;
-        int startY = 310;
-        int gapX = 25;
-
-        for (int i = 0; i < 6; i++) {
-            int px = startX + i * (presetBtnW + gapX);
-            int py = startY;
-            bool isSelected = ((int)curSize == presets[i]);
-
-            UIFramework::drawButton(framebuffer, px, py, presetBtnW, presetBtnH, "", isSelected);
-
-            typography.setFontSize(24.0f);
-            std::string pStr = std::to_string(presets[i]) + "pt";
-            int pw = typography.measureText(pStr);
-            uint8_t fontColor = isSelected ? 0xFF : fg;
-            typography.renderText(pStr, px + (presetBtnW - pw) / 2, py + 14, framebuffer, fontColor);
-        }
-    });
+    // The status strip shows the link state too.
+    UIFramework::performFastPartialUpdate(framebuffer, 0, 0, W, STATUS_H, []() { statusBar(); });
 }
 
 void SettingsApp::handleTouch(int x, int y) {
-    int w = DisplayHAL::getWidth();
+    SystemSettingsData& s = SystemSettings::get();
 
-    if (m_page == PAGE_MAIN) {
-        // Row 1: Open BLE Settings button (x=600..880, y=130..180)
-        if (x >= 600 && x <= 880 && y >= 130 && y <= 180) {
-            m_page = PAGE_BLE;
-            draw();
+    int tab = hitSegmented(kTabs, TAB_COUNT, x, y);
+    if (tab >= 0) {
+        if (tab != m_tab) {
+            m_tab = (Tab)tab;
+            redrawContent();
+        }
+        return;
+    }
+
+    bool changed = false;
+    switch (m_tab) {
+    case TAB_DISPLAY: {
+        if (y >= CONTENT_Y && y < CONTENT_Y + ROW && x > W / 2) {
+            s.darkMode = !s.darkMode;
+            DisplayHAL::setDarkMode(s.darkMode);
+            SystemSettings::save();
+            draw(); // whole screen inverts
             return;
         }
-
-        // Row 2: Toggle Mode button (x=600..880, y=240..290)
-        if (x >= 600 && x <= 880 && y >= 240 && y <= 290) {
-            DisplayHAL::setDarkMode(!DisplayHAL::isDarkMode());
-            drawMainSettings();
+        float size = EReaderApp::getReadingFontSize();
+        float next = size;
+        if (fontMinus().contains(x, y) && size > 16.0f) next = size - 2.0f;
+        if (fontPlus().contains(x, y) && size < 48.0f) next = size + 2.0f;
+        if (next != size) {
+            EReaderApp::setReadingFontSize(next);
+            s.readingFontSize = next;
+            changed = true;
+        }
+        int b = hitSegmented(brightnessSeg(), 4, x, y);
+        if (b >= 0 && b != s.imageBrightness) {
+            s.imageBrightness = b;
+            changed = true;
+        }
+        break;
+    }
+    case TAB_POWER: {
+        int i = hitSegmented(sleepSeg(), kSleepOptionCount, x, y);
+        if (i >= 0 && kSleepOptions[i] != s.sleepTimeoutMin) {
+            s.sleepTimeoutMin = kSleepOptions[i];
+            changed = true;
+        }
+        if (y >= POWER_ROW2 && y < POWER_ROW2 + ROW && x > W / 2) {
+            s.stayAwakeOnUsb = !s.stayAwakeOnUsb;
+            changed = true;
+        }
+        if (y >= POWER_ROW2 + ROW && y < POWER_ROW4 && x > W / 2) {
+            s.alwaysOn = !s.alwaysOn;
+            changed = true;
+        }
+        int ss = hitSegmented(sleepScreenSeg(), 2, x, y);
+        if (ss >= 0 && (ss == 0) != s.sleepShowsImages) {
+            s.sleepShowsImages = (ss == 0);
+            changed = true;
+        }
+        if (sleepNowBtn().contains(x, y)) {
+            requestSleepNow();
             return;
         }
-
-        // Row 3: Open E-Reader Settings button (x=600..880, y=350..400)
-        if (x >= 600 && x <= 880 && y >= 350 && y <= 400) {
-            m_page = PAGE_EREADER;
-            draw();
-            return;
+        break;
+    }
+    case TAB_BLUETOOTH: {
+        if (y >= CONTENT_Y && y < CONTENT_Y + ROW && x > W / 2) {
+            if (AppComm::isInitialized()) AppComm::deinit();
+            else AppComm::init();
+            s.bleEnabled = AppComm::isInitialized();
+            changed = true;
         }
+        break;
+    }
+    default:
+        break;
+    }
 
-        // Exit Settings button (x=360..600, y=445..495)
-        int exitX = (w - 240) / 2;
-        int exitY = 445;
-        int exitW = 240;
-        int exitH = 50;
-        if (x >= exitX && x <= exitX + exitW && y >= exitY && y <= exitY + exitH) {
-            NavigationManager::getInstance().goBack();
-            return;
-        }
-    } else if (m_page == PAGE_BLE) {
-        // Back button (top right x=w-120..w-20, y=10..50)
-        if (x >= w - 120 && x <= w - 20 && y >= 10 && y <= 50) {
-            m_page = PAGE_MAIN;
-            draw();
-            return;
-        }
-
-        // BLE Toggle button inside Card
-        int cardX = 100;
-        int cardY = 110;
-        int cardW = w - 200;
-        int cardH = 160;
-        int btnW = 160;
-        int btnH = 60;
-        int btnX = cardX + cardW - btnW - 30;
-        int btnY = cardY + (cardH - btnH) / 2;
-
-        if (x >= btnX && x <= btnX + btnW && y >= btnY && y <= btnY + btnH) {
-            if (m_processingTouch) return;
-            m_processingTouch = true;
-
-            if (m_bleActive) {
-                AppComm::deinit();
-                m_syncStatus = "BLE Sync disabled";
-            } else {
-                AppComm::init();
-                if (AppComm::isInitialized()) {
-                    m_syncStatus = "Broadcasting BLE sync...";
-                } else {
-                    m_syncStatus = "BLE init failed";
-                }
-            }
-            m_bleActive = AppComm::isInitialized();
-            draw();
-
-            m_processingTouch = false;
-            return;
-        }
-    } else if (m_page == PAGE_EREADER) {
-        // Back button (top right x=820..920, y=10..50)
-        if (x >= 820 && x <= 920 && y >= 10 && y <= 50) {
-            m_page = PAGE_MAIN;
-            draw();
-            return;
-        }
-
-        // [-] step button (x=70..170, y=160..220)
-        if (x >= 70 && x <= 170 && y >= 160 && y <= 220) {
-            float cur = EReaderApp::getReadingFontSize();
-            if (cur > 12.0f) {
-                EReaderApp::setReadingFontSize(cur - 2.0f);
-                draw();
-            }
-            return;
-        }
-
-        // [+] step button (x=200..300, y=160..220)
-        if (x >= 200 && x <= 300 && y >= 160 && y <= 220) {
-            float cur = EReaderApp::getReadingFontSize();
-            if (cur < 60.0f) {
-                EReaderApp::setReadingFontSize(cur + 2.0f);
-                draw();
-            }
-            return;
-        }
-
-        // Preset buttons (x=70 + i*135 .. + 110, y=310..365)
-        static const int presets[] = {20, 24, 28, 32, 36, 40};
-        int presetBtnW = 110;
-        int presetBtnH = 55;
-        int startX = 70;
-        int startY = 310;
-        int gapX = 25;
-
-        for (int i = 0; i < 6; i++) {
-            int px = startX + i * (presetBtnW + gapX);
-            int py = startY;
-            if (x >= px && x <= px + presetBtnW && y >= py && y <= py + presetBtnH) {
-                EReaderApp::setReadingFontSize((float)presets[i]);
-                draw();
-                return;
-            }
-        }
+    if (changed) {
+        SystemSettings::save();
+        PowerManager::noteUserActivity();
+        redrawContent();
     }
 }

@@ -1,5 +1,6 @@
 #include "AppStorage.h"
 #include <cstdint>
+#include <cstdlib>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
@@ -414,6 +415,57 @@ SavedSystemState loadSystemState() {
     state.valid = (state.appIndex >= 0);
     return state;
 #endif
+}
+
+bool saveLastBook(const LastBook& book) {
+    std::string path = toRuntimePath("/data/last_book.txt");
+#ifdef NATIVE_TESTING
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) return false;
+    fprintf(f, "%s\n%s\n%s\n%d\n", book.path.c_str(), book.title.c_str(), book.author.c_str(), book.percent);
+    fclose(f);
+#else
+    if (SD.exists(path.c_str())) SD.remove(path.c_str());
+    File f = SD.open(path.c_str(), FILE_WRITE);
+    if (!f) return false;
+    f.printf("%s\n%s\n%s\n%d\n", book.path.c_str(), book.title.c_str(), book.author.c_str(), book.percent);
+    f.close();
+#endif
+    return true;
+}
+
+LastBook loadLastBook() {
+    LastBook book;
+    std::string path = toRuntimePath("/data/last_book.txt");
+    std::vector<std::string> lines;
+#ifdef NATIVE_TESTING
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return book;
+    char buf[512];
+    while (lines.size() < 4 && fgets(buf, sizeof(buf), f)) {
+        std::string l = buf;
+        while (!l.empty() && (l.back() == '\n' || l.back() == '\r')) l.pop_back();
+        lines.push_back(l);
+    }
+    fclose(f);
+#else
+    if (!SD.exists(path.c_str())) return book;
+    File f = SD.open(path.c_str(), FILE_READ);
+    if (!f) return book;
+    while (lines.size() < 4 && f.available()) {
+        String l = f.readStringUntil('\n');
+        l.trim();
+        lines.push_back(l.c_str());
+    }
+    f.close();
+#endif
+    if (lines.size() < 4 || lines[0].empty()) return book;
+    book.path = lines[0];
+    book.title = lines[1];
+    book.author = lines[2];
+    book.percent = atoi(lines[3].c_str());
+    book.valid = true;
+    return book;
 }
 
 bool clearSystemState() {

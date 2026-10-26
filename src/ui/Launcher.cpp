@@ -10,41 +10,82 @@
 #include "TypographyEngine.h"
 #include "AppComm.h"
 #include "ui/UIFramework.h"
-#include "app_icons_embedded.h"
-#include "menu_category_icons.h"
+#include "ui/UIKit.h"
+#include "reader/AppStorage.h"
 #include <time.h>
 #include <cstring>
+#include <cstdio>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
 #else
-#include <stdio.h>
 #include <iostream>
 #endif
 
 extern uint8_t *framebuffer;
 extern TypographyEngine typography;
+void requestSleepNow();
 
-Application* createEReader() { return new EReaderApp(); }
-Application* createEBookmark() { return new EBookmarkApp(); }
-Application* createSettings() { return new SettingsApp(); }
-Application* createCalculator() { return new CalculatorApp(); }
-Application* createFileManager() { return new FileManagerApp(); }
-Application* createImageViewer() { return new ImageViewerApp(); }
-Application* createHeroAdventure() { return new HeroAdventureApp(); }
+static Application* createEReader() { return new EReaderApp(); }
+static Application* createEBookmark() { return new EBookmarkApp(); }
+static Application* createSettings() { return new SettingsApp(); }
+static Application* createCalculator() { return new CalculatorApp(); }
+static Application* createFileManager() { return new FileManagerApp(); }
+static Application* createImageViewer() { return new ImageViewerApp(); }
+static Application* createHeroAdventure() { return new HeroAdventureApp(); }
 
-static void drawIcon48x48(uint8_t* fb, int iconX, int iconY, const uint8_t* iconData) {
-    if (!fb || !iconData) return;
-    for (int r = 0; r < 48; r++) {
-        for (int c = 0; c < 48; c += 2) {
-            uint8_t byteVal = iconData[r * 24 + (c / 2)];
-            uint8_t p1 = (byteVal >> 4) & 0x0F;
-            uint8_t p2 = byteVal & 0x0F;
-            DisplayHAL::setPixel(iconX + c, iconY + r, p1, fb);
-            DisplayHAL::setPixel(iconX + c + 1, iconY + r, p2, fb);
-        }
+// ---- Home screen layout ----------------------------------------------------
+namespace {
+using namespace UI;
+
+constexpr int CLOCK_TOP = STATUS_H;
+constexpr int CLOCK_H = 150;
+constexpr int CARD_Y = 196;
+constexpr int CARD_H = 176;
+constexpr int GRID_Y = 404;
+constexpr int GRID_COLS = 3;
+constexpr int GRID_GAP = 16;
+constexpr int TILE_W = (W - 2 * MARGIN - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS;
+constexpr int TILE_H = 148;
+
+Rect tileRect(int i) {
+    int row = i / GRID_COLS;
+    int col = i % GRID_COLS;
+    return Rect(MARGIN + col * (TILE_W + GRID_GAP), GRID_Y + row * (TILE_H + GRID_GAP), TILE_W, TILE_H);
+}
+
+Rect cardRect() { return Rect(MARGIN, CARD_Y, W - 2 * MARGIN, CARD_H); }
+
+// Home grid tiles: apps plus two shortcuts.
+constexpr int TILE_BLUETOOTH = -2;
+constexpr int TILE_SLEEP = -3;
+const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_IMAGES, APP_FILES, APP_CALCULATOR, APP_GAME,
+                      TILE_BLUETOOTH, APP_SETTINGS, TILE_SLEEP};
+constexpr int kTileCount = sizeof(kTiles) / sizeof(kTiles[0]);
+
+void drawClockBlock() {
+    time_t raw;
+    time(&raw);
+    struct tm* t = localtime(&raw);
+    bool valid = t && t->tm_year > 100;
+    if (valid) {
+        char date[48];
+        strftime(date, sizeof(date), "%A, %d %B", t);
+        text(date, MARGIN, CLOCK_TOP + 22, FONT_SMALL + 2, DARK);
+        int hr = t->tm_hour % 12;
+        if (hr == 0) hr = 12;
+        char tm[16];
+        snprintf(tm, sizeof(tm), "%d:%02d", hr, t->tm_min);
+        int tw = textWidth(tm, 84.0f, true);
+        text(tm, MARGIN - 4, CLOCK_TOP + 50, 84.0f, BLACK, true);
+        text(t->tm_hour < 12 ? "AM" : "PM", MARGIN + tw + 6, CLOCK_TOP + 108, FONT_BODY, DARK, true);
+    } else {
+        text("Clock not set", MARGIN, CLOCK_TOP + 22, FONT_SMALL + 2, DARK);
+        text("Hello", MARGIN - 2, CLOCK_TOP + 50, 84.0f, BLACK, true);
+        text("Connect the companion app to set the time.", MARGIN, CLOCK_TOP + 140 - 16, FONT_CAPTION, DARK);
     }
 }
+} // namespace
 
 Launcher& Launcher::getInstance() {
     static Launcher instance;
@@ -56,388 +97,188 @@ Launcher::~Launcher() {
 }
 
 void Launcher::init() {
-    // Create main menu with categories and direct access apps
-    
-    // Create Utilities category
-    AppDescriptor utilities;
-    utilities.name = "Utilities";
-    utilities.description = "Access system tools";
-    utilities.factory = nullptr;
-    utilities.isCategory = true;
-    utilities.iconIndex = 0;  // Uses g_menuCategoryIcons[0]
-    
-    AppDescriptor calc;
-    calc.name = "Calculator App";
-    calc.description = "Simple high-contrast basic math utility";
-    calc.factory = createCalculator;
-    calc.isCategory = false;
-    calc.iconIndex = 3;
-    utilities.items.push_back(calc);
-    
-    AppDescriptor fileBrowser;
-    fileBrowser.name = "File Browser";
-    fileBrowser.description = "Manage files and folders on the SD card";
-    fileBrowser.factory = createFileManager;
-    fileBrowser.isCategory = false;
-    fileBrowser.iconIndex = 4;
-    utilities.items.push_back(fileBrowser);
-    
-    AppDescriptor settings;
-    settings.name = "Settings App";
-    settings.description = "Configure system-wide wireless settings";
-    settings.factory = createSettings;
-    settings.isCategory = false;
-    settings.iconIndex = 5;
-    utilities.items.push_back(settings);
-    
-    // Create Games category
-    AppDescriptor games;
-    games.name = "Games";
-    games.description = "Play adventures";
-    games.factory = nullptr;
-    games.isCategory = true;
-    games.iconIndex = 1;  // Uses g_menuCategoryIcons[1]
-    
-    AppDescriptor heroAdventure;
-    heroAdventure.name = "Hero Adventure";
-    heroAdventure.description = "Epic text-based RPG with touch controls";
-    heroAdventure.factory = createHeroAdventure;
-    heroAdventure.isCategory = false;
-    heroAdventure.iconIndex = 7;
-    games.items.push_back(heroAdventure);
-    
-    // Build main menu
-    m_apps.clear();
-    
-    AppDescriptor reader;
-    reader.name = "eReader App";
-    reader.description = "Read EPUB and text files from SD card";
-    reader.factory = createEReader;
-    reader.isCategory = false;
-    reader.iconIndex = 0;
-    m_apps.push_back(reader);
-    
-    AppDescriptor bookmark;
-    bookmark.name = "eBookmark App";
-    bookmark.description = "Track physical books via BLE companion";
-    bookmark.factory = createEBookmark;
-    bookmark.isCategory = false;
-    bookmark.iconIndex = 1;
-    m_apps.push_back(bookmark);
-    
-    AppDescriptor imageViewer;
-    imageViewer.name = "Image Viewer";
-    imageViewer.description = "JPEG rendering with 16 grayscale conversion";
-    imageViewer.factory = createImageViewer;
-    imageViewer.isCategory = false;
-    imageViewer.iconIndex = 2;
-    m_apps.push_back(imageViewer);
-    
-    m_apps.push_back(utilities);
-    m_apps.push_back(games);
-    
-    m_currentMenu = &m_apps;
-    m_currentCategoryIndex = -1;
+    m_apps.assign(APP_COUNT, AppDescriptor());
+    m_apps[APP_READER]     = {"Library",    "Read EPUB, TXT, MD and RTF books", createEReader, ICON_BOOK};
+    m_apps[APP_BOOKMARKS]  = {"Bookmarks",  "Track physical books with your phone", createEBookmark, ICON_BOOKMARK};
+    m_apps[APP_IMAGES]     = {"Pictures",   "View JPEG images", createImageViewer, ICON_IMAGE};
+    m_apps[APP_FILES]      = {"Files",      "Manage the SD card", createFileManager, ICON_FOLDER};
+    m_apps[APP_CALCULATOR] = {"Calculator", "Basic arithmetic", createCalculator, ICON_CALCULATOR};
+    m_apps[APP_GAME]       = {"Adventure",  "Hero Adventure RPG", createHeroAdventure, ICON_GAME};
+    m_apps[APP_SETTINGS]   = {"Settings",   "Display, power and Bluetooth", createSettings, ICON_SETTINGS};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }
 
 void Launcher::loop() {
-    if (AppComm::isInitialized()) {
-        AppComm::poll();
-    }
+    processPending();
     if (m_activeApp) {
         m_activeApp->update();
-    } else {
-        // Redraw launcher menu if minute changes to keep date/time display updated.
-        // NOTE: lastMin must be seeded with the CURRENT minute on the first call
-        // (not -1) - otherwise the very first Launcher::loop() call right after
-        // boot always sees a "change" and triggers a redundant full redraw of
-        // the menu that drawMenu() already just drew moments earlier in setup().
-        static int lastMin = -1;
-        static bool seeded = false;
-        time_t rawtime;
-        time(&rawtime);
-        struct tm* timeinfo = localtime(&rawtime);
-        int currentMin = timeinfo ? timeinfo->tm_min : -1;
-        if (!seeded) {
-            lastMin = currentMin;
-            seeded = true;
-        } else if (currentMin != lastMin) {
-            lastMin = currentMin;
-            drawMenu();
-        }
-    }
-}
-
-void Launcher::launchApp(int index, bool autoDraw) {
-    if (index < 0 || index >= (int)m_currentMenu->size()) return;
-    
-    AppDescriptor& app = (*m_currentMenu)[index];
-    
-    // If it's a category, navigate into it
-    if (app.isCategory) {
-        m_currentCategoryIndex = index;
-        m_currentMenu = &app.items;
-        drawMenu();
+        processPending();
         return;
     }
-    
-    // Otherwise it's a real app - launch it
-    exitCurrentApp();
-    m_previousAppIndex = m_currentCategoryIndex;
-    m_activeAppIndex = index;
-    m_activeApp = app.factory();
-    m_activeApp->onCreate();
-    
-    if (autoDraw) {
-        m_activeApp->draw();
+
+    // Home screen: refresh just the clock area when the minute changes.
+    static int lastMin = -1;
+    time_t rawtime;
+    time(&rawtime);
+    struct tm* timeinfo = localtime(&rawtime);
+    int currentMin = timeinfo ? timeinfo->tm_min : -1;
+    if (lastMin == -1) {
+        lastMin = currentMin;
+    } else if (currentMin != lastMin) {
+        lastMin = currentMin;
+        drawClock();
     }
 }
 
-void Launcher::switchToApp(int index) {
-    if (index < 0 || index >= (int)m_currentMenu->size()) return;
-    
-    AppDescriptor& app = (*m_currentMenu)[index];
-    
-    // If it's a category, navigate into it
-    if (app.isCategory) {
-        m_currentCategoryIndex = index;
-        m_currentMenu = &app.items;
-        drawMenu();
-        return;
-    }
-    
-    int prevIndex = m_activeAppIndex;
-
-    if (m_activeApp) {
-        m_activeApp->onDestroy();
-        delete m_activeApp;
-        m_activeApp = nullptr;
-    }
-    
-    m_previousAppIndex = prevIndex;
-    m_activeAppIndex = index;
-    m_activeApp = app.factory();
-    m_activeApp->onCreate();
-    m_activeApp->draw();
-}
-
-void Launcher::returnToPreviousApp() {
-    int prevIndex = m_previousAppIndex;
-    if (prevIndex >= 0) {
-        // If we're currently in a submenu, go back to main menu first
-        if (m_currentCategoryIndex >= 0) {
-            m_currentMenu = &m_apps;
-            m_currentCategoryIndex = -1;
-            drawMenu();
-        } else {
-            // Otherwise switch to previous app
-            switchToApp(prevIndex);
-            m_previousAppIndex = -1;
-        }
-    } else {
-        exitCurrentApp();
-    }
-}
-
-void Launcher::exitCurrentApp() {
-    if (m_activeApp) {
-        m_activeApp->onDestroy();
-        delete m_activeApp;
-        m_activeApp = nullptr;
-        m_activeAppIndex = -1;
-        m_previousAppIndex = -1;
-        
-        // Return to main launcher menu
-        m_currentMenu = &m_apps;
-        m_currentCategoryIndex = -1;
-        drawMenu();
-    }
-}
-
-
-void Launcher::drawMenu() {
-    // The launcher is always landscape. If an app left portrait mode on, reset it.
-    DisplayHAL::setPortrait(false);
-
-    // Unified full-screen draw with mandatory hardware clear — protects E-Ink screen
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        int w = DisplayHAL::getWidth();
-        int h = DisplayHAL::getHeight();
-
-        // 1. Top Status Bar: Title + shared live Date/Time/Battery status
-        typography.setFontSize(34.0f);
-        const char* menuTitle = (m_currentCategoryIndex >= 0 && m_currentCategoryIndex < (int)m_apps.size()) ? 
-            m_apps[m_currentCategoryIndex].name.c_str() :
-            "LilyGo System v2.3.0";
-        typography.renderText(menuTitle, 30, 10, framebuffer);
-
-        UIFramework::drawSystemStatus(framebuffer, w - 20, 18, 24.0f, 0x03, /*includeDate=*/true);
-
-        // Render extra Heap / native build stat on its own line beneath the
-        // shared status (heap is a Launcher-only debug stat, not part of the
-        // common system status service).
-        char heapStr[64];
-#ifndef NATIVE_TESTING
-        snprintf(heapStr, sizeof(heapStr), "Heap:%dKB", (int)(ESP.getFreeHeap() / 1024));
-#else
-        snprintf(heapStr, sizeof(heapStr), "Native");
-#endif
-        typography.setFontSize(16.0f);
-        int heapW = typography.measureText(heapStr);
-        typography.renderText(heapStr, w - heapW - 20, 42, framebuffer, 0x05); // Grey color
-
-        DisplayHAL::drawHLine(0, 60, w, 0x00, framebuffer);
-
-        // 2. Draw menu items (main or category)
-        int itemCount = m_currentMenu->size();
-        
-        struct Card {
-            int x, y;
-            std::string title;
-            std::string desc;
-            int iconIndex;
-            bool isCategory;
-        };
-        
-        // Create card layout
-        std::vector<Card> cards;
-        for (int i = 0; i < itemCount && (int)cards.size() < 6; i++) {
-            const AppDescriptor& app = (*m_currentMenu)[i];
-            int row = i / 3;
-            int col = i % 3;
-            int cardX = 30 + col * 310;
-            int cardY = 100 + row * 180;
-            
-            cards.push_back({
-                cardX, cardY,
-                app.name,
-                app.description,
-                app.iconIndex,
-                app.isCategory
-            });
-        }
-        
-        int cardW = 280;
-        int cardH = 170;
-
-        // Draw all cards
-        for (size_t i = 0; i < cards.size(); i++) {
-            const Card& card = cards[i];
-            UIFramework::drawButton(framebuffer, card.x, card.y, cardW, cardH, "");
-            
-            // Draw 48x48 App Icon centered at top of card
-            int iconX = card.x + (cardW - 48) / 2;
-            int iconY = card.y + 15;
-            
-            const uint8_t* iconData = nullptr;
-            if (card.isCategory) {
-                // Use category icons from g_menuCategoryIcons
-                if (card.iconIndex < 2) {
-                    iconData = g_menuCategoryIcons + (card.iconIndex * 1152);
-                }
-            } else {
-                // Use regular app icons from g_embeddedAppIcons
-                if (card.iconIndex < 8) {
-                    iconData = g_embeddedAppIcons + (card.iconIndex * 1152);
-                }
-            }
-            
-            if (iconData) {
-                drawIcon48x48(framebuffer, iconX, iconY, iconData);
-            }
-
-            // App Title
-            typography.setFontSize(24.0f);
-            int titleW = typography.measureText(card.title.c_str());
-            typography.renderText(card.title.c_str(), card.x + (cardW - titleW) / 2, card.y + 75, framebuffer);
-            
-            // App Description
-            typography.setFontSize(16.0f);
-            int descW = typography.measureText(card.desc.c_str());
-            typography.renderText(card.desc.c_str(), card.x + (cardW - descW) / 2, card.y + 125, framebuffer, 0x04);
-        }
-
-        // Draw footer with navigation hint
-        typography.setFontSize(20.0f);
-        std::string help;
-        if (m_currentCategoryIndex >= 0) {
-            help = "Tap the top-left corner to go back to main menu.";
-        } else {
-            help = "Tap the top-left corner (x<=60, y<=60) from any app to return here.";
-        }
-        int helpW = typography.measureText(help.c_str());
-        typography.renderText(help.c_str(), (w - helpW) / 2, h - 35, framebuffer, 0x06);
+void Launcher::drawClock() {
+    UIFramework::performFastPartialUpdate(framebuffer, 0, 0, W, CARD_Y - 8, []() {
+        statusBar();
+        drawClockBlock();
     });
 }
 
+void Launcher::launchApp(int id, bool autoDraw) {
+    if (id < 0 || id >= (int)m_apps.size()) return;
+    if (m_activeApp) {
+        m_activeApp->onDestroy();
+        delete m_activeApp;
+        m_activeApp = nullptr;
+    }
+    DisplayHAL::setPortrait(true);
+    m_activeAppIndex = id;
+    m_activeApp = m_apps[id].factory();
+    m_activeApp->onCreate();
+    if (autoDraw) m_activeApp->draw();
+}
+
+void Launcher::exitCurrentApp() {
+    if (!m_activeApp) return;
+    m_activeApp->onDestroy();
+    delete m_activeApp;
+    m_activeApp = nullptr;
+    m_activeAppIndex = -1;
+    drawMenu();
+}
+
+void Launcher::requestLaunch(int id) {
+    m_pendingLaunch = id;
+    m_pendingExit = false;
+}
+
+void Launcher::requestExit() {
+    m_pendingExit = true;
+    m_pendingLaunch = -1;
+}
+
+void Launcher::requestOpenBook(const std::string& runtimePath) {
+    m_pendingBook = runtimePath;
+}
+
+void Launcher::processPending() {
+    if (m_pendingExit) {
+        m_pendingExit = false;
+        exitCurrentApp();
+    }
+    if (m_pendingLaunch >= 0) {
+        int id = m_pendingLaunch;
+        m_pendingLaunch = -1;
+        launchApp(id);
+    }
+    if (!m_pendingBook.empty()) {
+        std::string path = m_pendingBook;
+        m_pendingBook.clear();
+        launchApp(APP_READER, false);
+        static_cast<EReaderApp*>(m_activeApp)->resumeAtPath(path);
+    }
+}
+
+void Launcher::drawMenu() {
+    DisplayHAL::setPortrait(true);
+    AppStorage::LastBook last = AppStorage::loadLastBook();
+    m_lastBookPath = last.valid ? last.path : "";
+
+    UIFramework::performFullScreenDraw(framebuffer, [this, &last]() {
+        statusBar();
+        drawClockBlock();
+
+        // Continue-reading card
+        Rect c = cardRect();
+        strokeRoundRect(c.x, c.y, c.w, c.h, 18, 2, BLACK);
+        icon(ICON_BOOK, c.x + 20, c.y + (c.h - 76) / 2, 76);
+        int tx = c.x + 116;
+        int tw = c.x + c.w - 24 - tx;
+        if (last.valid) {
+            text("CONTINUE READING", tx, c.y + 22, FONT_CAPTION, DARK, true);
+            textWrapped(last.title, tx, c.y + 50, tw, FONT_BODY, BLACK, 2, 2);
+            std::string author = (last.author.empty() || last.author == "Unknown Author") ? "" : last.author;
+            if (!author.empty()) text(ellipsize(author, tw, FONT_SMALL), tx, c.y + 112, FONT_SMALL, DARK);
+            std::string pct = std::to_string(last.percent) + "%";
+            int pw = textWidth(pct, FONT_CAPTION, true);
+            progressBar(tx, c.y + c.h - 26, tw - pw - 12, 6, last.percent / 100.0f);
+            textRight(pct, tx + tw, c.y + c.h - 36, FONT_CAPTION, INK, true);
+        } else {
+            text("YOUR LIBRARY", tx, c.y + 30, FONT_CAPTION, DARK, true);
+            text("Start reading", tx, c.y + 60, FONT_BODY + 2, BLACK, true);
+            textWrapped("Books in /books on the SD card, or send them from the companion app.",
+                        tx, c.y + 102, tw, FONT_CAPTION, DARK, 2, 4);
+        }
+
+        // Tiles
+        for (int i = 0; i < kTileCount; i++) {
+            Rect r = tileRect(i);
+            UIIconId ic;
+            std::string label;
+            std::string sub;
+            if (kTiles[i] == TILE_BLUETOOTH) {
+                ic = ICON_BLUETOOTH;
+                label = "Bluetooth";
+                sub = !AppComm::isInitialized() ? "Off" : (AppComm::isConnected() ? "Connected" : "On");
+            } else if (kTiles[i] == TILE_SLEEP) {
+                ic = ICON_SLEEP;
+                label = "Sleep";
+            } else {
+                ic = m_apps[kTiles[i]].icon;
+                label = m_apps[kTiles[i]].name;
+            }
+            strokeRoundRect(r.x, r.y, r.w, r.h, 16, 2, BLACK);
+            int iconY = r.y + (sub.empty() ? 22 : 14);
+            icon(ic, r.x + (r.w - 64) / 2, iconY, 64);
+            textCentered(label, r.x + r.w / 2, iconY + 74, FONT_SMALL, BLACK, true);
+            if (!sub.empty()) textCentered(sub, r.x + r.w / 2, iconY + 102, FONT_CAPTION, DARK);
+        }
+
+        textCentered("Side button: sleep / wake", W / 2, H - 40, FONT_CAPTION, MID);
+    });
+}
 
 void Launcher::handleTouch(int x, int y) {
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-
-    // Global Home corner gesture: if any app is running, and touch is in the top-left (x <= 60, y <= 60) corner, exit app!
     if (m_activeApp) {
-        if (x <= 60 && y <= 60) {
-#ifndef NATIVE_TESTING
-            Serial.println("System Launcher: Escape gesture detected. Exiting app.");
-#else
-            std::cout << "System Launcher: Escape gesture detected. Exiting app." << std::endl;
-#endif
-            exitCurrentApp();
-            return;
+        if (m_activeApp->wantsSystemBack() && hitBack(x, y)) {
+            if (!m_activeApp->onBack()) requestExit();
+        } else {
+            m_activeApp->handleTouch(x, y);
         }
-        // Otherwise route touch to active app
-        m_activeApp->handleTouch(x, y);
-        return;
-    }
-    
-    // If we're in a submenu and touch top-left, go back to main menu
-    if (m_currentCategoryIndex >= 0 && x <= 60 && y <= 60) {
-        m_currentMenu = &m_apps;
-        m_currentCategoryIndex = -1;
-        drawMenu();
+        processPending();
         return;
     }
 
-    // Grid coordinates:
-    // Col 0: 30 to 310
-    // Col 1: 340 to 620
-    // Col 2: 650 to 930
-    // Row 0: 100 to 270
-    // Row 1: 300 to 470
-    int col = -1;
-    int row = -1;
-
-    if (y >= 100 && y <= 270) {
-        row = 0;
-    } else if (y >= 300 && y <= 470) {
-        row = 1;
+    if (cardRect().contains(x, y)) {
+        if (!m_lastBookPath.empty()) requestOpenBook(m_lastBookPath);
+        else requestLaunch(APP_READER);
+        processPending();
+        return;
     }
-
-    if (x >= 30 && x <= 310) {
-        col = 0;
-    } else if (x >= 340 && x <= 620) {
-        col = 1;
-    } else if (x >= 650 && x <= 930) {
-        col = 2;
-    }
-
-    if (row != -1 && col != -1) {
-        int appIdx = -1;
-        if (row == 0) {
-            if (col == 0) appIdx = 0;
-            else if (col == 1) appIdx = 1;
-            else if (col == 2) appIdx = 2;
-        } else if (row == 1) {
-            if (col == 0) appIdx = 3;
-            else if (col == 1) appIdx = 4;
-            else if (col == 2) appIdx = 5;
+    for (int i = 0; i < kTileCount; i++) {
+        if (!tileRect(i).contains(x, y)) continue;
+        if (kTiles[i] == TILE_SLEEP) {
+            requestSleepNow();
+        } else if (kTiles[i] == TILE_BLUETOOTH) {
+            SettingsApp::openOnBluetoothTab();
+            launchApp(APP_SETTINGS);
+        } else {
+            launchApp(kTiles[i]);
         }
-
-        if (appIdx != -1 && appIdx < (int)m_currentMenu->size()) {
-            launchApp(appIdx);
-        }
+        return;
     }
 }

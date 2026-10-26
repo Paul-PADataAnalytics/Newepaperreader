@@ -77,11 +77,8 @@ void fontSizeRow(int y) {
 }
 } // namespace
 
-bool SettingsApp::s_openBluetooth = false;
-
 void SettingsApp::onCreate() {
-    m_tab = s_openBluetooth ? TAB_BLUETOOTH : TAB_DISPLAY;
-    s_openBluetooth = false;
+    m_tab = TAB_DISPLAY;
     m_lastBleStatus = bleStatusText();
 }
 

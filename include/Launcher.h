@@ -13,6 +13,7 @@ enum AppId {
     APP_FILES,
     APP_CALCULATOR,
     APP_SETTINGS,
+    APP_TEARACE,
     APP_COUNT
 };
 

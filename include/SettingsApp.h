@@ -15,13 +15,9 @@ public:
     virtual void handleTouch(int x, int y) override;
     virtual void update() override;
 
-    // Makes the next SettingsApp instance open on the Bluetooth tab.
-    static void openOnBluetoothTab() { s_openBluetooth = true; }
-
 private:
     enum Tab { TAB_DISPLAY = 0, TAB_POWER, TAB_BLUETOOTH, TAB_ABOUT, TAB_COUNT };
 
-    static bool s_openBluetooth;
     Tab m_tab = TAB_DISPLAY;
     std::string m_lastBleStatus;
     uint32_t m_lastStatusCheck = 0;

@@ -125,6 +125,26 @@ def icon_sleep():
     return img
 
 
+def icon_ship():
+    img, d = canvas()
+    # Three-masted clipper under sail.
+    hull = [(8, 70), (88, 70), (78, 84), (20, 84)]
+    d.polygon([(x * SS, y * SS) for x, y in hull], fill=0)
+    for mx, top in ((30, 16), (50, 8), (70, 18)):
+        line(d, [(mx, top), (mx, 70)], width=4 * SS)
+    sails = [
+        [(18, 22), (42, 22), (40, 38), (20, 38)], [(17, 42), (43, 42), (41, 62), (19, 62)],
+        [(38, 14), (62, 14), (60, 32), (40, 32)], [(37, 36), (63, 36), (61, 62), (39, 62)],
+        [(60, 24), (80, 24), (78, 40), (62, 40)], [(59, 44), (81, 44), (79, 62), (61, 62)],
+    ]
+    for sail in sails:
+        d.polygon([(x * SS, y * SS) for x, y in sail], fill=255, outline=0)
+        d.line([(x * SS, y * SS) for x, y in sail + [sail[0]]], fill=0, width=3 * SS)
+    line(d, [(88, 70), (94, 52)], width=3 * SS)  # bowsprit
+    line(d, [(94, 52), (70, 18)], width=2 * SS)  # jib stay
+    return img
+
+
 ICONS = [
     ("ICON_BOOK", icon_book),
     ("ICON_BOOKMARK", icon_bookmark),
@@ -134,6 +154,7 @@ ICONS = [
     ("ICON_SETTINGS", icon_settings),
     ("ICON_BLUETOOTH", icon_bluetooth),
     ("ICON_SLEEP", icon_sleep),
+    ("ICON_SHIP", icon_ship),
 ]
 
 

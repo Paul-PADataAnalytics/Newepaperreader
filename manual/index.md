@@ -33,3 +33,5 @@ Welcome to the official 8-chapter reference manual for the **LilyGo EPD47 E-Read
   *Standard arithmetic math calculator and system-wide settings preferences.*
 - **[Chapter 9: Power, Sleep & the Companion Protocol](09_power_and_companion.md)** (v3.0.0)  
   Auto-sleep and deep-sleep power design, BLE companion protocol v2, developer tools.
+- **[Chapter 10: Tea Race 1866](10_tea_race.md)** (v3.0.0)  
+  A short touch-only sailing strategy game.

@@ -5,6 +5,7 @@
 #include "CalculatorApp.h"
 #include "FileManagerApp.h"
 #include "ImageViewerApp.h"
+#include "TeaRaceApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
@@ -31,6 +32,7 @@ static Application* createSettings() { return new SettingsApp(); }
 static Application* createCalculator() { return new CalculatorApp(); }
 static Application* createFileManager() { return new FileManagerApp(); }
 static Application* createImageViewer() { return new ImageViewerApp(); }
+static Application* createTeaRace() { return new TeaRaceApp(); }
 
 // ---- Home screen layout ----------------------------------------------------
 namespace {
@@ -54,11 +56,10 @@ Rect tileRect(int i) {
 
 Rect cardRect() { return Rect(MARGIN, CARD_Y, W - 2 * MARGIN, CARD_H); }
 
-// Home grid tiles: apps plus two shortcuts.
-constexpr int TILE_BLUETOOTH = -2;
+// Home grid tiles: apps plus the sleep shortcut.
 constexpr int TILE_SLEEP = -3;
 const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_IMAGES, APP_FILES,
-                      APP_CALCULATOR, APP_SETTINGS, TILE_BLUETOOTH, TILE_SLEEP};
+                      APP_CALCULATOR, APP_TEARACE, APP_SETTINGS, TILE_SLEEP};
 constexpr int kTileCount = sizeof(kTiles) / sizeof(kTiles[0]);
 
 void drawClockBlock() {
@@ -102,6 +103,7 @@ void Launcher::init() {
     m_apps[APP_FILES]      = {"Files",      "Manage the SD card", createFileManager, ICON_FOLDER};
     m_apps[APP_CALCULATOR] = {"Calculator", "Basic arithmetic", createCalculator, ICON_CALCULATOR};
     m_apps[APP_SETTINGS]   = {"Settings",   "Display, power and Bluetooth", createSettings, ICON_SETTINGS};
+    m_apps[APP_TEARACE]    = {"Tea Race",   "Race a clipper from China to London", createTeaRace, ICON_SHIP};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }
@@ -227,11 +229,7 @@ void Launcher::drawMenu() {
             UIIconId ic;
             std::string label;
             std::string sub;
-            if (kTiles[i] == TILE_BLUETOOTH) {
-                ic = ICON_BLUETOOTH;
-                label = "Bluetooth";
-                sub = !AppComm::isInitialized() ? "Off" : (AppComm::isConnected() ? "Connected" : "On");
-            } else if (kTiles[i] == TILE_SLEEP) {
+            if (kTiles[i] == TILE_SLEEP) {
                 ic = ICON_SLEEP;
                 label = "Sleep";
             } else {
@@ -276,9 +274,6 @@ void Launcher::handleTouch(int x, int y) {
         if (!tileRect(i).contains(x, y)) continue;
         if (kTiles[i] == TILE_SLEEP) {
             requestSleepNow();
-        } else if (kTiles[i] == TILE_BLUETOOTH) {
-            SettingsApp::openOnBluetoothTab();
-            launchApp(APP_SETTINGS);
         } else {
             launchApp(kTiles[i]);
         }

@@ -51,7 +51,7 @@ class _MainScreenState extends State<MainScreen> {
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.bluetooth),
-            label: 'BLE Sync',
+            label: 'Device',
           ),
         ],
       ),

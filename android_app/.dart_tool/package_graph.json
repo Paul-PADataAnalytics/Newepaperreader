@@ -8,6 +8,7 @@
       "version": "1.0.2+3",
       "dependencies": [
         "cupertino_icons",
+        "file_picker",
         "flutter",
         "flutter_blue_plus",
         "http",
@@ -700,6 +701,44 @@
       "dependencies": [
         "collection",
         "meta"
+      ]
+    },
+    {
+      "name": "file_picker",
+      "version": "10.3.10",
+      "dependencies": [
+        "cross_file",
+        "dbus",
+        "ffi",
+        "flutter",
+        "flutter_plugin_android_lifecycle",
+        "flutter_web_plugins",
+        "path",
+        "plugin_platform_interface",
+        "web",
+        "win32"
+      ]
+    },
+    {
+      "name": "cross_file",
+      "version": "0.3.5+5",
+      "dependencies": [
+        "meta",
+        "web"
+      ]
+    },
+    {
+      "name": "win32",
+      "version": "5.15.0",
+      "dependencies": [
+        "ffi"
+      ]
+    },
+    {
+      "name": "flutter_plugin_android_lifecycle",
+      "version": "2.0.35",
+      "dependencies": [
+        "flutter"
       ]
     }
   ],

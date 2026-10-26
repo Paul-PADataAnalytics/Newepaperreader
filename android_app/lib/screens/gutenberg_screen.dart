@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import '../services/ble_service.dart';
+import '../widgets/upload_dialog.dart';
 
 class GutenbergScreen extends StatefulWidget {
   const GutenbergScreen({super.key});
@@ -168,7 +169,7 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(canUpload
-              ? 'Saved to ${file.path}. Connect via BLE Sync and upload it from the Library tab any time.'
+              ? 'Saved to ${file.path}. Connect in the Device tab, then send it from the Library tab.'
               : 'Saved to ${file.path}'),
           action: canUpload && BleService().isConnected
               ? SnackBarAction(
@@ -196,20 +197,13 @@ class _GutenbergScreenState extends State<GutenbergScreen> {
   Future<void> _uploadFile(File file, String fileName) async {
     if (!BleService().isConnected) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Not connected to EPD-Reader. Connect in BLE Sync first.')),
+        const SnackBar(content: Text('Not connected to your EPD-Reader. Connect in the Device tab first.')),
       );
       return;
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Uploading $fileName...')));
-    try {
-      await BleService().uploadFile(file, fileName);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Uploaded $fileName')));
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
-    }
+    final ok = await uploadWithProgress(context, file, fileName);
+    if (!mounted || !ok) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$fileName is on your EPD-Reader')));
   }
 
   @override

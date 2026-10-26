@@ -111,6 +111,10 @@ File g_uploadFile;
 #else
 FILE* g_uploadFile = nullptr;
 #endif
+// Upload data is collected into 16KB blocks: many tiny SD writes are far
+// slower than a few large ones.
+std::vector<uint8_t> g_uploadBuf;
+const size_t UPLOAD_BLOCK = 16384;
 
 bool fsExists(const std::string& path) {
 #ifndef NATIVE_TESTING
@@ -154,21 +158,35 @@ bool uploadOpen(const std::string& path) {
 #endif
 }
 
-size_t uploadWrite(const uint8_t* data, size_t len) {
+bool uploadFlush() {
+    if (g_uploadBuf.empty()) return true;
 #ifndef NATIVE_TESTING
-    return g_uploadFile ? g_uploadFile.write(data, len) : 0;
+    size_t n = g_uploadFile ? g_uploadFile.write(g_uploadBuf.data(), g_uploadBuf.size()) : 0;
 #else
-    return g_uploadFile ? fwrite(data, 1, len, g_uploadFile) : 0;
+    size_t n = g_uploadFile ? fwrite(g_uploadBuf.data(), 1, g_uploadBuf.size(), g_uploadFile) : 0;
 #endif
+    bool ok = n == g_uploadBuf.size();
+    g_uploadBuf.clear();
+    return ok;
 }
 
-void uploadClose() {
+size_t uploadWrite(const uint8_t* data, size_t len) {
+    if (!g_uploadFile) return 0;
+    g_uploadBuf.insert(g_uploadBuf.end(), data, data + len);
+    if (g_uploadBuf.size() >= UPLOAD_BLOCK && !uploadFlush()) return 0;
+    return len;
+}
+
+// Returns false if buffered data could not be written.
+bool uploadClose() {
+    bool ok = uploadFlush();
 #ifndef NATIVE_TESTING
     if (g_uploadFile) g_uploadFile.close();
 #else
     if (g_uploadFile) fclose(g_uploadFile);
     g_uploadFile = nullptr;
 #endif
+    return ok;
 }
 
 bool hasBookExtension(const std::string& name) {
@@ -278,6 +296,7 @@ struct UploadState {
 UploadState g_upload;
 
 void uploadReset() {
+    g_uploadBuf.clear();
     uploadClose();
     if (g_upload.active && !g_upload.partPath.empty() && fsExists(g_upload.partPath)) {
         fsRemove(g_upload.partPath);
@@ -533,7 +552,10 @@ void handleJson(const std::string& msg) {
             respond(r);
             return;
         }
-        uploadClose();
+        if (!uploadClose()) {
+            g_upload.failed = true;
+            g_upload.error = "SD card write failed";
+        }
         bool ok = !g_upload.failed && g_upload.written == g_upload.expected;
         std::string error = g_upload.failed ? g_upload.error
                           : ("Received " + std::to_string(g_upload.written) + " of " + std::to_string(g_upload.expected) + " bytes");
@@ -658,9 +680,14 @@ class CommWriteCallbacks : public BLECharacteristicCallbacks {
 };
 
 class CommServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* server) override {
-        (void)server;
+    void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
         Serial.println("AppComm: companion connected");
+        // Ask for a short connection interval (7.5-15ms): file transfers
+        // are bounded by one write round trip per interval.
+        server->updateConnParams(param->connect.remote_bda, 6, 12, 0, 400);
+        // Keep advertising so a second phone/computer can still connect
+        // even if a stale connection is hanging around.
+        BLEDevice::startAdvertising();
     }
     void onDisconnect(BLEServer* server) override {
         (void)server;

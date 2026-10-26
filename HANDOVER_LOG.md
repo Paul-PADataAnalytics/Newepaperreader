@@ -1,15 +1,21 @@
 # Handover Log
 
-## Current Status (2026-07-26) — v2.3.0
-Firmware is stable, hardware-verified, and at **v2.3.0**. See [TODO.md](TODO.md) for the full session-by-session history and [manual/index.md](manual/index.md) for the user/developer manual.
+## Current Status (2026-10-26) — v3.0.0
+See [manual/index.md](manual/index.md); [Chapter 9](manual/09_power_and_companion.md) covers the power design and companion protocol in detail.
 
-Highlights of the current design (all hardware-verified):
-- **Sleep/wake**: True ESP32-S3 deep sleep ("lock mode"), entered via **User Button 1** (`GPIO 21`) or after 30s of inactivity (suspended while actively reading a page). Only `BUTTON_1` (ext0 RTC wakeup) can wake the device - touch does not. Waking fully resets the chip; a breadcrumb saved to `/sd/data/system_state.txt` (see `AppStorage::SavedSystemState`) restores the active app and, for the E-Reader app, the exact book/chapter/page.
-- **GPIO 0 is never used by application code** - it's reserved exclusively for the ESP32-S3 ROM bootloader (USB flashing). This was a hard-learned lesson from an earlier design that used it for a sleep button and caused boot-mode conflicts.
-- **EPUB reading position** persists both the in-chapter offset and the chapter index/count (`AppStorage::BookmarkInfo`), since EPUB chapters are separate sub-files parsed independently - resuming reopens the exact chapter, not just an offset applied to a guessed chapter.
+Highlights of the v3.0 rework (hardware-verified on the device):
+- **Portrait only** (540 x 960). All screens use the UI kit in `src/ui/UIKit.h`; the home screen is `src/ui/Launcher.cpp`. Apps get the header back chevron via `Application::wantsSystemBack()` / `onBack()`. Hero Adventure was removed at the user's request.
+- **Power**: `PowerManager` (`src/system/PowerManager.cpp`) owns auto-sleep (Settings > Power, default 5 min, applies while reading too), USB/"always on" keep-awake, CPU 240/80 MHz switching and the deep-sleep shutdown sequence. `DisplayHAL` now switches the EPD rails per refresh and puts the GT911 to sleep (INT latched low with `gpio_hold_en`) before deep sleep. The user explicitly asked for this work, which is why the previously "locked" `DisplayHAL` files were changed.
+- **Settings** persist in `/data/settings.json` (`SystemSettings`).
+- **Companion protocol v2** (`src/comm/AppComm.cpp`, `android_app/lib/services/ble_service.dart`): request ids, paged answers (Android caps attribute reads at 512 bytes), streamed binary uploads with back-pressure. All BLE messages are handled centrally in `AppComm::poll()` from `loop()`; apps must not consume them.
+- **GPIO 0 is never used by application code** - it is the EPD driver's CFG_STR line.
 
-## Next Steps for the Next System
-- No open bugs at time of writing. The user maintains a `version3.md` wishlist for future feature work - consult it (once created) before starting new work.
-- Before making sleep/wake or GPIO changes, re-read the GPIO0 warning above and check `TODO.md`'s history for why BUTTON_1/GPIO21 was chosen instead.
-- `src/DisplayHAL.cpp` / `include/DisplayHAL.h` are filesystem-locked (`chmod 444`) - do not modify without explicit user request.
+## Testing
+- Simulator: `pio run -e native`, run the binary with the SD root as cwd (`SDL_VIDEODRIVER=dummy` for headless), drive it with `tools/sim_client.py` (taps, screenshots, protocol).
+- Device: `tools/device_console.py` (`STATUS`, taps, screenshots, `SLEEPT n` timed sleep/wake). Opening the port with pyserial's default DTR/RTS does not reset the board; clearing DTR/RTS does.
+- BLE: `tools/ble_protocol_test.py --upload FILE` (needs `bleak`).
 
+## Next Steps
+- Not yet measured with a meter: actual deep-sleep current (expected ~0.4 mA per LilyGo).
+- EPUB titles/authors come from file names; parsing OPF metadata would improve the library (also on the user's v3 wishlist, `Version3.0.md`).
+- The web demo in `docs/` predates v3.0 and should be rebuilt with `tools/build_web.sh`.

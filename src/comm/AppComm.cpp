@@ -41,7 +41,7 @@ static uint32_t millis() {
 
 // ---------------------------------------------------------------------------
 // Protocol constants (keep in sync with android_app/lib/services/ble_service.dart
-// and docs/companion_protocol.md)
+// and manual/09_power_and_companion.md)
 // ---------------------------------------------------------------------------
 static const int PROTOCOL_VERSION = 2;
 static const char* FIRMWARE_VERSION = "3.0.0";

@@ -3,7 +3,7 @@
 Drives the native simulator (./run-native.sh) over its TCP companion port.
 
 The simulator speaks the same companion protocol as the BLE firmware (see
-docs/companion_protocol.md), framed as <u16 little-endian length><payload>,
+manual/09_power_and_companion.md), framed as <u16 little-endian length><payload>,
 plus a few simulator-only test hooks.
 
 Examples:

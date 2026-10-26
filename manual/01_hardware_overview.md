@@ -1,7 +1,7 @@
 # Chapter 1: Hardware Specifications & Architecture
 
 ## Overview
-The **LilyGo EPD47 E-Reader System v2.3** firmware is designed specifically for the **LilyGo T5-ePaper-S3 (T5-4.7 S3)** development board. This document details the exact hardware components, IC controllers, display parallel bus interface, touch digitizer, and peripheral pinouts to assess hardware compatibility with other ESP32 E-Paper hardware.
+The **LilyGo EPD47 E-Reader System v3.0** firmware is designed specifically for the **LilyGo T5-ePaper-S3 (T5-4.7 S3)** development board. This document details the exact hardware components, IC controllers, display parallel bus interface, touch digitizer, and peripheral pinouts to assess hardware compatibility with other ESP32 E-Paper hardware.
 
 ---
 

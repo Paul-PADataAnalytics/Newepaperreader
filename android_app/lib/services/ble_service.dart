@@ -71,7 +71,7 @@ class UploadController {
 }
 
 /// BLE link to the EPD-Reader (companion protocol v2, see
-/// docs/companion_protocol.md in the firmware repository).
+/// manual/09_power_and_companion.md in the firmware repository).
 ///
 /// Requests carry a request id (`rid`); the device answers on the response
 /// characteristic (notification, with a read as fallback). Large answers

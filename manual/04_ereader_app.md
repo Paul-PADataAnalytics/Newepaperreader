@@ -1,7 +1,7 @@
 # Chapter 4: E-Reader Application
 
-> **App Version**: v2.3.0  
-> **Firmware Version**: v2.3.0  
+> **App Version**: v3.0.0  
+> **Firmware Version**: v3.0.0  
 > **Last Verified**: 2026-07-26  
 
 ---
@@ -37,8 +37,8 @@ Tapping any book in the library opens the **Reading View**:
 ### Reading Features & Controls
 1. **Typography Engine**: Renders crisp, anti-aliased text using `/sd/data/Roboto-Regular.ttf` with customizable font size ($16\text{pt} - 34\text{pt}$), line height, and margin padding.
 2. **Pagination Controls**:
-   - **Next Page**: Tap the **right half** of the screen ($x \ge 480$).
-   - **Previous Page**: Tap the **left half** of the screen ($x < 480$).
+   - **Next Page**: Tap anywhere right of the left third of the page.
+   - **Previous Page**: Tap the **left third** of the page.
 3. **Reading Progress Persistence**: The exact reading position is saved automatically to a per-book bookmark file (`<book>.bmk`) alongside the book on SD card every time you turn a page. For EPUB books (which are split into many chapter sub-files), the chapter index is saved along with the in-chapter offset, so resuming always reopens the correct chapter - not just the correct byte offset within whichever chapter happens to load first. The library view's completion percentage is derived from this: text/RTF/Markdown books use `offset / file size`; EPUB books use `chapter index / chapter count` (chapter-level granularity).
 
 ---
@@ -51,6 +51,8 @@ Pressing **User Button 1** (`GPIO 21`) at any time immediately locks the device:
 - The display shows a "Locked" screen, then the ESP32-S3 enters **true deep sleep** with only `BUTTON_1` armed as a wake source - touch input does **not** wake the device while locked, and no other GPIO can wake it.
 - Pressing `BUTTON_1` again fully resets the chip (deep sleep has no return path - the whole board reboots). After the short reboot delay, the firmware detects the deep-sleep wake cause and automatically relaunches the same app; if you were reading, it jumps straight back into the exact book, chapter, and page you left, bypassing the library view entirely.
 
-**30-second auto-lock**: If the device is untouched for 30 seconds, it locks automatically the same way - *except* while you are actively looking at a reading page, where auto-lock is suspended so it won't interrupt you mid-page. The manual `BUTTON_1` lock always works immediately, even while reading.
+**Auto-sleep**: after the time set in Settings > Power (5 minutes by default) without a touch, the device locks the same way - including while a page is open, so a book left open no longer drains the battery. Waking returns you to the same page. See Chapter 9.
+
+**Reading menu**: tap the top of a page to show the header (back to the library) and a panel with text size (A- / A+) and your position in the book. Tap the page to hide it. Tap the left third of the page for the previous page and anywhere else for the next.
 
 > Non-reading apps (e.g. eBookmark, File Browser) only resume to their default view after waking, not a specific sub-screen - only the E-Reader app restores an exact in-book position.

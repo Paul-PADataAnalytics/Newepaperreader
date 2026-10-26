@@ -4,7 +4,7 @@
 #include <cstdint>
 
 // Companion-app link (BLE on hardware, a TCP socket on port 9876 in the
-// native simulator). See docs/companion_protocol.md for the wire protocol.
+// native simulator). See manual/09_power_and_companion.md for the wire protocol.
 //
 // All incoming messages are queued by the radio task and handled on the
 // main loop by poll(), which main.cpp calls once per iteration - apps never

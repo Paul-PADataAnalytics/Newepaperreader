@@ -1,32 +1,29 @@
-# Chapter 8: Calculator & Settings Applications
+# Chapter 8: Calculator & Settings
 
-> **App Version**: v2.3.0  
-> **Firmware Version**: v2.3.0  
-> **Last Verified**: 2026-07-26  
-
----
-
-## 1. Calculator Application
-
-The **Calculator App** provides a standard arithmetic math utility with a high-contrast E-Paper layout.
-
-![Calculator Screen](images/calculator-main.png)
-
-### Key Features
-- **Keypad Controls**: Large tap targets for numbers `0-9`, decimal point, and arithmetic operations (`+`, `-`, `*`, `/`).
-- **Clear & Equal**: `C` clears current entry; `=` evaluates mathematical expression.
-- **Display Readout**: Large font digital LCD readout.
+> **App Version**: v3.0.0  
+> **Firmware Version**: v3.0.0  
+> **Last Verified**: 2026-10-26  
 
 ---
 
-## 2. Settings Application
+## 1. Calculator
+A display card (expression above, result below, shrinking to fit) and a 4 x 5 keypad: digits, `+ - x /`, `=`, `C` and backspace. Only the display refreshes as you type.
 
-The **Settings App** manages system-wide preferences and wireless configurations.
+## 2. Settings
+Settings are saved to `/data/settings.json` and survive sleep and reboots. Four tabs:
 
-![Settings Screen](images/settings-main.png)
+| Tab | Setting | Notes |
+| :--- | :--- | :--- |
+| Display | Dark mode | Inverts the whole screen |
+| | Text size | Reading font size (also adjustable inside a book) |
+| | Picture brightness | Original / Light / Lighter / Lightest (Chapter 7) |
+| Power | Auto-sleep | 1, 2, 5 (default), 10, 30 min or Never |
+| | Stay awake on USB | No auto-sleep while connected to a computer |
+| | Always on | Developer option: never auto-sleep |
+| | Sleep screen | Pictures from `/images` or a book & battery card |
+| | Battery | Voltage, percentage and USB state |
+| | Sleep now | Same as pressing the side button |
+| Bluetooth | Bluetooth sync | Companion app link on/off, live status and transfer progress |
+| About | | Firmware, memory, SD card space, uptime |
 
-### Key Features & Configurations
-- **Default Font Size**: Adjust default reading font size ($16\text{pt} - 34\text{pt}$).
-- **Dark Mode Preference**: Toggle system-wide color inversion (light background vs dark background).
-- **Wi-Fi & Wireless Settings**: Manage wireless network connections and BLE companion server settings.
-- **Save & Apply**: Instantly updates system configuration and persists settings to `/sd/data/settings.json`.
+See Chapter 9 for how sleep and the companion link work.

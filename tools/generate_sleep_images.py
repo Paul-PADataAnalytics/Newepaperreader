@@ -47,6 +47,79 @@ def _caption(draw, text, y, size=30, fill=40):
     draw.text(((WIDTH - w) / 2, y), text, font=font, fill=fill)
 
 
+def _bezier(p0, p1, p2, n=32):
+    pts = []
+    for i in range(n + 1):
+        t = i / n
+        x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0]
+        y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1]
+        pts.append((x, y))
+    return pts
+
+
+def _open_book(draw, spine_x, top_y, bottom_y, half_w):
+    """An open book seen from slightly above: a dark cover, a stack of page
+    edges, two curved pages with lines of text, and a shaded spine."""
+
+    def half(side, dx=0, dy=0):
+        # Page outline for one half; side = -1 (left) or +1 (right).
+        outer = spine_x + side * half_w
+        top = _bezier((outer + dx, top_y + 6 + dy),
+                      (spine_x + side * half_w * 0.45 + dx, top_y - 44 + dy),
+                      (spine_x, top_y + dy))
+        bottom = _bezier((spine_x, bottom_y + dy),
+                         (spine_x + side * half_w * 0.45 + dx, bottom_y - 26 + dy),
+                         (outer + dx, bottom_y - 6 + dy))
+        return top, bottom
+
+    def outline(side, dx, dy):
+        top, bottom = half(side, dx, dy)
+        return top + bottom
+
+    # Cover peeking out below the page block.
+    for side in (-1, 1):
+        draw.polygon(outline(side, side * 22, 20), fill=45)
+    # Stack of page edges.
+    for k in (4, 3, 2, 1):
+        for side in (-1, 1):
+            draw.polygon(outline(side, side * 4 * k, 4 * k), fill=WHITE, outline=70)
+    # Top pages with text.
+    for side in (-1, 1):
+        top, bottom = half(side)
+        draw.polygon(top + bottom, fill=WHITE, outline=BLACK)
+        draw.line(top, fill=BLACK, width=3)
+        bottom_rev = list(reversed(bottom))  # same direction as top (outer -> spine)
+        lines = max(4, int((bottom_y - top_y) / 14))
+        for j in range(lines):
+            f = 0.12 + 0.75 * j / (lines - 1)
+            t0, t1 = 0.1, (0.62 if j in (lines // 2 - 1, lines - 1) else 0.86)
+            line = []
+            n = len(top) - 1
+            for i in range(int(t0 * n), int(t1 * n) + 1):
+                tx, ty = top[i]
+                bx, by = bottom_rev[i]
+                line.append((tx + (bx - tx) * f, ty + (by - ty) * f))
+            draw.line(line, fill=130, width=3)
+    # Spine: soft shadow either side of the fold.
+    for w, shade in ((14, 215), (8, 170), (3, 60)):
+        draw.polygon([(spine_x - w, top_y + 4), (spine_x + w, top_y + 4),
+                      (spine_x + w, bottom_y - 2), (spine_x - w, bottom_y - 2)], fill=shade)
+    draw.line((spine_x, top_y, spine_x, bottom_y), fill=BLACK, width=2)
+
+
+def _closed_book(draw, x0, y0, w, h, cover=35):
+    """A closed book lying flat, seen from the side: dark cover boards with
+    the page block (fore-edge lines) visible between them."""
+    draw.rounded_rectangle((x0, y0, x0 + w, y0 + h), radius=5, fill=cover, outline=BLACK, width=2)
+    inset = max(4, h // 6)
+    px0, px1 = x0 + 14, x0 + w - 4
+    draw.rectangle((px0, y0 + inset, px1, y0 + h - inset), fill=WHITE, outline=90)
+    for yy in range(y0 + inset + 3, y0 + h - inset - 1, 3):
+        draw.line((px0 + 2, yy, px1 - 1, yy), fill=175, width=1)
+    # Spine bands
+    draw.line((x0 + 5, y0 + 4, x0 + 5, y0 + h - 4), fill=150, width=2)
+
+
 def scene_moon_and_book(img, draw):
     """Crescent moon over stars, an open book silhouette resting below."""
     import random
@@ -63,27 +136,9 @@ def scene_moon_and_book(img, draw):
     draw.ellipse((cx - r, cy - r, cx + r, cy + r), fill=30)
     draw.ellipse((cx - r + 45, cy - r - 20, cx + r + 45, cy + r - 20), fill=WHITE)
 
-    # Open book silhouette (two curved pages meeting at a spine)
-    base_y = 430
-    left_pts = [(180, base_y)]
-    for i in range(9):
-        t = i / 8
-        left_pts.append((180 + t * 300, base_y - 90 * (1 - (2 * t - 1) ** 2) - 10))
-    left_pts.append((480, base_y))
-    right_pts = [(480, base_y)]
-    for i in range(9):
-        t = i / 8
-        right_pts.append((480 + t * 300, base_y - 90 * (1 - (2 * t - 1) ** 2) - 10))
-    right_pts.append((780, base_y))
-    draw.polygon(left_pts, fill=20)
-    draw.polygon(right_pts, fill=20)
-    draw.line((480, base_y - 100, 480, base_y), fill=BLACK, width=3)
-    # A few page lines for texture
-    for i in range(1, 5):
-        draw.line((180 + i * 30, base_y - i * 6, 480 - i * 4, base_y - 4), fill=90, width=1)
-        draw.line((780 - i * 30, base_y - i * 6, 480 + i * 4, base_y - 4), fill=90, width=1)
+    _open_book(draw, spine_x=480, top_y=300, bottom_y=452, half_w=290)
 
-    _caption(draw, "Sweet dreams, bookworm.", 470, size=32)
+    _caption(draw, "Sweet dreams, bookworm.", 482, size=32)
 
 
 def scene_candle_and_stack(img, draw):
@@ -93,11 +148,9 @@ def scene_candle_and_stack(img, draw):
     heights = [34, 34, 34]
     x_center = WIDTH // 2
     y = base_y
-    for w, h in zip(widths, heights):
-        draw.rounded_rectangle(
-            (x_center - w / 2, y - h, x_center + w / 2, y), radius=6, fill=30, outline=BLACK, width=2
-        )
-        y -= h + 6
+    for i, (w, h) in enumerate(zip(widths, heights)):
+        _closed_book(draw, int(x_center - w / 2), y - h, w, h, cover=(30, 60, 20)[i])
+        y -= h + 2
 
     # Candle on top of the stack
     candle_w, candle_h = 34, 110
@@ -122,14 +175,10 @@ def scene_candle_and_stack(img, draw):
 def scene_glasses_on_book(img, draw):
     """Reading glasses resting on an open book."""
     base_y = 400
-    draw.polygon([(230, base_y), (480, base_y - 70), (730, base_y), (480, base_y + 20)], fill=25)
-    draw.line((480, base_y - 70, 480, base_y + 20), fill=BLACK, width=2)
-    for i in range(1, 6):
-        draw.line((240 + i * 8, base_y - i * 2, 470 - i * 4, base_y - i), fill=100, width=1)
-        draw.line((720 - i * 8, base_y - i * 2, 490 + i * 4, base_y - i), fill=100, width=1)
+    _open_book(draw, spine_x=480, top_y=300, bottom_y=440, half_w=260)
 
     # Glasses: two lens circles + bridge + temple arms
-    gy = base_y - 40
+    gy = base_y - 30
     lens_r = 55
     lcx, rcx = 400, 560
     draw.ellipse((lcx - lens_r, gy - lens_r, lcx + lens_r, gy + lens_r), outline=BLACK, width=6)
@@ -181,8 +230,8 @@ def scene_coffee_and_books(img, draw):
     x_left = 260
     y = base_y
     for i, w in enumerate(widths):
-        draw.rounded_rectangle((x_left - w / 2 + i * 6, y - 30, x_left + w / 2 + i * 6, y), radius=5, fill=25, outline=BLACK, width=2)
-        y -= 36
+        _closed_book(draw, int(x_left - w / 2 + i * 6), y - 30, w, 30, cover=(25, 55, 35)[i])
+        y -= 32
 
     # Cup
     cx, cy = 620, base_y - 10
@@ -213,11 +262,10 @@ def scene_bird_on_book(img, draw):
 
     # Open book on the branch
     base_y = 370
-    draw.polygon([(340, base_y), (500, base_y - 40), (660, base_y), (500, base_y + 15)], fill=20)
-    draw.line((500, base_y - 40, 500, base_y + 15), fill=BLACK, width=2)
+    _open_book(draw, spine_x=500, top_y=290, bottom_y=352, half_w=150)
 
     # Bird body + head + beak + tail, perched on the book's spine
-    bx, by = 500, base_y - 90
+    bx, by = 500, base_y - 130
     draw.ellipse((bx - 45, by - 40, bx + 45, by + 40), fill=BLACK)
     draw.ellipse((bx - 20, by - 75, bx + 30, by - 25), fill=BLACK)
     draw.polygon([(bx + 28, by - 55), (bx + 55, by - 50), (bx + 28, by - 42)], fill=60)

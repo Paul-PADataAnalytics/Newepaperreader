@@ -18,6 +18,7 @@ struct GameEntry {
 const GameEntry kGames[] = {
     {APP_TEARACE, "Tea Race 1866", "Race a clipper from China to London", ICON_SHIP},
     {APP_KEEPER, "The Keeper", "Twenty-one nights alone on a lighthouse", ICON_LIGHTHOUSE},
+    {APP_CODEBREAKER, "Codebreaker 1917", "Break the enemy cipher before the attack", ICON_KEY},
 };
 constexpr int kGameCount = sizeof(kGames) / sizeof(kGames[0]);
 constexpr int LIST_Y = HEADER_H + 8;

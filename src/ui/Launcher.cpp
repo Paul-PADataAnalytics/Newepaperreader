@@ -8,6 +8,7 @@
 #include "TeaRaceApp.h"
 #include "KeeperApp.h"
 #include "GamesApp.h"
+#include "CodebreakerApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
@@ -37,6 +38,7 @@ static Application* createImageViewer() { return new ImageViewerApp(); }
 static Application* createTeaRace() { return new TeaRaceApp(); }
 static Application* createKeeper() { return new KeeperApp(); }
 static Application* createGames() { return new GamesApp(); }
+static Application* createCodebreaker() { return new CodebreakerApp(); }
 
 // ---- Home screen layout ----------------------------------------------------
 namespace {
@@ -110,6 +112,7 @@ void Launcher::init() {
     m_apps[APP_TEARACE]    = {"Tea Race",   "Race a clipper from China to London", createTeaRace, ICON_SHIP};
     m_apps[APP_KEEPER]     = {"The Keeper", "Twenty-one nights on a lighthouse", createKeeper, ICON_LIGHTHOUSE};
     m_apps[APP_GAMES]      = {"Games",      "Short games", createGames, ICON_GAMES};
+    m_apps[APP_CODEBREAKER] = {"Codebreaker", "Break the enemy cipher, 1917", createCodebreaker, ICON_KEY};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }

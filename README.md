@@ -21,7 +21,7 @@ Welcome to the LilyGo EPD47 E-Reader System **v3.0.0**! This is the complete cus
 - **[Chapter 7: Pictures](manual/07_image_viewer_app.md)** (v3.0.0): JPEG viewing with adjustable brightening and dithering.
 - **[Chapter 8: Calculator & Settings Applications](manual/08_calculator_and_settings.md)** (v3.0.0): Calculator and the Display / Power / Bluetooth / About settings.
 - **[Chapter 9: Power, Sleep & the Companion Protocol](manual/09_power_and_companion.md)** (v3.0.0): Sleep design, BLE protocol v2 and developer tools.
-- **[Chapter 10: Tea Race 1866](manual/10_tea_race.md)** (v3.0.0): A short touch-only sailing strategy game.
+- **[Chapter 10: Games](manual/10_games.md)** (v3.0.0): Tea Race 1866, The Keeper and Codebreaker 1917.
 
 ---
 

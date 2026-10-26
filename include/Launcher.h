@@ -16,6 +16,7 @@ enum AppId {
     APP_TEARACE,
     APP_KEEPER,
     APP_GAMES,
+    APP_CODEBREAKER,
     APP_COUNT
 };
 

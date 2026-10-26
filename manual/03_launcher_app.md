@@ -12,7 +12,7 @@ Since v3.0 the whole system is **portrait only** (540 x 960). The home screen sh
 1. **Status strip** (on every screen): Bluetooth state on the left, the time in the middle, battery percentage and icon on the right (lightning bolt while on USB).
 2. **Clock**: the date and a large time. Only this area refreshes when the minute changes - no full-screen flash.
 3. **Continue reading** card: the last book you had open, with its progress. Tap it to go straight back to your page. With no history yet it opens the library.
-4. **Tiles** (2 x 4): Library, Bookmarks, Pictures, Files, Calculator, Tea Race (Chapter 10), Settings and Sleep. Bluetooth state is shown in the status strip and in Settings > Bluetooth.
+4. **Tiles** (2 x 4): Library, Bookmarks, Pictures, Files, Calculator, Games (Chapter 10), Settings and Sleep. Bluetooth state is shown in the status strip and in Settings > Bluetooth.
 
 ## Navigation
 - Every app screen has a **back chevron** at the top left. It goes up one level inside the app (for example from a book's details back to the list), and from an app's main screen back home.

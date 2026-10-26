@@ -626,6 +626,20 @@ void DisplayHAL::updateScreenFull() {
     memcpy(backBuffer, frontBuffer, getWidth() * getHeight() / 2);
 }
 
+// The EPD driver's partial-area path mishandles regions that start on an
+// odd column or have an odd width: its in-place nibble shift carries the
+// previous row's pixels into the columns just past the region, which showed
+// up as a dark band along the bottom of the home-screen clock (in portrait
+// the physical x axis runs down the screen). Snapping regions to 8-pixel
+// boundaries keeps the driver on its straightforward byte-aligned path.
+static void alignPhysicalSpan(int& x, int& w) {
+    int start = x & ~7;
+    int end = (x + w + 7) & ~7;
+    if (end > EPD_WIDTH) end = EPD_WIDTH;
+    x = start;
+    w = end - start;
+}
+
 void DisplayHAL::updateScreenPartial() {
     if (!frontBuffer || !backBuffer) return;
     EPD_POWER_SCOPE();
@@ -696,6 +710,7 @@ void DisplayHAL::updateScreenPartial() {
         physical_w = (maxX - minX + 1);
         physical_h = (maxY - minY + 1);
     }
+    alignPhysicalSpan(physical_minX, physical_w);
 
     Rect_t area = { 
         .x = physical_minX, 
@@ -742,6 +757,7 @@ void DisplayHAL::updateScreenFast() {
         physical_w = (maxX - minX + 1);
         physical_h = (maxY - minY + 1);
     }
+    alignPhysicalSpan(physical_minX, physical_w);
     
 #ifndef NATIVE_TESTING
     Rect_t area = { 

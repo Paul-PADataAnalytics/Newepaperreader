@@ -2,11 +2,12 @@
 """
 Generates book-themed deep-sleep screensaver images for the e-reader, in the
 style of a Kindle's sleep screen: minimalist grayscale line art, landscape,
-optionally with a short caption.
+optionally with a short caption, framed as a portrait (540x960) poster.
 
 Output is written both as a .png (for quick preview on a normal computer)
 and as a .raw file in the LilyGo EPD47's native 4-bit grayscale framebuffer
-format (960x540, 2 pixels packed per byte, 0=black..15=white), ready to drop
+format (the portrait poster rotated into the panel's physical 960x540 layout,
+2 pixels packed per byte, 0=black..15=white), ready to drop
 onto the SD card's /images folder alongside any existing screensaver .raw
 files - main.cpp's drawSleepScreen() picks a random/rotating one from there
 each time the device goes to sleep.
@@ -236,6 +237,28 @@ SCENES = [
 ]
 
 
+PORTRAIT_W, PORTRAIT_H = HEIGHT, WIDTH
+
+
+def portrait_poster(scene):
+    """Scales a landscape scene to the portrait width and centres it in the
+    upper part of a 540x960 poster, leaving room at the bottom for the
+    firmware's "Sleeping" banner."""
+    poster = Image.new("L", (PORTRAIT_W, PORTRAIT_H), WHITE)
+    # Crop the scene's side margins a little so the art fills more width.
+    crop = scene.crop((90, 0, WIDTH - 90, HEIGHT))
+    scale = PORTRAIT_W / crop.width
+    art = crop.resize((PORTRAIT_W, round(crop.height * scale)), Image.LANCZOS)
+    top = (PORTRAIT_H - 150 - art.height) // 2
+    poster.paste(art, (0, top))
+    d = ImageDraw.Draw(poster)
+    for i, line in enumerate(["Rest now.", "Your story will be right here."]):
+        font = _font(40 if i == 0 else 26)
+        bbox = d.textbbox((0, 0), line, font=font)
+        d.text(((PORTRAIT_W - (bbox[2] - bbox[0])) / 2, 110 + i * 56), line, font=font, fill=40 if i == 0 else 90)
+    return poster
+
+
 def quantize_to_4bit(img_l):
     """Floyd-Steinberg dither an 8-bit grayscale image down to 16 levels
     (4 bits/pixel) so gradients (glows, steam, sheens) still read cleanly on
@@ -289,12 +312,16 @@ def main():
         draw = ImageDraw.Draw(img)
         scene_fn(img, draw)
 
-        quantized = quantize_to_4bit(img)
+        # The device is used in portrait: frame the landscape scene on a
+        # 540x960 poster, then rotate it into the panel's physical layout
+        # (logical portrait (x, y) lives at physical (y, 539 - x)).
+        poster = portrait_poster(img)
+        quantized = quantize_to_4bit(poster)
 
         png_path = os.path.join(args.out_dir, f"{name}.png")
         quantized.save(png_path)
 
-        raw_bytes = pack_4bpp(quantized, args.native)
+        raw_bytes = pack_4bpp(quantized.transpose(Image.Transpose.ROTATE_90), args.native)
         raw_path = os.path.join(args.out_dir, f"{name}.raw")
         with open(raw_path, "wb") as f:
             f.write(raw_bytes)

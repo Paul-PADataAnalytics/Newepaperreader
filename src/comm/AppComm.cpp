@@ -466,7 +466,7 @@ void handleJson(const std::string& msg) {
         if (path.rfind("/books/", 0) != 0 || path.find("..") != std::string::npos) {
             error = "Invalid path";
         } else {
-            ok = AppStorage::deleteFile(path, error);
+            ok = AppStorage::deleteFile(AppStorage::toRuntimePath(path), error);
             if (ok) {
                 // Bookmarks live alongside books.
                 std::string bmk = AppStorage::toBookmarkPath(path);
@@ -845,6 +845,12 @@ static void nativePump() {
         break;
     }
     while (tcp_rx.size() >= 2) {
+        {
+            // Same thread as poll(): never block here, leave the rest
+            // buffered until the inbox drains.
+            std::lock_guard<std::mutex> lock(g_inboxMutex);
+            if (g_inbox.size() >= INBOX_CAPACITY) break;
+        }
         size_t len = (uint8_t)tcp_rx[0] | ((size_t)(uint8_t)tcp_rx[1] << 8);
         if (tcp_rx.size() < 2 + len) break;
         std::string frame = tcp_rx.substr(2, len);

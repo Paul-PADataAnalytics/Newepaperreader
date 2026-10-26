@@ -48,6 +48,8 @@ TypographyEngine typography;
 
 static QueueHandle_t touchEventQueue = nullptr;
 static TaskHandle_t touchReaderTaskHandle = nullptr;
+static volatile uint32_t s_touchWakeups = 0;
+static volatile uint32_t s_touchDowns = 0;
 
 enum class TouchPhase : uint8_t {
     NONE = 0,
@@ -73,9 +75,21 @@ static void touchReaderTask(void *param) {
     (void)param;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        s_touchWakeups++;
 
         int tx = -1, ty = -1;
         bool down = DisplayHAL::getTouch(tx, ty);
+        if (down) s_touchDowns++;
+        // The GT911 pulses INT at its scan rate (~100Hz) even with nothing
+        // touching it. Only forward state changes and held presses, so an
+        // idle panel doesn't wake the main loop 100 times a second.
+        static bool lastDown = false;
+        bool forward = down || lastDown;
+        lastDown = down;
+        if (!forward) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            continue;
+        }
         TouchEvent ev{};
         ev.x = static_cast<int16_t>(tx);
         ev.y = static_cast<int16_t>(ty);
@@ -112,6 +126,7 @@ void launchSettingsApp() {
 }
 
 static void enterLockMode();
+static uint32_t s_testTimerWakeSec = 0;
 
 // ---------------------------------------------------------------------------
 // Serial console (development): "T x y" raw touch, "TL x y" touch in
@@ -129,13 +144,17 @@ void processSerialCommands() {
         if (secondSpace != -1) {
             int x = cmd.substring(firstSpace + 1, secondSpace).toInt();
             int y = cmd.substring(secondSpace + 1).toInt();
-            if (logical && DisplayHAL::isPortrait()) {
-                DisplayHAL::injectTouch(y, (EPD_HEIGHT - 1) - x);
+            if (logical) {
+                // Deterministic test tap at on-screen coordinates, straight
+                // to the UI (bypasses the GT911 press/release debouncing).
+                PowerManager::noteUserActivity();
+                PowerManager::boostCpu();
+                Serial.printf("Handling touch at %d, %d\n", x, y);
+                Launcher::getInstance().handleTouch(x, y);
             } else {
                 DisplayHAL::injectTouch(x, y);
+                if (touchReaderTaskHandle) xTaskNotifyGive(touchReaderTaskHandle);
             }
-            // Injected touches bypass the GT911 interrupt, so wake the reader task.
-            if (touchReaderTaskHandle) xTaskNotifyGive(touchReaderTaskHandle);
         }
     } else if (cmd == "S") {
         Serial.println("SCREENSHOT_START");
@@ -147,8 +166,15 @@ void processSerialCommands() {
         Serial.println("SCREENSHOT_END");
     } else if (cmd == "SLEEP") {
         enterLockMode();
+    } else if (cmd.startsWith("SLEEPT ")) {
+        // Development: sleep, but also wake on a timer so the full
+        // sleep/resume cycle can be tested without pressing the button.
+        s_testTimerWakeSec = (uint32_t)cmd.substring(7).toInt();
+        enterLockMode();
     } else if (cmd == "STATUS") {
-        Serial.printf("STATUS batt=%.3fV (%d%%) usb=%d cpu=%uMHz idle=%ums heap=%u psram=%u ble=%d conn=%d app=%d\n",
+        Serial.printf("STATUS gt911=%d/%d touch=%u/%u batt=%.3fV (%d%%) usb=%d cpu=%uMHz idle=%ums heap=%u psram=%u ble=%d conn=%d app=%d\n",
+                      DisplayHAL::touchInitOk() ? 1 : 0, DisplayHAL::touchResponds() ? 1 : 0,
+                      (unsigned)s_touchWakeups, (unsigned)s_touchDowns,
                       DisplayHAL::getBatteryVoltage(), DisplayHAL::getBatteryPercent(),
                       PowerManager::isUsbConnected() ? 1 : 0, (unsigned)getCpuFrequencyMhz(),
                       (unsigned)PowerManager::msSinceActivity(), (unsigned)ESP.getFreeHeap(),
@@ -230,7 +256,9 @@ void setup() {
 #ifndef NATIVE_TESTING
     // Waking from lock mode (BUTTON_1 ext0) restores the app that was open,
     // and for the e-reader the exact page. Any other reset boots to home.
-    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    Serial.printf("Wake cause: %d\n", (int)cause);
+    if (cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER) {
         AppStorage::SavedSystemState saved = AppStorage::loadSystemState();
         if (saved.valid && saved.appIndex >= 0 && saved.appIndex < APP_COUNT) {
             if (saved.appIndex == APP_READER && saved.internalState == 1 && !saved.path.empty()) {
@@ -460,6 +488,7 @@ static void enterLockMode() {
     rtc_gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
     rtc_gpio_pulldown_dis(static_cast<gpio_num_t>(BUTTON_1));
     esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BUTTON_1), 0);
+    if (s_testTimerWakeSec > 0) esp_sleep_enable_timer_wakeup((uint64_t)s_testTimerWakeSec * 1000000ULL);
     esp_deep_sleep_start(); // never returns
 #else
     printf("NATIVE_TESTING: simulated sleep (click to wake)\n");

@@ -161,6 +161,9 @@ struct EpdPowerScope {
 };
 #define EPD_POWER_SCOPE() EpdPowerScope _epdPowerScope
 
+static bool s_touchOk = false;
+static uint8_t s_touchAddress = 0x5D;
+
 void DisplayHAL::init() {
     epd_init();
 
@@ -192,7 +195,10 @@ void DisplayHAL::init() {
     if (Wire.endTransmission() == 0) touchAddress = 0x5D;
 
     touch.setPins(-1, TOUCH_INT);
-    if (touch.begin(Wire, touchAddress, BOARD_SDA, BOARD_SCL)) {
+    s_touchAddress = touchAddress;
+    s_touchOk = touch.begin(Wire, touchAddress, BOARD_SDA, BOARD_SCL);
+    Serial.printf("GT911 at 0x%02X init %s\n", touchAddress, s_touchOk ? "ok" : "FAILED");
+    if (s_touchOk) {
         touch.setMaxCoordinates(EPD_WIDTH, EPD_HEIGHT);
         touch.setSwapXY(true);
         touch.setMirrorXY(false, true);
@@ -201,6 +207,13 @@ void DisplayHAL::init() {
     }
     // touch.begin() may have reconfigured INT; restore the pull-up input.
     pinMode(TOUCH_INT, INPUT_PULLUP);
+}
+
+bool DisplayHAL::touchInitOk() { return s_touchOk; }
+
+bool DisplayHAL::touchResponds() {
+    Wire.beginTransmission(s_touchAddress);
+    return Wire.endTransmission() == 0;
 }
 
 void DisplayHAL::powerOn() {
@@ -374,6 +387,9 @@ void DisplayHAL::powerOff() {
 void DisplayHAL::prepareForDeepSleep() {
     printf("Native DisplayHAL: prepareForDeepSleep()\n");
 }
+
+bool DisplayHAL::touchInitOk() { return true; }
+bool DisplayHAL::touchResponds() { return true; }
 
 void DisplayHAL::dumpVisible(const char* filepath) {
     FILE* f = fopen(filepath, "wb");

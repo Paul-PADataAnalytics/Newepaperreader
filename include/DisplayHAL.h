@@ -60,6 +60,11 @@ public:
     // low through deep sleep so the controller stays in its sleep mode.
     static void prepareForDeepSleep();
 
+    // Development diagnostics: did the GT911 initialise, and does it
+    // still answer on I2C right now?
+    static bool touchInitOk();
+    static bool touchResponds();
+
     // Writes what is currently on screen, in the orientation the user sees
     // it, as an 8-bit PGM (width x height header included).
     static void dumpVisible(const char* filepath);

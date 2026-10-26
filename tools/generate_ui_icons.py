@@ -15,7 +15,7 @@ import argparse
 import math
 import os
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 SIZE = 96
 SS = 4  # supersampling factor
@@ -145,6 +145,47 @@ def icon_ship():
     return img
 
 
+def icon_lighthouse():
+    img, d = canvas()
+    tower = [(38, 82), (58, 82), (54, 30), (42, 30)]
+    d.polygon([(x * SS, y * SS) for x, y in tower], fill=255)
+    line(d, tower + [tower[0]], width=4 * SS)
+    for y0 in (44, 58, 70):
+        d.rectangle((40 * SS, y0 * SS, 56 * SS, (y0 + 5) * SS), fill=0)
+    rrect(d, (40, 16, 56, 30), 2, width=4 * SS)
+    d.polygon([(38 * SS, 16 * SS), (58 * SS, 16 * SS), (48 * SS, 6 * SS)], fill=0)
+    for (x1, y1, x2, y2) in ((60, 22, 90, 12), (60, 26, 92, 28), (36, 22, 6, 12), (36, 26, 4, 28)):
+        line(d, [(x1, y1), (x2, y2)], width=3 * SS)
+    line(d, [(10, 86), (86, 86)], width=4 * SS)
+    return img
+
+
+def icon_key():
+    img, d = canvas()
+    r = 18 * SS
+    cx, cy = 28 * SS, 48 * SS
+    d.ellipse((cx - r, cy - r, cx + r, cy + r), outline=0, width=STROKE)
+    line(d, [(46, 48), (88, 48)])
+    line(d, [(74, 48), (74, 62)])
+    line(d, [(84, 48), (84, 60)])
+    return img
+
+
+def icon_games():
+    img, d = canvas()
+    # A die and a playing card.
+    rrect(d, (12, 30, 52, 70), 8)
+    for x, y in ((22, 40), (42, 60), (32, 50)):
+        d.ellipse(((x - 4) * SS, (y - 4) * SS, (x + 4) * SS, (y + 4) * SS), fill=0)
+    card = Image.new("L", (S, S), 255)
+    cd = ImageDraw.Draw(card)
+    cd.rounded_rectangle((56 * SS, 14 * SS, 86 * SS, 58 * SS), radius=5 * SS, outline=0, width=STROKE, fill=255)
+    cd.polygon([(71 * SS, 26 * SS), (79 * SS, 36 * SS), (71 * SS, 46 * SS), (63 * SS, 36 * SS)], fill=0)
+    card = card.rotate(-15, resample=Image.BICUBIC, fillcolor=255, center=(71 * SS, 36 * SS))
+    img.paste(ImageChops.darker(img, card), (0, 0))
+    return img
+
+
 ICONS = [
     ("ICON_BOOK", icon_book),
     ("ICON_BOOKMARK", icon_bookmark),
@@ -155,6 +196,9 @@ ICONS = [
     ("ICON_BLUETOOTH", icon_bluetooth),
     ("ICON_SLEEP", icon_sleep),
     ("ICON_SHIP", icon_ship),
+    ("ICON_LIGHTHOUSE", icon_lighthouse),
+    ("ICON_KEY", icon_key),
+    ("ICON_GAMES", icon_games),
 ]
 
 

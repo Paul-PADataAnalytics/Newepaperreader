@@ -14,6 +14,8 @@ enum AppId {
     APP_CALCULATOR,
     APP_SETTINGS,
     APP_TEARACE,
+    APP_KEEPER,
+    APP_GAMES,
     APP_COUNT
 };
 
@@ -40,7 +42,9 @@ public:
 
     // Deferred variants: safe to call from inside an app's handleTouch() /
     // update(); applied once that call has returned.
-    void requestLaunch(int id);
+    // With returnTo set, closing the launched app goes back to that app
+    // instead of the home screen.
+    void requestLaunch(int id, int returnTo = -1);
     void requestExit();
     // Opens the e-reader straight into the given book.
     void requestOpenBook(const std::string& runtimePath);
@@ -66,6 +70,8 @@ private:
     int m_activeAppIndex = -1;
 
     int m_pendingLaunch = -1;
+    int m_pendingReturnTo = -1;
+    int m_returnTo = -1;
     bool m_pendingExit = false;
     std::string m_pendingBook;
 

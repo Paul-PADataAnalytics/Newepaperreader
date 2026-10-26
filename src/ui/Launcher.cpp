@@ -6,6 +6,8 @@
 #include "FileManagerApp.h"
 #include "ImageViewerApp.h"
 #include "TeaRaceApp.h"
+#include "KeeperApp.h"
+#include "GamesApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
@@ -33,6 +35,8 @@ static Application* createCalculator() { return new CalculatorApp(); }
 static Application* createFileManager() { return new FileManagerApp(); }
 static Application* createImageViewer() { return new ImageViewerApp(); }
 static Application* createTeaRace() { return new TeaRaceApp(); }
+static Application* createKeeper() { return new KeeperApp(); }
+static Application* createGames() { return new GamesApp(); }
 
 // ---- Home screen layout ----------------------------------------------------
 namespace {
@@ -59,7 +63,7 @@ Rect cardRect() { return Rect(MARGIN, CARD_Y, W - 2 * MARGIN, CARD_H); }
 // Home grid tiles: apps plus the sleep shortcut.
 constexpr int TILE_SLEEP = -3;
 const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_IMAGES, APP_FILES,
-                      APP_CALCULATOR, APP_TEARACE, APP_SETTINGS, TILE_SLEEP};
+                      APP_CALCULATOR, APP_GAMES, APP_SETTINGS, TILE_SLEEP};
 constexpr int kTileCount = sizeof(kTiles) / sizeof(kTiles[0]);
 
 void drawClockBlock() {
@@ -104,6 +108,8 @@ void Launcher::init() {
     m_apps[APP_CALCULATOR] = {"Calculator", "Basic arithmetic", createCalculator, ICON_CALCULATOR};
     m_apps[APP_SETTINGS]   = {"Settings",   "Display, power and Bluetooth", createSettings, ICON_SETTINGS};
     m_apps[APP_TEARACE]    = {"Tea Race",   "Race a clipper from China to London", createTeaRace, ICON_SHIP};
+    m_apps[APP_KEEPER]     = {"The Keeper", "Twenty-one nights on a lighthouse", createKeeper, ICON_LIGHTHOUSE};
+    m_apps[APP_GAMES]      = {"Games",      "Short games", createGames, ICON_GAMES};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }
@@ -160,8 +166,9 @@ void Launcher::exitCurrentApp() {
     drawMenu();
 }
 
-void Launcher::requestLaunch(int id) {
+void Launcher::requestLaunch(int id, int returnTo) {
     m_pendingLaunch = id;
+    m_pendingReturnTo = returnTo;
     m_pendingExit = false;
 }
 
@@ -177,11 +184,19 @@ void Launcher::requestOpenBook(const std::string& runtimePath) {
 void Launcher::processPending() {
     if (m_pendingExit) {
         m_pendingExit = false;
-        exitCurrentApp();
+        if (m_returnTo >= 0) {
+            int back = m_returnTo;
+            m_returnTo = -1;
+            launchApp(back);
+        } else {
+            exitCurrentApp();
+        }
     }
     if (m_pendingLaunch >= 0) {
         int id = m_pendingLaunch;
         m_pendingLaunch = -1;
+        m_returnTo = m_pendingReturnTo;
+        m_pendingReturnTo = -1;
         launchApp(id);
     }
     if (!m_pendingBook.empty()) {

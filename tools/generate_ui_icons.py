@@ -88,19 +88,6 @@ def icon_calculator():
     return img
 
 
-def icon_game():
-    img, d = canvas()
-    # Sword and shield for the adventure game.
-    line(d, [(24, 72), (70, 26)])
-    line(d, [(70, 26), (80, 16)], width=4 * SS)
-    line(d, [(18, 62), (34, 78)])
-    line(d, [(14, 82), (22, 74)], width=7 * SS)
-    shield = [(58, 52), (84, 52), (84, 68), (71, 86), (58, 68), (58, 52)]
-    d.polygon([(x * SS, y * SS) for x, y in shield], fill=255)
-    line(d, shield, width=5 * SS)
-    return img
-
-
 def icon_settings():
     img, d = canvas()
     cx, cy = 48 * SS, 48 * SS
@@ -144,7 +131,6 @@ ICONS = [
     ("ICON_IMAGE", icon_image),
     ("ICON_FOLDER", icon_folder),
     ("ICON_CALCULATOR", icon_calculator),
-    ("ICON_GAME", icon_game),
     ("ICON_SETTINGS", icon_settings),
     ("ICON_BLUETOOTH", icon_bluetooth),
     ("ICON_SLEEP", icon_sleep),

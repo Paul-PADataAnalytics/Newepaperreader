@@ -12,7 +12,6 @@ enum AppId {
     APP_IMAGES,
     APP_FILES,
     APP_CALCULATOR,
-    APP_GAME,
     APP_SETTINGS,
     APP_COUNT
 };

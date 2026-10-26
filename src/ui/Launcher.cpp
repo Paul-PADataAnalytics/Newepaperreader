@@ -5,7 +5,6 @@
 #include "CalculatorApp.h"
 #include "FileManagerApp.h"
 #include "ImageViewerApp.h"
-#include "HeroAdventureApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
@@ -32,7 +31,6 @@ static Application* createSettings() { return new SettingsApp(); }
 static Application* createCalculator() { return new CalculatorApp(); }
 static Application* createFileManager() { return new FileManagerApp(); }
 static Application* createImageViewer() { return new ImageViewerApp(); }
-static Application* createHeroAdventure() { return new HeroAdventureApp(); }
 
 // ---- Home screen layout ----------------------------------------------------
 namespace {
@@ -43,10 +41,10 @@ constexpr int CLOCK_H = 150;
 constexpr int CARD_Y = 196;
 constexpr int CARD_H = 176;
 constexpr int GRID_Y = 404;
-constexpr int GRID_COLS = 3;
+constexpr int GRID_COLS = 2;
 constexpr int GRID_GAP = 16;
 constexpr int TILE_W = (W - 2 * MARGIN - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS;
-constexpr int TILE_H = 148;
+constexpr int TILE_H = 112;
 
 Rect tileRect(int i) {
     int row = i / GRID_COLS;
@@ -59,8 +57,8 @@ Rect cardRect() { return Rect(MARGIN, CARD_Y, W - 2 * MARGIN, CARD_H); }
 // Home grid tiles: apps plus two shortcuts.
 constexpr int TILE_BLUETOOTH = -2;
 constexpr int TILE_SLEEP = -3;
-const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_IMAGES, APP_FILES, APP_CALCULATOR, APP_GAME,
-                      TILE_BLUETOOTH, APP_SETTINGS, TILE_SLEEP};
+const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_IMAGES, APP_FILES,
+                      APP_CALCULATOR, APP_SETTINGS, TILE_BLUETOOTH, TILE_SLEEP};
 constexpr int kTileCount = sizeof(kTiles) / sizeof(kTiles[0]);
 
 void drawClockBlock() {
@@ -103,7 +101,6 @@ void Launcher::init() {
     m_apps[APP_IMAGES]     = {"Pictures",   "View JPEG images", createImageViewer, ICON_IMAGE};
     m_apps[APP_FILES]      = {"Files",      "Manage the SD card", createFileManager, ICON_FOLDER};
     m_apps[APP_CALCULATOR] = {"Calculator", "Basic arithmetic", createCalculator, ICON_CALCULATOR};
-    m_apps[APP_GAME]       = {"Adventure",  "Hero Adventure RPG", createHeroAdventure, ICON_GAME};
     m_apps[APP_SETTINGS]   = {"Settings",   "Display, power and Bluetooth", createSettings, ICON_SETTINGS};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
@@ -242,10 +239,16 @@ void Launcher::drawMenu() {
                 label = m_apps[kTiles[i]].name;
             }
             strokeRoundRect(r.x, r.y, r.w, r.h, 16, 2, BLACK);
-            int iconY = r.y + (sub.empty() ? 22 : 14);
-            icon(ic, r.x + (r.w - 64) / 2, iconY, 64);
-            textCentered(label, r.x + r.w / 2, iconY + 74, FONT_SMALL, BLACK, true);
-            if (!sub.empty()) textCentered(sub, r.x + r.w / 2, iconY + 102, FONT_CAPTION, DARK);
+            icon(ic, r.x + 16, r.y + (r.h - 56) / 2, 56);
+            int tx = r.x + 86;
+            int tw = r.x + r.w - 12 - tx;
+            if (sub.empty()) {
+                text(ellipsize(label, tw, FONT_BODY - 2, true), tx, r.y + (r.h - lineHeight(FONT_BODY - 2)) / 2,
+                     FONT_BODY - 2, BLACK, true);
+            } else {
+                text(ellipsize(label, tw, FONT_BODY - 2, true), tx, r.y + 28, FONT_BODY - 2, BLACK, true);
+                text(sub, tx, r.y + 62, FONT_CAPTION, DARK);
+            }
         }
 
         textCentered("Side button: sleep / wake", W / 2, H - 40, FONT_CAPTION, MID);

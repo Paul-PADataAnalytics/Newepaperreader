@@ -11,7 +11,8 @@ The device has two states: **awake** and **asleep** (ESP32-S3 deep sleep, "lock 
 
 - **Side button** (`BUTTON_1`, GPIO 21): sleeps immediately, and is the **only** wake source. Touch never wakes the device, so it can sit in a bag.
 - **Auto-sleep** (Settings > Power): after 1, 2, **5** (default), 10 or 30 minutes without a touch, or Never. This now applies everywhere, *including* while a book page is open - in v2.x the reading view never slept, which is what drained the battery in about a day.
-- **Stay awake on USB** (default on): no auto-sleep while a computer is connected (USB Serial/JTAG sees host SOF packets; a plain wall charger is not detected).
+- **Stay awake on USB** (default on): no auto-sleep while plugged in. External power is detected two ways: a computer talking to the USB port (USB Serial/JTAG sees start-of-frame packets), or the battery sitting at charger voltage (>= 4.21 V), which also covers wall chargers. While a nearly empty battery charges from a wall charger it reads below that, so auto-sleep still applies until it is almost full.
+- **Waking**: the press that wakes the device is ignored until released, so holding the button a little longer no longer sends it straight back to sleep.
 - **Always on** (developer option): never auto-sleep. The side button still sleeps.
 - **Companion app activity** (any user-initiated command: library, upload, delete, bookmark change) counts as activity, and the device never sleeps during a file transfer. Background bookmark polling does *not* keep it awake.
 
@@ -79,5 +80,7 @@ The native simulator speaks the same protocol over TCP port 9876 (`EPD_SIM_PORT`
 | `tools/ble_protocol_test.py` | End-to-end protocol test against the real device over BLE (needs `bleak`) |
 | `tools/generate_ui_icons.py` | Regenerates `src/ui/ui_icons.h` |
 | `tools/generate_sleep_images.py` | Portrait sleep pictures as `.raw` files for `/images` |
+
+`STATUS` (and the companion `HELLO` answer) include `lastSleep`: why the device last went to sleep (button, timeout, menu, dev-command), whether a USB host was seen, the battery voltage and idle time at that moment - kept in RTC memory across deep sleep.
 
 Serial commands understood by the firmware: `STATUS`, `S` (screenshot), `TL x y` (tap at on-screen coordinates), `T x y` (raw touch-controller coordinates), `SLEEP`, and `SLEEPT n` (sleep, and also wake after *n* seconds - for testing the resume path without pressing the button).

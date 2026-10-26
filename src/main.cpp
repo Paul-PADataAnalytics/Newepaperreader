@@ -46,6 +46,10 @@ TypographyEngine typography;
 #include <freertos/task.h>
 #include <driver/gpio.h>
 
+// BUTTON_1 debounce state (see checkButton1DebouncedPress()).
+static bool button1DownWaiting = false;
+static uint32_t lastButton1UpTime = 0;
+
 static QueueHandle_t touchEventQueue = nullptr;
 static TaskHandle_t touchReaderTaskHandle = nullptr;
 static volatile uint32_t s_touchWakeups = 0;
@@ -125,7 +129,7 @@ void launchSettingsApp() {
     Launcher::getInstance().requestLaunch(APP_SETTINGS);
 }
 
-static void enterLockMode();
+static void enterLockMode(PowerManager::SleepReason reason);
 static uint32_t s_testTimerWakeSec = 0;
 
 // ---------------------------------------------------------------------------
@@ -165,14 +169,15 @@ void processSerialCommands() {
         Serial.println();
         Serial.println("SCREENSHOT_END");
     } else if (cmd == "SLEEP") {
-        enterLockMode();
+        enterLockMode(PowerManager::SLEEP_DEV_COMMAND);
     } else if (cmd.startsWith("SLEEPT ")) {
         // Development: sleep, but also wake on a timer so the full
         // sleep/resume cycle can be tested without pressing the button.
         s_testTimerWakeSec = (uint32_t)cmd.substring(7).toInt();
-        enterLockMode();
+        enterLockMode(PowerManager::SLEEP_DEV_COMMAND);
     } else if (cmd == "STATUS") {
-        Serial.printf("STATUS gt911=%d/%d touch=%u/%u batt=%.3fV (%d%%) usb=%d cpu=%uMHz idle=%ums heap=%u psram=%u ble=%d conn=%d app=%d\n",
+        Serial.printf("STATUS lastSleep=[%s] usbHost=%d gt911=%d/%d touch=%u/%u batt=%.3fV (%d%%) usb=%d cpu=%uMHz idle=%ums heap=%u psram=%u ble=%d conn=%d app=%d\n",
+                      PowerManager::lastSleepSummary(), PowerManager::isUsbHostActive() ? 1 : 0,
                       DisplayHAL::touchInitOk() ? 1 : 0, DisplayHAL::touchResponds() ? 1 : 0,
                       (unsigned)s_touchWakeups, (unsigned)s_touchDowns,
                       DisplayHAL::getBatteryVoltage(), DisplayHAL::getBatteryPercent(),
@@ -206,6 +211,9 @@ void setup() {
     // BUTTON_1 (GPIO21): dedicated sleep/wake button, polled from loop().
     pinMode(BUTTON_1, INPUT_PULLUP);
     gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
+    // The press that woke us may still be held when loop() starts; it must
+    // be released before it can count as a new "sleep" press.
+    if (digitalRead(BUTTON_1) == LOW) button1DownWaiting = true;
 
     gpio_install_isr_service(0);
     gpio_set_intr_type(static_cast<gpio_num_t>(TOUCH_INT), GPIO_INTR_NEGEDGE);
@@ -284,8 +292,6 @@ void setup() {
 #ifndef NATIVE_TESTING
 // Edge-triggered, debounced BUTTON_1 press detector. State is file-scope;
 // every deep-sleep wake is a full reset, so it reinitialises on each boot.
-static bool button1DownWaiting = false;
-static uint32_t lastButton1UpTime = 0;
 const uint32_t BUTTON1_DEBOUNCE_MS = 50;
 
 static bool checkButton1DebouncedPress(uint32_t now) {
@@ -454,7 +460,8 @@ static bool isSystemSleeping = false;
 // down and deep-sleeps with ONLY BUTTON_1 armed (touch never wakes it, so it
 // can live in a bag). esp_deep_sleep_start() never returns: waking resets
 // the chip and setup() restores the breadcrumb.
-static void enterLockMode() {
+static void enterLockMode(PowerManager::SleepReason reason) {
+    PowerManager::recordSleep(reason);
     AppStorage::SavedSystemState state;
     state.appIndex = Launcher::getInstance().getActiveAppIndex();
     state.isPortrait = true;
@@ -497,7 +504,7 @@ static void enterLockMode() {
 }
 
 void requestSleepNow() {
-    enterLockMode();
+    enterLockMode(PowerManager::SLEEP_USER_MENU);
 }
 
 // ---------------------------------------------------------------------------
@@ -580,7 +587,7 @@ void loop() {
 #endif
 
     if (button1Pressed || PowerManager::shouldAutoSleep()) {
-        enterLockMode(); // hardware: never returns
+        enterLockMode(button1Pressed ? PowerManager::SLEEP_BUTTON : PowerManager::SLEEP_TIMEOUT); // hardware: never returns
         return;
     }
 

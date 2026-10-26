@@ -1,6 +1,7 @@
 #include "PowerManager.h"
 #include "SystemSettings.h"
 #include "DisplayHAL.h"
+#include <cstdio>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
@@ -16,6 +17,23 @@ static uint32_t millis() {
     return (uint32_t)duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 #endif
+
+#ifndef NATIVE_TESTING
+#define RTC_KEEP RTC_DATA_ATTR
+#else
+#define RTC_KEEP
+#endif
+
+struct SleepRecord {
+    uint32_t magic;
+    uint8_t reason;
+    uint8_t usbHost;
+    uint16_t millivolts;
+    uint32_t idleMs;
+    uint32_t count;
+};
+static RTC_KEEP SleepRecord s_sleepRecord;
+static const uint32_t SLEEP_RECORD_MAGIC = 0x51EE9A11;
 
 namespace {
 uint32_t s_lastActivity = 0;
@@ -49,12 +67,45 @@ uint32_t msSinceActivity() {
     return millis() - s_lastActivity;
 }
 
-bool isUsbConnected() {
+bool isUsbHostActive() {
 #ifndef NATIVE_TESTING
     return HWCDC::isPlugged();
 #else
     return false;
 #endif
+}
+
+bool isUsbConnected() {
+    if (isUsbHostActive()) return true;
+#ifndef NATIVE_TESTING
+    // The charger holds the cell at ~4.22V; a cell off charge reads
+    // noticeably lower within moments of unplugging.
+    return DisplayHAL::getBatteryVoltage() >= 4.21f;
+#else
+    return false;
+#endif
+}
+
+void recordSleep(SleepReason reason) {
+    if (s_sleepRecord.magic != SLEEP_RECORD_MAGIC) {
+        s_sleepRecord = SleepRecord();
+        s_sleepRecord.magic = SLEEP_RECORD_MAGIC;
+    }
+    s_sleepRecord.reason = reason;
+    s_sleepRecord.usbHost = isUsbHostActive() ? 1 : 0;
+    s_sleepRecord.millivolts = (uint16_t)(DisplayHAL::getBatteryVoltage() * 1000.0f);
+    s_sleepRecord.idleMs = msSinceActivity();
+    s_sleepRecord.count++;
+}
+
+const char* lastSleepSummary() {
+    static char buf[96];
+    if (s_sleepRecord.magic != SLEEP_RECORD_MAGIC || s_sleepRecord.reason == SLEEP_NONE) return "none";
+    static const char* kNames[] = {"none", "button", "timeout", "dev-command", "menu"};
+    snprintf(buf, sizeof(buf), "%s usbHost=%u %umV idle=%us n=%u",
+             kNames[s_sleepRecord.reason < 5 ? s_sleepRecord.reason : 0], s_sleepRecord.usbHost,
+             s_sleepRecord.millivolts, (unsigned)(s_sleepRecord.idleMs / 1000), (unsigned)s_sleepRecord.count);
+    return buf;
 }
 
 bool shouldAutoSleep() {

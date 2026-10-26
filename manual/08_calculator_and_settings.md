@@ -18,7 +18,7 @@ Settings are saved to `/data/settings.json` and survive sleep and reboots. Four 
 | | Text size | Reading font size (also adjustable inside a book) |
 | | Picture brightness | Original / Light / Lighter / Lightest (Chapter 7) |
 | Power | Auto-sleep | 1, 2, 5 (default), 10, 30 min or Never |
-| | Stay awake on USB | No auto-sleep while connected to a computer |
+| | Stay awake on USB | No auto-sleep while plugged into a computer or charger |
 | | Always on | Developer option: never auto-sleep |
 | | Sleep screen | Pictures from `/images` or a book & battery card |
 | | Battery | Voltage, percentage and USB state |

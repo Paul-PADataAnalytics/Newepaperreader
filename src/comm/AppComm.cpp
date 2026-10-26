@@ -375,6 +375,8 @@ void handleJson(const std::string& msg) {
         r["fw"] = FIRMWARE_VERSION;
         r["batt"] = DisplayHAL::getBatteryPercent();
         r["usb"] = PowerManager::isUsbConnected();
+        r["usbHost"] = PowerManager::isUsbHostActive();
+        r["lastSleep"] = PowerManager::lastSleepSummary();
 #ifndef NATIVE_TESTING
         r["free"] = (double)(SD.totalBytes() - SD.usedBytes());
 #endif

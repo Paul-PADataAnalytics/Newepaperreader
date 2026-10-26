@@ -24,8 +24,17 @@ void setBusy(bool busy);
 uint32_t msSinceActivity();
 bool shouldAutoSleep();
 
-// True when a USB host is connected (USB Serial/JTAG sees SOF packets).
+// True when on external power: a USB host is talking to us (USB
+// Serial/JTAG sees SOF packets) or the battery sits at charger voltage
+// (covers wall chargers and hosts that suspend the port).
 bool isUsbConnected();
+bool isUsbHostActive();
+
+// Why the device last went to sleep (kept in RTC memory across deep sleep).
+enum SleepReason : uint8_t { SLEEP_NONE = 0, SLEEP_BUTTON, SLEEP_TIMEOUT, SLEEP_DEV_COMMAND, SLEEP_USER_MENU };
+void recordSleep(SleepReason reason);
+// Human-readable summary of the previous sleep, e.g. for STATUS / HELLO.
+const char* lastSleepSummary();
 
 // Full speed for panel drawing (the EPD driver's timing loops assume 240MHz).
 void boostCpu();

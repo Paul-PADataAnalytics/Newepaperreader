@@ -145,7 +145,7 @@ bool EBookmarkManager::save() {
 
 void EBookmarkManager::addOrUpdateBook(const std::string& isbn, const std::string& title, 
                                       const std::string& author, const std::string& genre, 
-                                      int currentPage, int totalPages) {
+                                      int currentPage, int totalPages, uint32_t timestamp) {
     for (auto& book : m_bookmarks) {
         if (book.isbn == isbn) {
             book.title = title;
@@ -153,7 +153,7 @@ void EBookmarkManager::addOrUpdateBook(const std::string& isbn, const std::strin
             book.genre = genre;
             book.totalPages = totalPages;
             if (book.currentPage != currentPage) {
-                updatePage(isbn, currentPage);
+                updatePage(isbn, currentPage, timestamp);
             } else {
                 save();
             }
@@ -172,7 +172,7 @@ void EBookmarkManager::addOrUpdateBook(const std::string& isbn, const std::strin
     // Add initial history entry if starting above 0
     if (currentPage > 0) {
         HistoryEntry entry;
-        entry.timestamp = getCurrentTime();
+        entry.timestamp = timestamp ? timestamp : getCurrentTime();
         entry.page = currentPage;
         newBook.history.push_back(entry);
     }

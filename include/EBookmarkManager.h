@@ -29,10 +29,13 @@ public:
 
     const std::vector<EBookmark>& getBookmarks() const { return m_bookmarks; }
     
-    // Add a new book or update metadata if it exists
+    // Add a new book or update metadata if it exists. A non-zero timestamp
+    // marks a change that came from the phone: it is recorded as-is and not
+    // echoed back.
     void addOrUpdateBook(const std::string& isbn, const std::string& title, 
                           const std::string& author, const std::string& genre, 
-                          int currentPage, int totalPages);
+                          int currentPage, int totalPages,
+                          uint32_t timestamp = 0);
                           
     // Update the reading page for a book, appending to history if it changed
     void updatePage(const std::string& isbn, int newPage, uint32_t timestamp = 0);

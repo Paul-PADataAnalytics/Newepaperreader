@@ -326,7 +326,12 @@ class BleService {
     final rid = _nextRid++;
     final completer = Completer<Map<String, dynamic>>();
     _pending[rid] = completer;
-    await _writeJson({...msg, 'rid': rid});
+    try {
+      await _writeJson({...msg, 'rid': rid});
+    } catch (_) {
+      _pending.remove(rid);
+      rethrow;
+    }
 
     final deadline = DateTime.now().add(timeout);
     while (true) {

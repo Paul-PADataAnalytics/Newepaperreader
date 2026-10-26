@@ -67,6 +67,7 @@ static std::string s_lastEvent;
 // phone instead of silently dropping file chunks.
 static bool inboxPush(const std::string& msg) {
     for (int attempt = 0; attempt < 1000; attempt++) {
+        if (!is_comm_init) return false;
         {
             std::lock_guard<std::mutex> lock(g_inboxMutex);
             if (g_inbox.size() < INBOX_CAPACITY) {
@@ -81,6 +82,11 @@ static bool inboxPush(const std::string& msg) {
 #endif
     }
     return false;
+}
+
+static void inboxClear() {
+    std::lock_guard<std::mutex> lock(g_inboxMutex);
+    g_inbox.clear();
 }
 
 static bool inboxPop(std::string& out) {
@@ -422,8 +428,7 @@ void handleJson(const std::string& msg) {
         }
         bool applied = false;
         if (ts == 0 || ts >= localTs) {
-            mgr.addOrUpdateBook(isbn, title, author, genre, page, total);
-            if (ts > 0) mgr.updatePage(isbn, page, ts);
+            mgr.addOrUpdateBook(isbn, title, author, genre, page, total, ts ? ts : nowEpoch());
             s_bookmarksRev++;
             applied = true;
             s_lastEvent = "Synced \"" + title + "\"";
@@ -627,6 +632,7 @@ void AppComm::poll() {
 bool AppComm::isInitialized() { return is_comm_init; }
 
 bool AppComm::hasPending() {
+    if (!is_comm_init) return false;
     std::lock_guard<std::mutex> lock(g_inboxMutex);
     return !g_inbox.empty();
 }
@@ -760,6 +766,7 @@ void AppComm::deinit() {
     is_comm_init = false;
     BLEDevice::getAdvertising()->stop();
     BLEDevice::deinit(false);
+    inboxClear();
     pServer = nullptr;
     pWriteChar = nullptr;
     pNotifyChar = nullptr;
@@ -844,6 +851,7 @@ void AppComm::deinit() {
     if (client_socket >= 0) close(client_socket);
     if (server_fd >= 0) close(server_fd);
     client_socket = server_fd = -1;
+    inboxClear();
 }
 
 // Runs before the common poll(): moves bytes from the socket into the inbox.

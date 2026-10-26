@@ -2,37 +2,120 @@
 #include "HeroAdventureEngine.h"
 #include "HeroGameData.h"
 #include "UIJSONLoader.h"
-#include "DisplayHAL.h"
-#include "TypographyEngine.h"
+#include "Launcher.h"
 #include "ui/UIFramework.h"
+#include "ui/UIKit.h"
 #include <cstring>
 #include <cstdio>
 #include <cctype>
 #include <algorithm>
 
 extern uint8_t *framebuffer;
-extern TypographyEngine typography;
 
 static UIJSONLoader uiLoader;
-static const char* SCREEN_IDS[] = {
-    "front_page",
-    "character_creation",
-    "journey",
-    "combat",
-    "loot_screen",
-    "level_up",
-    "capital",
-    "death",
-    "high_scores"
-};
+
+namespace {
+
+constexpr int CONTENT_TOP = UI::HEADER_H + 24;
+constexpr int BTN_H_STACK = 76;
+constexpr int BTN_H_GRID = 72;
+constexpr int BTN_GAP = 14;
+constexpr int BOTTOM_PAD = 28;
+constexpr int TEXT_LINE_GAP = 6;
+constexpr float BUTTON_FONT = UI::FONT_BODY - 2;
+const float BODY_SIZES[] = { UI::FONT_BODY, UI::FONT_BODY - 2, UI::FONT_SMALL + 2,
+                             UI::FONT_SMALL, UI::FONT_CAPTION };
+
+// A line whose letters are all upper case ("ENEMY STATS") is a heading.
+bool isHeadingLine(const std::string& line) {
+    bool header = false;
+    for (unsigned char uc : line) {
+        if (std::isalpha(uc)) {
+            if (std::isupper(uc)) header = true;
+            else return false;
+        }
+    }
+    return header;
+}
+
+bool isBlank(const std::string& s) {
+    for (unsigned char c : s) if (!std::isspace(c)) return false;
+    return true;
+}
+
+// Same greedy word wrap as UI::textWrapped, used to measure and to draw bold lines.
+std::vector<std::string> wrapLines(const std::string& s, int w, float size, bool bold) {
+    std::vector<std::string> lines;
+    std::string current;
+    size_t i = 0;
+    while (i <= s.size()) {
+        size_t sp = s.find_first_of(" \n", i);
+        if (sp == std::string::npos) sp = s.size();
+        std::string word = s.substr(i, sp - i);
+        std::string candidate = current.empty() ? word : current + " " + word;
+        if (!current.empty() && UI::textWidth(candidate, size, bold) > w) {
+            lines.push_back(current);
+            current = word;
+        } else {
+            current = candidate;
+        }
+        if (sp < s.size() && s[sp] == '\n') {
+            lines.push_back(current);
+            current.clear();
+        }
+        i = sp + 1;
+    }
+    if (!current.empty()) lines.push_back(current);
+    return lines;
+}
+
+void substitute(std::string& s, const std::map<std::string, std::string>& vars) {
+    if (s.find('{') == std::string::npos) return;
+    for (const auto& var : vars) {
+        std::string placeholder = "{" + var.first + "}";
+        size_t pos = 0;
+        while ((pos = s.find(placeholder, pos)) != std::string::npos) {
+            s.replace(pos, placeholder.length(), var.second);
+            pos += var.second.length();
+        }
+    }
+}
+
+// Screens whose buttons are a set of equal choices (no default action).
+bool isChoiceScreen(const std::string& id) {
+    return id == "character_creation" || id == "name_selection" || id == "level_up" ||
+           id == "capital";
+}
+
+// The device font has no emoji; drop a leading emoji/icon prefix ("⚔️ Fight").
+std::string stripLeadingNonAscii(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size() && ((unsigned char)s[i] >= 0x80 || s[i] == ' ')) i++;
+    return i < s.size() ? s.substr(i) : s;
+}
+
+std::string lowerCase(std::string s) {
+    for (auto& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+const char* SKILL_KEYS[] = { "fighting", "defending", "magic", "stealth",
+                             "salvaging", "spotting", "camping", "medical" };
+
+int skillIndexForKey(const std::string& key) {
+    for (int i = 0; i < 8; i++) if (key == SKILL_KEYS[i]) return i;
+    return -1;
+}
+
+} // namespace
 
 void HeroAdventureApp::onCreate() {
     gameEngine = new HeroAdventureEngine();
-    
-    // Initialize UI loader
-    uiLoader.init("/sd/games/hero_adventure/ui");
-    
-    // Load first screen
+
+    // SD.open() paths are relative to the SD mount root (no "/sd" prefix).
+    // The native build ignores this and uses ./games/hero_adventure/ui.
+    uiLoader.init("/games/hero_adventure/ui");
+
     navigationGoto("front_page");
 }
 
@@ -43,349 +126,238 @@ void HeroAdventureApp::onDestroy() {
     }
 }
 
+// Called by the launcher on start and after wake: always repaint everything.
 void HeroAdventureApp::draw() {
-    if (needsFullRefresh) {
-        renderScreenFull();
-        needsFullRefresh = false;
-        screenDirty = false;
-    } else if (screenDirty) {
-        renderScreenPartial();
-        screenDirty = false;
-    }
-}
-
-void HeroAdventureApp::renderScreenFull() {
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        updateScreenVariables();
-        
-        int w = DisplayHAL::getWidth();
-        int h = DisplayHAL::getHeight();
-        uint8_t fg = UIFramework::getForegroundColor();
-        
-        // Draw title bar
-        UIFramework::drawTopBar(framebuffer, currentScreen.title.c_str());
-        
-        // Draw main content
-        int y = 60;
-        int contentHeight = h - 120;
-        int contentWidth = w - 40;
-
-        auto renderBlock = [&](const std::vector<std::string>& lines, int startX, int blockWidth) {
-            int by = 60;
-            for (const auto& line : lines) {
-                if (by >= h - 80) break;
-                bool isHeader = false;
-                int letters = 0;
-                for (unsigned char uc : line) {
-                    if (std::isalpha(uc)) {
-                        letters++;
-                        if (std::isupper(uc)) isHeader = true;
-                        else { isHeader = false; break; }
-                    }
-                }
-                float baseFontSize = (isHeader && letters > 0) ? 26.0f : 22.0f;
-
-                if (currentScreen.noWrap) {
-                    // Try to fit the whole line on a single row by shrinking the font if needed
-                    typography.setFontSize(baseFontSize);
-                    int measured = typography.measureText(line);
-                    float fontSize = baseFontSize;
-                    if (measured > blockWidth) {
-                        float scale = (float)blockWidth / (float)measured * 0.95f;
-                        fontSize = std::max(12.0f, baseFontSize * scale);
-                        typography.setFontSize(fontSize);
-                    }
-                    int labelW = typography.measureText(line);
-                    int x = startX + (blockWidth - labelW) / 2;
-                    typography.renderText(line, x, by, framebuffer, fg);
-                    by += (isHeader ? 40 : 32);
-                    by += 4;
-                } else {
-                    // Normal wrapping behavior
-                    typography.setFontSize(baseFontSize);
-                    std::string rem = line;
-                    while (!rem.empty() && by < h - 80) {
-                        int fit = (int)rem.size();
-                        while (fit > 0 && typography.measureText(rem.substr(0, fit)) > blockWidth) fit--;
-                        if (fit <= 0) fit = 1;
-                        size_t split = rem.rfind(' ', fit);
-                        std::string part;
-                        if (split == std::string::npos || split == 0) {
-                            part = rem.substr(0, fit);
-                            rem = rem.substr(fit);
-                        } else {
-                            part = rem.substr(0, split);
-                            rem = rem.substr(split + 1);
-                        }
-                        typography.renderText(part, startX, by, framebuffer, fg);
-                        by += (isHeader ? 40 : 32);
-                    }
-                    by += 4;
-                }
-            }
-        };
-
-        if (currentScreen.layout == "two_column" && (!currentScreen.textLinesLeft.empty() || !currentScreen.textLinesRight.empty())) {
-            int gap = 16;
-            int leftW = static_cast<int>(contentWidth * currentScreen.leftRatio);
-            int rightW = contentWidth - leftW - gap;
-            int leftX = 20;
-            int rightX = 20 + leftW + gap;
-
-            // Prefer explicit left/right content; fall back to single-column if missing
-            if (!currentScreen.textLinesLeft.empty()) renderBlock(currentScreen.textLinesLeft, leftX, leftW);
-            else renderBlock(currentScreen.textLines, leftX, leftW);
-
-            if (!currentScreen.textLinesRight.empty()) renderBlock(currentScreen.textLinesRight, rightX, rightW);
-        } else {
-            // Single-column render (legacy) — reuse renderBlock logic
-            renderBlock(currentScreen.textLines, 20, contentWidth);
-        }
-
-        // Draw buttons
-        int numButtons = currentScreen.buttons.size();
-        if (numButtons > 0) {
-            // Special-case: name selection screen shows a 2-column grid of name buttons
-            if (currentScreen.id == "name_selection") {
-                int cols = 2;
-                int rows = (numButtons + cols - 1) / cols;
-                int buttonSpacing = 10;
-                int buttonHeight = 48;
-                int totalContentW = w - 40;
-                int buttonWidth = (totalContentW - (cols - 1) * buttonSpacing) / cols;
-                int startY = 120;
-
-                for (int idx = 0; idx < numButtons; idx++) {
-                    int col = idx % cols;
-                    int row = idx / cols;
-                    int buttonX = 20 + col * (buttonWidth + buttonSpacing);
-                    int buttonY = startY + row * (buttonHeight + buttonSpacing);
-
-                    currentScreen.buttons[idx].x = buttonX;
-                    currentScreen.buttons[idx].y = buttonY;
-                    currentScreen.buttons[idx].w = buttonWidth;
-                    currentScreen.buttons[idx].h = buttonHeight;
-
-                    UIFramework::drawButton(framebuffer, buttonX, buttonY, buttonWidth, buttonHeight, "");
-
-                    // Label scaling to avoid wrapping for long generated names
-                    float btnBaseFont = 18.0f;
-                    typography.setFontSize(btnBaseFont);
-                    int labelW = typography.measureText(currentScreen.buttons[idx].label);
-                    float fontSize = btnBaseFont;
-                    if (labelW > buttonWidth - 8) {
-                        float scale = (float)(buttonWidth - 8) / (float)labelW;
-                        fontSize = std::max(10.0f, btnBaseFont * scale);
-                        typography.setFontSize(fontSize);
-                        labelW = typography.measureText(currentScreen.buttons[idx].label);
-                    }
-                    int labelX = buttonX + (buttonWidth - labelW) / 2;
-                    int labelY = buttonY + (buttonHeight - (int)fontSize) / 2;
-                    typography.renderText(currentScreen.buttons[idx].label, labelX, labelY, framebuffer, fg);
-                }
-            } else {
-                int buttonY = h - 70;
-                int buttonHeight = 60;
-                int buttonSpacing = 10;
-                int totalButtonWidth = w - 40;
-                int buttonWidth = (totalButtonWidth - (numButtons - 1) * buttonSpacing) / numButtons;
-
-                for (size_t i = 0; i < currentScreen.buttons.size(); i++) {
-                    int buttonX = 20 + i * (buttonWidth + buttonSpacing);
-                    currentScreen.buttons[i].x = buttonX;
-                    currentScreen.buttons[i].y = buttonY;
-                    currentScreen.buttons[i].w = buttonWidth;
-                    currentScreen.buttons[i].h = buttonHeight;
-
-                    UIFramework::drawButton(framebuffer, buttonX, buttonY, buttonWidth, buttonHeight, "");
-
-                    // Button label: scale font down if it's too long to fit the button
-                    float btnBaseFont = 18.0f;
-                    typography.setFontSize(btnBaseFont);
-                    int labelW = typography.measureText(currentScreen.buttons[i].label);
-                    float fontSize = btnBaseFont;
-                    if (labelW > buttonWidth - 8) {
-                        float scale = (float)(buttonWidth - 8) / (float)labelW;
-                        fontSize = std::max(10.0f, btnBaseFont * scale);
-                        typography.setFontSize(fontSize);
-                        labelW = typography.measureText(currentScreen.buttons[i].label);
-                    }
-                    int labelX = buttonX + (buttonWidth - labelW) / 2;
-                    int labelY = buttonY + (buttonHeight - (int)fontSize) / 2;
-                    typography.renderText(currentScreen.buttons[i].label, labelX, labelY, framebuffer, fg);
-                }
-            }
-        }
-    });
-}
-
-void HeroAdventureApp::renderScreenPartial() {
-    // For in-screen updates (like stat changes during combat)
-    // Only redraw the affected area
-    int w = DisplayHAL::getWidth();
-    int h = DisplayHAL::getHeight();
-    
-    UIFramework::performFastPartialUpdate(framebuffer, 0, 60, w, h - 140, [this, w, h]() {
-        updateScreenVariables();
-        uint8_t fg = UIFramework::getForegroundColor();
-        
-        int y = 60;
-        int contentHeight = h - 120;
-        int contentWidth = w - 40;
-
-        if (currentScreen.layout == "two_column" && (!currentScreen.textLinesLeft.empty() || !currentScreen.textLinesRight.empty())) {
-            int gap = 16;
-            int leftW = static_cast<int>(contentWidth * currentScreen.leftRatio);
-            int rightW = contentWidth - leftW - gap;
-            int leftX = 20;
-            int rightX = 20 + leftW + gap;
-
-            auto renderCol = [&](const std::vector<std::string>& lines, int startX, int blockWidth){
-                int by = 60;
-                for (const auto& line : lines) {
-                    if (by >= h - 80) break;
-                    bool isHeader = false;
-                    int letters = 0;
-                    for (unsigned char uc : line) {
-                        if (std::isalpha(uc)) {
-                            letters++;
-                            if (std::isupper(uc)) isHeader = true;
-                            else { isHeader = false; break; }
-                        }
-                    }
-                    float baseFontSize = (isHeader && letters > 0) ? 26.0f : 22.0f;
-
-                    if (currentScreen.noWrap) {
-                        typography.setFontSize(baseFontSize);
-                        int measured = typography.measureText(line);
-                        float fontSize = baseFontSize;
-                        if (measured > blockWidth) {
-                            float scale = (float)blockWidth / (float)measured * 0.95f;
-                            fontSize = std::max(12.0f, baseFontSize * scale);
-                            typography.setFontSize(fontSize);
-                        }
-                        int labelW = typography.measureText(line);
-                        int x = startX + (blockWidth - labelW) / 2;
-                        typography.renderText(line, x, by, framebuffer, fg);
-                        by += (isHeader ? 40 : 32);
-                        by += 4;
-                    } else {
-                        typography.setFontSize(baseFontSize);
-                        std::string rem = line;
-                        while (!rem.empty() && by < h - 80) {
-                            int fit = (int)rem.size();
-                            while (fit > 0 && typography.measureText(rem.substr(0, fit)) > blockWidth) fit--;
-                            if (fit <= 0) fit = 1;
-                            size_t split = rem.rfind(' ', fit);
-                            std::string part;
-                            if (split == std::string::npos || split == 0) {
-                                part = rem.substr(0, fit);
-                                rem = rem.substr(fit);
-                            } else {
-                                part = rem.substr(0, split);
-                                rem = rem.substr(split + 1);
-                            }
-                            typography.renderText(part, startX, by, framebuffer, fg);
-                            by += (isHeader ? 40 : 32);
-                        }
-                        by += 4;
-                    }
-                }
-            };
-
-            if (!currentScreen.textLinesLeft.empty()) renderCol(currentScreen.textLinesLeft, leftX, leftW);
-            else renderCol(currentScreen.textLines, leftX, leftW);
-
-            if (!currentScreen.textLinesRight.empty()) renderCol(currentScreen.textLinesRight, rightX, rightW);
-        } else {
-            // Single-column fallback — render like a column
-            auto renderSingle = [&](const std::vector<std::string>& lines, int startX, int blockWidth){
-                int by = 60;
-                for (const auto& line : lines) {
-                    if (by >= h - 80) break;
-                    bool isHeader = false;
-                    int letters = 0;
-                    for (unsigned char uc : line) {
-                        if (std::isalpha(uc)) {
-                            letters++;
-                            if (std::isupper(uc)) isHeader = true;
-                            else { isHeader = false; break; }
-                        }
-                    }
-                    float baseFontSize = (isHeader && letters > 0) ? 26.0f : 22.0f;
-
-                    if (currentScreen.noWrap) {
-                        typography.setFontSize(baseFontSize);
-                        int measured = typography.measureText(line);
-                        float fontSize = baseFontSize;
-                        if (measured > blockWidth) {
-                            float scale = (float)blockWidth / (float)measured * 0.95f;
-                            fontSize = std::max(12.0f, baseFontSize * scale);
-                            typography.setFontSize(fontSize);
-                        }
-                        int labelW = typography.measureText(line);
-                        int x = startX + (blockWidth - labelW) / 2;
-                        typography.renderText(line, x, by, framebuffer, fg);
-                        by += (isHeader ? 40 : 32);
-                        by += 4;
-                    } else {
-                        typography.setFontSize(baseFontSize);
-                        std::string rem = line;
-                        while (!rem.empty() && by < h - 80) {
-                            int fit = (int)rem.size();
-                            while (fit > 0 && typography.measureText(rem.substr(0, fit)) > blockWidth) fit--;
-                            if (fit <= 0) fit = 1;
-                            size_t split = rem.rfind(' ', fit);
-                            std::string part;
-                            if (split == std::string::npos || split == 0) {
-                                part = rem.substr(0, fit);
-                                rem = rem.substr(fit);
-                            } else {
-                                part = rem.substr(0, split);
-                                rem = rem.substr(split + 1);
-                            }
-                            typography.renderText(part, startX, by, framebuffer, fg);
-                            by += (isHeader ? 40 : 32);
-                        }
-                        by += 4;
-                    }
-                }
-            };
-
-            renderSingle(currentScreen.textLines, 20, contentWidth);
-        }
-    });
-}
-
-void HeroAdventureApp::handleTouch(int x, int y) {
-    printf("HeroAdventureApp::handleTouch(%d, %d) - screen has %zu buttons\n", x, y, currentScreen.buttons.size());
-    
-    // Check which button was pressed
-    for (size_t i = 0; i < currentScreen.buttons.size(); i++) {
-        const auto& btn = currentScreen.buttons[i];
-        printf("  Button %zu: '%s' at (%d-%d, %d-%d)\n", i, btn.label.c_str(), 
-               btn.x, btn.x + btn.w, btn.y, btn.y + btn.h);
-        
-        if (x >= btn.x && x < btn.x + btn.w &&
-            y >= btn.y && y < btn.y + btn.h) {
-            printf("    ✓ HIT! action='%s'\n", btn.action.c_str());
-            handleAction(btn.action);
-            return;
-        }
-    }
-    printf("  ✗ NO BUTTON HIT\n");
+    renderScreenFull();
 }
 
 void HeroAdventureApp::update() {
-    // Check if we need to redraw
-    if (needsFullRefresh || screenDirty) {
-        draw();
+    if (needsFullRefresh) {
+        renderScreenFull();
+    } else if (screenDirty) {
+        renderScreenPartial();
     }
-    
-    // Called periodically for game logic updates
-    if (gameEngine && gameEngine->getCurrentState() == GameState::Journey) {
-        // Could handle auto-advance or other periodic updates
+}
+
+// ---------------------------------------------------------------------------
+// Portrait layout
+// ---------------------------------------------------------------------------
+
+// Action performed by the header back chevron; "" means leave the app and
+// "pop" means close a stacked sheet (character sheet / inventory).
+std::string HeroAdventureApp::backAction() const {
+    if (screenStack.size() > 1) return "pop";
+    const std::string& id = currentScreen.id;
+    if (id == "front_page" || id.empty()) return "";
+    if (id == "name_selection") return "goto:character_creation";
+    return "goto:front_page";
+}
+
+// Buttons that only duplicate the header back chevron are dropped in portrait.
+bool HeroAdventureApp::isRedundantButton(const UIButton& btn) const {
+    if (btn.action == "quit") return true;
+    if (btn.label != "Back" && btn.label != "Menu") return false;
+    std::string back = backAction();
+    if (back == "pop") return btn.action.find("close_") == 0;
+    return !back.empty() && btn.action == back;
+}
+
+void HeroAdventureApp::splitTitle() {
+    headerTitle = currentScreen.title;
+    subtitle.clear();
+    const int maxW = UI::W - (UI::MARGIN + 40) - UI::MARGIN;
+    if (UI::textWidth(headerTitle, UI::FONT_TITLE, true) <= maxW) return;
+    size_t colon = headerTitle.find(": ");
+    if (colon == std::string::npos || colon == 0) return;
+    if (headerTitle.substr(0, colon).find('(') != std::string::npos) return;
+    subtitle = headerTitle.substr(colon + 2);
+    headerTitle = headerTitle.substr(0, colon);
+}
+
+// Buttons are stacked full width at the bottom of the screen; four or more
+// become a 2-column grid (an odd last button spans both columns).
+void HeroAdventureApp::layoutButtons() {
+    auto& buttons = currentScreen.buttons;
+    int n = (int)buttons.size();
+    if (n == 0) {
+        buttonsTop = UI::H - BOTTOM_PAD;
+        return;
     }
+    bool grid = n >= 4;
+    int cols = grid ? 2 : 1;
+    int rows = (n + cols - 1) / cols;
+    int bh = grid ? BTN_H_GRID : BTN_H_STACK;
+    int blockH = rows * bh + (rows - 1) * BTN_GAP;
+    buttonsTop = UI::H - BOTTOM_PAD - blockH;
+    int fullW = UI::W - 2 * UI::MARGIN;
+    int colW = (fullW - (cols - 1) * BTN_GAP) / cols;
+    for (int i = 0; i < n; i++) {
+        int r = i / cols, c = i % cols;
+        bool spanAll = grid && (n % 2 == 1) && i == n - 1;
+        buttons[i].x = UI::MARGIN + c * (colW + BTN_GAP);
+        buttons[i].y = buttonsTop + r * (bh + BTN_GAP);
+        buttons[i].w = spanAll ? fullW : colW;
+        buttons[i].h = bh;
+    }
+}
+
+std::string HeroAdventureApp::buttonSignature() const {
+    std::string sig;
+    for (const auto& b : currentScreen.buttons) sig += b.label + "\x1f" + b.action + "\x1e";
+    return sig;
+}
+
+std::vector<std::string> HeroAdventureApp::contentLines() const {
+    if (currentScreen.layout == "two_column" &&
+        (!currentScreen.textLinesLeft.empty() || !currentScreen.textLinesRight.empty())) {
+        // Portrait has no room for columns: stack left above right.
+        std::vector<std::string> lines = currentScreen.textLinesLeft.empty()
+            ? currentScreen.textLines : currentScreen.textLinesLeft;
+        if (!currentScreen.textLinesRight.empty()) {
+            lines.push_back("");
+            lines.insert(lines.end(), currentScreen.textLinesRight.begin(),
+                         currentScreen.textLinesRight.end());
+        }
+        return lines;
+    }
+    return currentScreen.textLines;
+}
+
+// Lays out (and optionally draws) the story text between top and bottom.
+// Returns the y below the last line.
+int HeroAdventureApp::textBlock(const std::vector<std::string>& lines, int top, int bottom,
+                                float size, bool draw, bool centered, int paragraphGap) const {
+    const int x = UI::MARGIN;
+    const int w = UI::W - 2 * UI::MARGIN;
+    const int lh = UI::lineHeight(size) + TEXT_LINE_GAP;
+    int y = top;
+    for (const auto& line : lines) {
+        if (y > top) y += paragraphGap;
+        if (isBlank(line)) {
+            y += lh / 2;
+            continue;
+        }
+        bool heading = isHeadingLine(line);
+        if (heading && y > top) y += 8;
+        std::vector<std::string> wrapped = wrapLines(line, w, size, heading);
+        int n = (int)wrapped.size();
+        if (!draw) {
+            y += n * lh;
+            continue;
+        }
+        int fit = (bottom - y) / lh;
+        if (fit <= 0) break;
+        int shown = std::min(fit, n);
+        if (heading) {
+            for (int k = 0; k < shown; k++) {
+                std::string s = UI::ellipsize(wrapped[k], w, size, true);
+                if (centered) UI::textCentered(s, UI::W / 2, y + k * lh, size, UI::BLACK, true);
+                else UI::text(s, x, y + k * lh, size, UI::BLACK, true);
+            }
+        } else {
+            UI::textWrapped(line, x, y, w, size, UI::INK, shown < n ? shown : 0, TEXT_LINE_GAP,
+                            centered);
+        }
+        y += shown * lh;
+    }
+    return y;
+}
+
+void HeroAdventureApp::drawButtons() {
+    bool choice = isChoiceScreen(currentScreen.id);
+    float size = currentScreen.buttons.size() >= 4 ? BUTTON_FONT - 2 : BUTTON_FONT;
+    for (size_t i = 0; i < currentScreen.buttons.size(); i++) {
+        const UIButton& b = currentScreen.buttons[i];
+        UI::ButtonStyle style = ((!choice && i == 0) || b.selected) ? UI::ButtonStyle::PRIMARY
+                                                                    : UI::ButtonStyle::SECONDARY;
+        UI::button(UI::Rect(b.x, b.y, b.w, b.h), b.label, style, size);
+    }
+}
+
+// Everything below the header: subtitle, story text and (optionally) buttons.
+void HeroAdventureApp::drawContent(bool withButtons) {
+    int top = CONTENT_TOP;
+    if (!subtitle.empty()) {
+        UI::text(UI::ellipsize(subtitle, UI::W - 2 * UI::MARGIN, UI::FONT_BODY, true),
+                 UI::MARGIN, top - 4, UI::FONT_BODY, UI::DARK, true);
+        top += UI::lineHeight(UI::FONT_BODY) + 10;
+        UI::hRule(top, UI::LIGHT);
+        top += 18;
+    }
+
+    bool front = currentScreen.id == "front_page";
+    if (front) {
+        const int iconSize = 160;
+        UI::icon(ICON_GAME, (UI::W - iconSize) / 2, top + 40, iconSize);
+        top += iconSize + 80;
+    }
+
+    int bottom = (currentScreen.buttons.empty() ? UI::H - BOTTOM_PAD : buttonsTop) - 24;
+    std::vector<std::string> lines = contentLines();
+    // Journey lines are separate facts (stats / story / progress): space them out.
+    int gap = currentScreen.id == "journey" ? 14 : 0;
+    float size = BODY_SIZES[0];
+    for (float s : BODY_SIZES) {
+        size = s;
+        if (textBlock(lines, top, bottom, s, false, front, gap) <= bottom) break;
+    }
+    textBlock(lines, top, bottom, size, true, front, gap);
+
+    if (withButtons) drawButtons();
+}
+
+void HeroAdventureApp::renderScreenFull() {
+    updateScreenVariables();
+    splitTitle();
+    layoutButtons();
+    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+        UI::header(headerTitle, true);
+        drawContent(true);
+    });
+    drawnTitle = currentScreen.title;
+    drawnButtonSig = buttonSignature();
+    needsFullRefresh = false;
+    screenDirty = false;
+}
+
+// In-place update (new journey event, level-up selection): only the content
+// below the header is refreshed; buttons too if their labels changed.
+void HeroAdventureApp::renderScreenPartial() {
+    updateScreenVariables();
+    splitTitle();
+    layoutButtons();
+    std::string sig = buttonSignature();
+    if (currentScreen.title != drawnTitle) {
+        renderScreenFull();
+        return;
+    }
+    bool buttonsChanged = sig != drawnButtonSig;
+    int top = UI::HEADER_H;
+    int h = (buttonsChanged ? UI::H : buttonsTop) - top;
+    UIFramework::performFastPartialUpdate(framebuffer, 0, top, UI::W, h, [this, buttonsChanged]() {
+        drawContent(buttonsChanged);
+    });
+    drawnButtonSig = sig;
+    screenDirty = false;
+}
+
+void HeroAdventureApp::handleTouch(int x, int y) {
+    for (size_t i = 0; i < currentScreen.buttons.size(); i++) {
+        const auto& btn = currentScreen.buttons[i];
+        if (x >= btn.x && x < btn.x + btn.w && y >= btn.y && y < btn.y + btn.h) {
+            std::string action = btn.action;  // handleAction may replace currentScreen
+            handleAction(action);
+            return;
+        }
+    }
+}
+
+bool HeroAdventureApp::onBack() {
+    std::string action = backAction();
+    if (action.empty()) return false;
+    if (action == "pop") popScreen();
+    else handleAction(action);
+    return true;
 }
 
 void HeroAdventureApp::updateScreenVariables() {
@@ -537,91 +509,45 @@ void HeroAdventureApp::updateScreenVariables() {
     currentScreen.textLinesLeft = currentScreen.textLinesLeftOriginal;
     currentScreen.textLinesRight = currentScreen.textLinesRightOriginal;
 
-    // Substitute variables in single-column text
-    for (auto& line : currentScreen.textLines) {
-        for (const auto& var : currentScreen.variables) {
-            size_t pos = 0;
-            while ((pos = line.find("{" + var.first + "}", pos)) != std::string::npos) {
-                line.replace(pos, var.first.length() + 2, var.second);
-                pos += var.second.length();
-            }
-        }
-    }
+    for (auto& line : currentScreen.textLines) substitute(line, currentScreen.variables);
+    for (auto& line : currentScreen.textLinesLeft) substitute(line, currentScreen.variables);
+    for (auto& line : currentScreen.textLinesRight) substitute(line, currentScreen.variables);
+    currentScreen.title = stripLeadingNonAscii(currentScreen.title);
+    substitute(currentScreen.title, currentScreen.variables);
 
-    // Substitute variables in left/right columns
-    for (auto& line : currentScreen.textLinesLeft) {
-        for (const auto& var : currentScreen.variables) {
-            size_t pos = 0;
-            while ((pos = line.find("{" + var.first + "}", pos)) != std::string::npos) {
-                line.replace(pos, var.first.length() + 2, var.second);
-                pos += var.second.length();
-            }
-        }
-    }
-    for (auto& line : currentScreen.textLinesRight) {
-        for (const auto& var : currentScreen.variables) {
-            size_t pos = 0;
-            while ((pos = line.find("{" + var.first + "}", pos)) != std::string::npos) {
-                line.replace(pos, var.first.length() + 2, var.second);
-                pos += var.second.length();
-            }
-        }
-    }
-
-    // Substitute variables in the title bar too (e.g. "Encounter: {monster_name}")
-    for (const auto& var : currentScreen.variables) {
-        size_t pos = 0;
-        while ((pos = currentScreen.title.find("{" + var.first + "}", pos)) != std::string::npos) {
-            currentScreen.title.replace(pos, var.first.length() + 2, var.second);
-            pos += var.second.length();
-        }
-    }
-    
-    // Rebuild the button list from the original template (buttonsOriginal),
-    // applying label substitution and visible_if filtering. Geometry (x,y,w,h)
-    // is preserved from the previous frame for buttons that already existed,
-    // since only renderScreenFull() re-lays out button positions -
-    // renderScreenPartial() must not invalidate existing touch hit regions.
-    //
-    // Defensive fallback: if a screen was built manually without populating
-    // buttonsOriginal, treat the current buttons as the template so nothing
-    // gets wiped out.
+    // Rebuild the button list from the template (buttonsOriginal): label
+    // substitution, visible_if filtering and dropping buttons made redundant
+    // by the header back chevron. Geometry is assigned by layoutButtons().
     if (currentScreen.buttonsOriginal.empty() && !currentScreen.buttons.empty()) {
         currentScreen.buttonsOriginal = currentScreen.buttons;
     }
-    std::map<std::string, UIButton> previousByAction;
-    for (const auto& b : currentScreen.buttons) {
-        previousByAction[b.action] = b;
-    }
-    
     std::vector<UIButton> visibleButtons;
     for (const auto& templateBtn : currentScreen.buttonsOriginal) {
-        bool isVisible = templateBtn.visibleIf.empty();
-        if (!isVisible) {
+        if (!templateBtn.visibleIf.empty()) {
             auto it = currentScreen.variables.find(templateBtn.visibleIf);
-            isVisible = (it != currentScreen.variables.end() && it->second == "1");
+            if (it == currentScreen.variables.end() || it->second != "1") continue;
         }
-        if (!isVisible) continue;
-        
-        UIButton resolved = templateBtn;  // carries original label template + action + visibleIf
-        for (const auto& var : currentScreen.variables) {
-            size_t pos = 0;
-            std::string placeholder = "{" + var.first + "}";
-            while ((pos = resolved.label.find(placeholder, pos)) != std::string::npos) {
-                resolved.label.replace(pos, placeholder.length(), var.second);
-                pos += var.second.length();
+        if (isRedundantButton(templateBtn)) continue;
+
+        UIButton resolved = templateBtn;
+        resolved.label = stripLeadingNonAscii(resolved.label);
+        substitute(resolved.label, currentScreen.variables);
+
+        if (currentScreen.id == "level_up" && resolved.action.find("levelup:") == 0) {
+            // Resolve the skill from the button label: the JSON indices do not
+            // follow the Skill enum order (Spotting/Salvaging are swapped).
+            std::string key = lowerCase(resolved.label);
+            int idx = skillIndexForKey(key);
+            if (idx >= 0) {
+                resolved.action = "levelup:" + key;
+                int picks = (int)std::count(selectedLevelUpSkills.begin(),
+                                            selectedLevelUpSkills.end(), (Skill)idx);
+                if (picks > 0) {
+                    resolved.label += "  +" + std::to_string(picks * 5);
+                    resolved.selected = true;
+                }
             }
         }
-        
-        // Preserve previously computed geometry if this action already existed
-        auto prevIt = previousByAction.find(resolved.action);
-        if (prevIt != previousByAction.end()) {
-            resolved.x = prevIt->second.x;
-            resolved.y = prevIt->second.y;
-            resolved.w = prevIt->second.w;
-            resolved.h = prevIt->second.h;
-        }
-        
         visibleButtons.push_back(resolved);
     }
     currentScreen.buttons = visibleButtons;
@@ -711,27 +637,29 @@ void HeroAdventureApp::handleAction(const std::string& action) {
     }
     // General
     else if (action == "quit") {
-        extern void exitToSystemLauncher();
-        exitToSystemLauncher();
+        Launcher::getInstance().requestExit();
     }
 }
 
 void HeroAdventureApp::navigationGoto(const std::string& screenId) {
-    printf("HeroAdventureApp::navigationGoto('%s')\n", screenId.c_str());
-    fflush(stdout);
-    if (uiLoader.loadScreenFromFile(screenId, currentScreen)) {
-        printf("  Successfully loaded screen '%s' with %zu buttons\n", screenId.c_str(), currentScreen.buttons.size());
-        fflush(stdout);
+    UIScreen loaded;
+    if (uiLoader.loadScreenFromFile(screenId, loaded)) {
+        currentScreen = loaded;
         screenStack.clear();
         screenStack.push_back(currentScreen);
         needsFullRefresh = true;
     } else {
-        printf("  FAILED to load screen '%s'\n", screenId.c_str());
-        fflush(stdout);
+        printf("HeroAdventureApp: failed to load screen '%s'\n", screenId.c_str());
     }
 }
 
 void HeroAdventureApp::pushScreen(const std::string& screenId) {
+    // Character sheet <-> inventory toggling: return to the open sheet instead
+    // of growing the stack (keeps the back chevron a single step).
+    if (screenStack.size() >= 2 && screenStack[screenStack.size() - 2].id == screenId) {
+        popScreen();
+        return;
+    }
     UIScreen newScreen;
     if (uiLoader.loadScreenFromFile(screenId, newScreen)) {
         currentScreen = newScreen;
@@ -748,40 +676,12 @@ void HeroAdventureApp::popScreen() {
     }
 }
 
-void HeroAdventureApp::loadScreenFromJSON(const std::string& screenId) {
-    uiLoader.loadScreenFromFile(screenId, currentScreen);
-}
-
-void HeroAdventureApp::renderCurrentScreen() {
-    // Abstraction for when we need to explicitly re-render
-    screenDirty = true;
-}
-
-void HeroAdventureApp::drawTextBlock(int startY, int maxWidth) {
-    // Helper for complex text rendering
-}
-
-void HeroAdventureApp::drawButtonRow(std::vector<UIButton>& buttons) {
-    // Helper for button layout
-}
-
 // ===== GAME FLOW HANDLERS =====
 
 void HeroAdventureApp::startNewGame() {
-    printf("HeroAdventureApp::startNewGame()\n");
-    fflush(stdout);
-    // Generate 10 random hero names
     currentNameOptions = HeroAdventureEngine::generateRandomNames(10);
-    printf("  Generated %zu hero names\n", currentNameOptions.size());
-    fflush(stdout);
     selectedNameIndex = -1;
-    
-    // Show class selection screen
-    printf("  Calling navigationGoto('character_creation')\n");
-    fflush(stdout);
     navigationGoto("character_creation");
-    printf("  navigationGoto returned\n");
-    fflush(stdout);
 }
 
 void HeroAdventureApp::selectHeroClass(const std::string& className) {

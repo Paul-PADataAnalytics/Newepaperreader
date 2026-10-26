@@ -14,6 +14,7 @@ struct UIButton {
     std::string label;
     std::string action;
     std::string visibleIf;  // Optional: name of a boolean variable ("1"/"0") gating visibility
+    bool selected = false;  // Drawn highlighted (e.g. a picked level-up skill)
 };
 
 struct UIScreen {
@@ -51,26 +52,31 @@ public:
     virtual void draw() override;
     virtual void handleTouch(int x, int y) override;
     virtual void update() override;
+    virtual bool onBack() override;
 
 private:
     HeroAdventureEngine* gameEngine = nullptr;
     UIScreen currentScreen;
     std::vector<UIScreen> screenStack;
-    std::map<std::string, UIScreen> screenCache;
-    
+
     bool screenDirty = true;
     bool needsFullRefresh = true;
-    
+
+    // Portrait layout state (recomputed on every render)
+    std::string headerTitle;      // title shown in the header row
+    std::string subtitle;         // overflow part of a long title, shown under the header
+    int buttonsTop = 0;           // y of the first button row
+    std::string drawnTitle;       // title of the last full render
+    std::string drawnButtonSig;   // labels/actions of the last rendered buttons
+
     // Game state tracking
     HeroClass selectedClass = HeroClass::Hitter;
     std::vector<std::string> currentNameOptions;
     int selectedNameIndex = -1;
     std::vector<Skill> selectedLevelUpSkills;
     std::string combatResultText;  // Store combat outcome text
-    
+
     // Helper methods
-    void loadScreenFromJSON(const std::string& screenId);
-    void renderCurrentScreen();
     void renderScreenFull();
     void renderScreenPartial();
     void updateScreenVariables();
@@ -78,11 +84,19 @@ private:
     void navigationGoto(const std::string& screenId);
     void pushScreen(const std::string& screenId);
     void popScreen();
-    
-    // Screen rendering helpers
-    void drawTextBlock(int startY, int maxWidth);
-    void drawButtonRow(std::vector<UIButton>& buttons);
-    
+
+    // Portrait layout helpers
+    std::string backAction() const;
+    bool isRedundantButton(const UIButton& btn) const;
+    void splitTitle();
+    void layoutButtons();
+    std::string buttonSignature() const;
+    std::vector<std::string> contentLines() const;
+    int textBlock(const std::vector<std::string>& lines, int top, int bottom, float size,
+                  bool draw, bool centered, int paragraphGap) const;
+    void drawContent(bool withButtons);
+    void drawButtons();
+
     // Game flow handlers
     void startNewGame();
     void selectHeroClass(const std::string& className);

@@ -1,165 +1,209 @@
 #include "CalculatorApp.h"
-#include "DisplayHAL.h"
-#include "TypographyEngine.h"
 #include "ui/UIFramework.h"
+#include "ui/UIKit.h"
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <cctype>
 
-#ifndef NATIVE_TESTING
-#include <Arduino.h>
-#else
-#include <stdio.h>
-#endif
-
 extern uint8_t *framebuffer;
-extern TypographyEngine typography;
 
-struct CalcButton {
-    int x, y, w, h;
+namespace {
+using namespace UI;
+
+const Rect kPanel(MARGIN, HEADER_H + 20, W - 2 * MARGIN, 200);
+constexpr int KEY_GAP = 14;
+constexpr int KEYS_TOP = HEADER_H + 20 + 200 + 24;
+constexpr int KEYS_BOTTOM = H - 24;
+constexpr int KEY_ROWS = 5;
+constexpr int KEY_COLS = 4;
+
+// Internal labels are what handleButtonPress() understands ("<" is
+// backspace); the keypad shows typographic symbols instead.
+struct CalcKey {
     const char* label;
+    int col, row, colSpan, rowSpan;
+    ButtonStyle style;
 };
 
-static const CalcButton buttons[] = {
-    // Row 0 (y=200, rowH=150)
-    {0, 200, 135, 150, "C"},
-    {135, 200, 135, 150, "Exit"},
-    {270, 200, 135, 150, "/"},
-    {405, 200, 135, 150, "*"},
-    
-    // Row 1 (y=350, rowH=150)
-    {0, 350, 135, 150, "7"},
-    {135, 350, 135, 150, "8"},
-    {270, 350, 135, 150, "9"},
-    {405, 350, 135, 150, "-"},
-    
-    // Row 2 (y=500, rowH=150)
-    {0, 500, 135, 150, "4"},
-    {135, 500, 135, 150, "5"},
-    {270, 500, 135, 150, "6"},
-    {405, 500, 135, 150, "+"},
-    
-    // Row 3 (y=650, rowH=150)
-    {0, 650, 135, 150, "1"},
-    {135, 650, 135, 150, "2"},
-    {270, 650, 135, 150, "3"},
-    {405, 650, 135, 300, "="}, // Spans row 3 and row 4 (height 300 to bottom)
-    
-    // Row 4 (y=800, rowH=150)
-    {0, 800, 270, 150, "0"}, // Double width
-    {270, 800, 135, 150, "."}
+const CalcKey kKeys[] = {
+    {"C", 0, 0, 1, 1, ButtonStyle::SUBTLE},
+    {"<", 1, 0, 1, 1, ButtonStyle::SUBTLE},
+    {"/", 2, 0, 1, 1, ButtonStyle::PRIMARY},
+    {"*", 3, 0, 1, 1, ButtonStyle::PRIMARY},
+    {"7", 0, 1, 1, 1, ButtonStyle::SECONDARY},
+    {"8", 1, 1, 1, 1, ButtonStyle::SECONDARY},
+    {"9", 2, 1, 1, 1, ButtonStyle::SECONDARY},
+    {"-", 3, 1, 1, 1, ButtonStyle::PRIMARY},
+    {"4", 0, 2, 1, 1, ButtonStyle::SECONDARY},
+    {"5", 1, 2, 1, 1, ButtonStyle::SECONDARY},
+    {"6", 2, 2, 1, 1, ButtonStyle::SECONDARY},
+    {"+", 3, 2, 1, 1, ButtonStyle::PRIMARY},
+    {"1", 0, 3, 1, 1, ButtonStyle::SECONDARY},
+    {"2", 1, 3, 1, 1, ButtonStyle::SECONDARY},
+    {"3", 2, 3, 1, 1, ButtonStyle::SECONDARY},
+    {"=", 3, 3, 1, 2, ButtonStyle::PRIMARY},
+    {"0", 0, 4, 2, 1, ButtonStyle::SECONDARY},
+    {".", 2, 4, 1, 1, ButtonStyle::SECONDARY},
 };
+
+int colX(int c) { return MARGIN + c * (W - 2 * MARGIN + KEY_GAP) / KEY_COLS; }
+int rowY(int r) { return KEYS_TOP + r * (KEYS_BOTTOM - KEYS_TOP + KEY_GAP) / KEY_ROWS; }
+
+Rect keyRect(const CalcKey& k) {
+    int x = colX(k.col), y = rowY(k.row);
+    return Rect(x, y, colX(k.col + k.colSpan) - KEY_GAP - x, rowY(k.row + k.rowSpan) - KEY_GAP - y);
+}
+
+std::string symbolFor(char op) {
+    switch (op) {
+        case '*': return "\xC3\x97";      // multiplication sign
+        case '/': return "\xC3\xB7";      // division sign
+        case '-': return "\xE2\x88\x92";  // minus sign
+        default: return std::string(1, op);
+    }
+}
+
+std::string prettify(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        if (c == '*' || c == '/' || c == '-') out += symbolFor(c);
+        else out += c;
+    }
+    return out;
+}
+
+// Ellipsizes from the left so the most recent input stays visible.
+std::string keepTail(const std::string& s, int maxW, float size, bool bold) {
+    if (textWidth(s, size, bold) <= maxW) return s;
+    std::string out = s;
+    while (!out.empty() && textWidth("..." + out, size, bold) > maxW) {
+        out.erase(0, 1);
+        while (!out.empty() && ((unsigned char)out[0] & 0xC0) == 0x80) out.erase(0, 1);
+    }
+    return "..." + out;
+}
+
+void backspaceGlyph(const Rect& r) {
+    int cx = r.x + r.w / 2, cy = r.y + r.h / 2;
+    int l = cx - 26, ml = cx - 12, rt = cx + 24, hh = 16;
+    line(l, cy, ml, cy - hh, 3, BLACK);
+    line(ml, cy - hh, rt, cy - hh, 3, BLACK);
+    line(rt, cy - hh, rt, cy + hh, 3, BLACK);
+    line(rt, cy + hh, ml, cy + hh, 3, BLACK);
+    line(ml, cy + hh, l, cy, 3, BLACK);
+    int xc = cx + 5, d = 7;
+    line(xc - d, cy - d, xc + d, cy + d, 3, BLACK);
+    line(xc - d, cy + d, xc + d, cy - d, 3, BLACK);
+}
+
+constexpr size_t MAX_DIGITS = 15;
+} // namespace
 
 void CalculatorApp::onCreate() {
     currentValue = "0";
     expression = "";
     afterEquals = false;
-
-    // Calculator is designed for portrait orientation: left side of the device
-    // becomes the top of the screen.
-    DisplayHAL::setPortrait(true);
 }
 
 void CalculatorApp::onDestroy() {
-    // Restore landscape orientation when leaving the calculator.
-    DisplayHAL::setPortrait(false);
 }
 
 void CalculatorApp::draw() {
     UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        int w = DisplayHAL::getWidth();
-        uint8_t fg = UIFramework::getForegroundColor();
-
-        // Draw separator line and initial display value
-        DisplayHAL::drawHLine(0, 199, w, fg, framebuffer);
-        typography.setFontSize(54.0f);
-        std::string valToDraw = currentValue.empty() ? "0" : currentValue;
-        int valW = typography.measureText(valToDraw);
-        int valX = w - 20 - valW;
-        if (valX < 20) valX = 20;
-        typography.renderText(valToDraw, valX, 115, framebuffer, fg);
-
-        // Draw back button
-        UIFramework::drawButton(framebuffer, 10, 10, 100, 40, "");
-        typography.setFontSize(22.0f);
-        int btw = typography.measureText("< Back");
-        typography.renderText("< Back", 10 + (100 - btw) / 2, 18, framebuffer, fg);
-
-        // Draw buttons
-        for (const auto& btn : buttons) {
-            UIFramework::drawButton(framebuffer, btn.x, btn.y, btn.w, btn.h, "");
-            typography.setFontSize(36.0f);
-            int labelW = typography.measureText(btn.label);
-            int textX = btn.x + (btn.w - labelW) / 2;
-            int textY = btn.y + (btn.h - 36) / 2;
-            typography.renderText(btn.label, textX, textY, framebuffer, fg);
+        header("Calculator", true);
+        drawDisplayContent();
+        for (const CalcKey& k : kKeys) {
+            Rect r = keyRect(k);
+            std::string label = k.label;
+            if (label == "<") label.clear();
+            else if (label.size() == 1) label = symbolFor(label[0]);
+            // Symbol glyphs are small at the digit size.
+            bool symbol = !isdigit((unsigned char)k.label[0]) && k.label[0] != 'C';
+            button(r, label, k.style, symbol ? FONT_TITLE + 20 : FONT_TITLE + 6);
+            if (label.empty()) backspaceGlyph(r);
         }
     });
 }
 
+void CalculatorApp::drawDisplayContent() {
+    const Rect& p = kPanel;
+    strokeRoundRect(p.x, p.y, p.w, p.h, 24, 2, BLACK);
+    int right = p.x + p.w - 28;
+    int maxW = p.w - 56;
+
+    if (!expression.empty()) {
+        std::string expr = prettify(expression) + (afterEquals ? " =" : "");
+        expr = keepTail(expr, maxW, FONT_BODY, false);
+        textRight(expr, right, p.y + 24, FONT_BODY, DARK);
+    }
+
+    std::string value = prettify(currentValue.empty() ? "0" : currentValue);
+    float size = 84.0f;
+    while (size > 36.0f && textWidth(value, size, true) > maxW) size -= 4.0f;
+    value = keepTail(value, maxW, size, true);
+    int lh = lineHeight(size);
+    textRight(value, right, p.y + p.h - 22 - lh, size, BLACK, true);
+}
+
 void CalculatorApp::drawDisplay() {
-    int w = DisplayHAL::getWidth();
-    uint8_t bg = UIFramework::getBackgroundColor();
-    uint8_t fg = UIFramework::getForegroundColor();
-
-    UIFramework::performFastPartialUpdate(framebuffer, 0, 0, w, 199, [this, w, bg, fg]() {
-        DisplayHAL::drawHLine(0, 199, w, fg, framebuffer);
-
-        // Draw back button
-        UIFramework::drawButton(framebuffer, 10, 10, 100, 40, "");
-        typography.setFontSize(22.0f);
-        int btw = typography.measureText("< Back");
-        typography.renderText("< Back", 10 + (100 - btw) / 2, 18, framebuffer, fg);
-
-        if (!expression.empty()) {
-            typography.setFontSize(24.0f);
-            int exprW = typography.measureText(expression);
-            int exprX = w - 20 - exprW;
-            if (exprX < 20) exprX = 20;
-            typography.renderText(expression, exprX, 40, framebuffer, 0x04);
-        }
-
-        typography.setFontSize(54.0f);
-        std::string valToDraw = currentValue.empty() ? "0" : currentValue;
-        int valW = typography.measureText(valToDraw);
-        int valX = w - 20 - valW;
-        if (valX < 20) valX = 20;
-        typography.renderText(valToDraw, valX, 115, framebuffer, fg);
+    const Rect& p = kPanel;
+    UIFramework::performFastPartialUpdate(framebuffer, p.x, p.y, p.w, p.h, [this]() {
+        drawDisplayContent();
     });
 }
 
 void CalculatorApp::handleTouch(int x, int y) {
-    if (x <= 150 && y <= 60) {
-        extern void exitToSystemLauncher();
-        exitToSystemLauncher();
-        return;
-    }
-
-    for (const auto& btn : buttons) {
-        if (x >= btn.x && x <= btn.x + btn.w && y >= btn.y && y <= btn.y + btn.h) {
-            handleButtonPress(btn.label);
-            break;
+    for (const CalcKey& k : kKeys) {
+        if (keyRect(k).contains(x, y)) {
+            handleButtonPress(k.label);
+            return;
         }
     }
 }
 
-void CalculatorApp::handleButtonPress(const std::string& label) {
-    if (label == "Exit") {
-        extern void exitToSystemLauncher();
-        exitToSystemLauncher();
+void CalculatorApp::backspace() {
+    if (afterEquals || currentValue == "Error") {
+        currentValue = "0";
+        expression = "";
+        afterEquals = false;
         return;
     }
-    
-    bool isFullRefresh = false;
+    if (!currentValue.empty()) {
+        currentValue.pop_back();
+        if (currentValue.empty() || currentValue == "-") {
+            currentValue = expression.empty() ? "0" : "";
+        }
+        return;
+    }
+    // Nothing typed since the last operator: remove the operator and bring
+    // the previous operand back for editing.
+    if (expression.size() >= 3) {
+        expression.erase(expression.size() - 3);
+        size_t sp = expression.find_last_of(' ');
+        if (sp == std::string::npos) {
+            currentValue = expression;
+            expression.clear();
+        } else {
+            currentValue = expression.substr(sp + 1);
+            expression.erase(sp + 1);
+        }
+        if (currentValue.empty()) currentValue = "0";
+    }
+}
 
+void CalculatorApp::handleButtonPress(const std::string& label) {
     if (label == "C") {
         currentValue = "0";
         expression = "";
         afterEquals = false;
-        isFullRefresh = true;
+    } else if (label == "<") {
+        backspace();
     } else if (label == "+" || label == "-" || label == "*" || label == "/") {
-        isFullRefresh = true;
+        if (currentValue == "Error") {
+            currentValue = "0";
+            expression = "";
+        }
         if (afterEquals) {
             expression = currentValue + " " + label + " ";
             currentValue = "";
@@ -176,7 +220,6 @@ void CalculatorApp::handleButtonPress(const std::string& label) {
             }
         }
     } else if (label == "=") {
-        isFullRefresh = true;
         if (!afterEquals) {
             if (!currentValue.empty()) {
                 expression += currentValue;
@@ -212,17 +255,13 @@ void CalculatorApp::handleButtonPress(const std::string& label) {
         } else {
             if (currentValue == "0") {
                 currentValue = label;
-            } else {
+            } else if (currentValue.size() < MAX_DIGITS) {
                 currentValue += label;
             }
         }
     }
 
-    if (isFullRefresh) {
-        draw();
-    } else {
-        drawDisplay();
-    }
+    drawDisplay();
 }
 
 std::vector<CalculatorApp::Token> CalculatorApp::tokenize(const std::string& exprStr) {

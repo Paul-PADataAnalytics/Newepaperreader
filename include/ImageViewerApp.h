@@ -2,9 +2,15 @@
 
 #include "Application.h"
 #include "reader/FileBrowser.h"
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
+// Pictures: browses JPEGs in /images and shows them full-screen on the
+// portrait panel. Each picture is decoded once, aspect-fitted, brightened
+// (SystemSettings::imageGamma), Floyd-Steinberg dithered to 16 greys and
+// cached as a raw portrait framebuffer under /data/imgcache/.
 class ImageViewerApp : public Application {
 public:
     ImageViewerApp() = default;
@@ -17,43 +23,89 @@ public:
     virtual void handleTouch(int x, int y) override;
     virtual void update() override;
 
+    // The full-screen viewer handles every tap itself while its overlay is
+    // hidden; the overlay's back chevron goes through the system back.
+    virtual bool wantsSystemBack() const override { return m_state != STATE_VIEW || m_overlay; }
+    virtual bool onBack() override;
+
 private:
     enum State {
         STATE_BROWSER,
         STATE_CONVERTING,
+        STATE_ERROR,
         STATE_VIEW
     };
 
+    enum Step {
+        STEP_IDLE,
+        STEP_PROBE,   // read the JPEG header, check size/memory limits
+        STEP_DECODE,  // stb_image -> 8-bit grayscale
+        STEP_RENDER,  // scale + gamma + dither, a band of rows per update()
+        STEP_SAVE     // write the cached frame
+    };
+
     State m_state = STATE_BROWSER;
+    Step m_step = STEP_IDLE;
     FileBrowser m_fileBrowser;
     std::vector<FileInfo> m_files;
     int m_page = 0;
-    int m_selectedIndex = -1;
+    int m_index = -1;          // picture shown / being converted
+    bool m_rotated = false;    // current picture rendered rotated 90 degrees
+    bool m_rotatePref = false; // keep rotating landscape pictures on Prev/Next
+    bool m_overlay = false;    // viewer chrome visible
 
-    // Conversion state machine
-    int m_conversionStep = 0; // 0=idle, 1=loading, 2=decoding, 3=converting, 4=saving
-    int m_conversionLine = 0;
+    // Conversion progress
     int m_progress = 0;
-    std::string m_statusMsg = "";
-    
-    // File paths
-    std::string m_selectedPath = "";
-    std::string m_cachePath = "";
+    std::string m_status;
+    std::string m_errorTitle;
+    std::string m_errorMessage;
+    std::string m_cachePath;
 
-    // Image buffers (allocated in PSRAM where appropriate)
-    uint8_t* m_fileBuffer = nullptr;
-    size_t m_fileBufferSize = 0;
-    unsigned char* m_rgbData = nullptr;
-    int m_imgWidth = 0;
-    int m_imgHeight = 0;
-    int m_imgChannels = 0;
-    uint8_t* m_convertedFrame = nullptr;
+    // Decoded source (grayscale, 1 byte per pixel)
+    uint8_t* m_gray = nullptr;
+    int m_srcW = 0;
+    int m_srcH = 0;
+    int m_srcComp = 0;
+
+    // Render geometry/state (rotated coordinates)
+    int m_dstX = 0, m_dstY = 0, m_dstW = 0, m_dstH = 0;
+    int m_renderRow = 0;
+    std::vector<int> m_tapStartX, m_tapCountX, m_tapOffX;
+    std::vector<int> m_tapStartY, m_tapCountY, m_tapOffY;
+    std::vector<float> m_tapWeightX, m_tapWeightY;
+    std::vector<float> m_rowAcc;
+    std::vector<int> m_errCur, m_errNext;
+    std::vector<int16_t> m_gammaLut;
+
+    // Finished 540x960 portrait frame (PSRAM on hardware)
+    uint8_t* m_frame = nullptr;
 
     void updateFileList();
-    void drawBrowser();
-    void drawConverting(bool fullRefresh = true);
-    void drawView();
+    int pageCount() const;
 
-    void startConversion(const std::string& path);
+    void drawBrowser();
+    void drawConverting(bool fullRefresh);
+    void drawProgressArea();
+    void drawError();
+    void drawViewer();
+    void drawOverlay(bool show);
+
+    void openPicture(int index, bool rotated);
+    void showRotated(bool rotated);
+    void goToBrowser();
+    void fail(const std::string& title, const std::string& message);
+
+    bool ensureFrame();
+    bool loadCache();
+    void saveCache();
+    std::string cachePathFor(const FileInfo& file, int brightness, bool rotated) const;
+    bool probeSize(const std::string& path, int& w, int& h, int& comp) const;
+
+    void stepProbe();
+    void stepDecode();
+    void prepareRender();
+    void renderRows(int count);
+
+    void freeDecode();
     void freeBuffers();
 };

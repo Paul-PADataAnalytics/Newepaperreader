@@ -27,8 +27,10 @@ private:
         char op;
     };
 
+    void drawDisplayContent();
     void drawDisplay();
     void handleButtonPress(const std::string& label);
+    void backspace();
     std::vector<Token> tokenize(const std::string& expr);
     bool evaluateTokens(const std::vector<Token>& tokens, double& result);
     std::string cleanExpression(const std::string& expr);

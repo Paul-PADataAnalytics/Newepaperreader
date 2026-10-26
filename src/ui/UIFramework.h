@@ -55,6 +55,10 @@ public:
     // ALL full-screen redraws MUST go through this method. No raw DisplayHAL::display() calls outside infrastructure.
     static void performFullScreenDraw(uint8_t *framebuffer, std::function<void()> renderContent);
 
+    // Full-screen redraw without the clearing flashes (see
+    // DisplayHAL::updateScreenQuick). For page turns.
+    static void performQuickFullScreenDraw(uint8_t *framebuffer, std::function<void()> renderContent);
+
     // Performs a fast partial update
     static void performFastPartialUpdate(uint8_t *framebuffer, int x, int y, int w, int h, std::function<void()> renderContent);
 

@@ -119,6 +119,13 @@ void UIFramework::performFullScreenDraw(uint8_t *framebuffer, std::function<void
     DisplayHAL::updateScreenFull();
 }
 
+void UIFramework::performQuickFullScreenDraw(uint8_t *framebuffer, std::function<void()> renderContent) {
+    if (!framebuffer) return;
+    clearArea(framebuffer, 0, 0, DisplayHAL::getWidth(), DisplayHAL::getHeight());
+    if (renderContent) renderContent();
+    DisplayHAL::updateScreenQuick();
+}
+
 void UIFramework::drawIcon16x16(uint8_t *framebuffer, int x, int y, const uint8_t *bitmap, uint8_t color) {
     for (int r = 0; r < 16; r++) {
         uint16_t rowData = (bitmap[r * 2] << 8) | bitmap[r * 2 + 1];

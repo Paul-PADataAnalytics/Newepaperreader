@@ -18,6 +18,9 @@ struct SystemSettingsData {
     int imageBrightness = 2;
     bool darkMode = false;
     float readingFontSize = 28.0f;
+    // Page turns use the quick (flash-free) refresh; every this many turns a
+    // full clean refresh removes ghosting. 1 = always full refresh.
+    int fullRefreshEvery = 6;
     // Sleep screen: true = rotate pictures from /images (*.raw), false = info card.
     bool sleepShowsImages = true;
     // Local time offset from UTC in minutes (sent by the companion app).

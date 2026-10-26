@@ -53,6 +53,8 @@ Pressing **User Button 1** (`GPIO 21`) at any time immediately locks the device:
 
 **Auto-sleep**: after the time set in Settings > Power (5 minutes by default) without a touch, the device locks the same way - including while a page is open, so a book left open no longer drains the battery. Waking returns you to the same page. See Chapter 9.
 
+**Fast page turns**: page turns erase the old page with a few white pulses and draw the new one (~0.8 s, no black flash). Every 6th turn (Settings > Display > Full page refresh) does a full clean refresh to remove the faint ghosting this leaves. The running header shows the book title and the time.
+
 **Reading menu**: tap the top of a page to show the header (back to the library) and a panel with text size (A- / A+) and your position in the book. Tap the page to hide it. Tap the left third of the page for the previous page and anywhere else for the next.
 
 > Non-reading apps (e.g. eBookmark, File Browser) only resume to their default view after waking, not a specific sub-screen - only the E-Reader app restores an exact in-book position.

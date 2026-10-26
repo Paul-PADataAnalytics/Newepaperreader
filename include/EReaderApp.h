@@ -109,7 +109,10 @@ private:
     // returning from reading, etc.).
     void rebuildParsedLibraryItems();
     void drawLibrary();
-    void drawReading();
+    // quick = flash-free page-turn refresh (falls back to a full refresh
+    // every SystemSettings::fullRefreshEvery pages).
+    void drawReading(bool quick = false);
+    int m_turnsSinceFullRefresh = 0;
     void openBook(int index);
     // Shared tail of openBook()/resumeAtPath(): loads the book at `path`
     // (m_currentBookTitle/m_currentBookAuthor must already be set by the

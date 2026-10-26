@@ -10,6 +10,7 @@
 #include "EBookmarkManager.h"
 #include <cstring>
 #include <algorithm>
+#include <ctime>
 #include <cstdio>
 #include <cstdlib>
 
@@ -545,8 +546,15 @@ void EReaderApp::rememberLastBook() {
     AppStorage::saveLastBook(last);
 }
 
-void EReaderApp::drawReading() {
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+void EReaderApp::drawReading(bool quick) {
+    int every = SystemSettings::get().fullRefreshEvery;
+    if (quick && every > 1 && m_turnsSinceFullRefresh + 1 < every) {
+        m_turnsSinceFullRefresh++;
+    } else {
+        quick = false;
+        m_turnsSinceFullRefresh = 0;
+    }
+    auto render = [this]() {
         prepareTypographyForReading();
 
         if (m_currentBookText) {
@@ -563,8 +571,20 @@ void EReaderApp::drawReading() {
             emptyState(H / 2, "Couldn't open this book", "The file may be damaged or in an unsupported format.");
         }
 
-        // Running header and footer
-        text(ellipsize(m_currentBookTitle, W - 2 * READ_MARGIN_X, FONT_CAPTION), READ_MARGIN_X, 20, FONT_CAPTION, DARK);
+        // Running header (title, clock) and footer
+        std::string clock;
+        time_t raw;
+        time(&raw);
+        struct tm* t = localtime(&raw);
+        if (t && t->tm_year > 100) {
+            char buf[16];
+            int hr = t->tm_hour % 12;
+            snprintf(buf, sizeof(buf), "%d:%02d", hr == 0 ? 12 : hr, t->tm_min);
+            clock = buf;
+        }
+        int clockW = clock.empty() ? 0 : textWidth(clock, FONT_CAPTION, true) + 16;
+        text(ellipsize(m_currentBookTitle, W - 2 * READ_MARGIN_X - clockW, FONT_CAPTION), READ_MARGIN_X, 20, FONT_CAPTION, DARK);
+        if (!clock.empty()) textRight(clock, W - READ_MARGIN_X, 20, FONT_CAPTION, INK, true);
         float progress = currentProgress();
         int pct = (int)(progress * 100.0f + 0.5f);
         if (!m_chapters.empty() && m_currentChapterIndex >= 0) {
@@ -576,7 +596,9 @@ void EReaderApp::drawReading() {
         fillRect(READ_MARGIN_X, H - 21, (int)((W - 2 * READ_MARGIN_X) * progress), 4, BLACK);
 
         if (m_menuOpen) drawReadingMenu();
-    });
+    };
+    if (quick) UIFramework::performQuickFullScreenDraw(framebuffer, render);
+    else UIFramework::performFullScreenDraw(framebuffer, render);
 }
 
 void EReaderApp::drawReadingMenu() {
@@ -689,7 +711,7 @@ void EReaderApp::turnPage(bool forward) {
         }
     }
     saveCurrentPosition();
-    drawReading();
+    drawReading(true);
 }
 
 void EReaderApp::loadChapter(int index) {

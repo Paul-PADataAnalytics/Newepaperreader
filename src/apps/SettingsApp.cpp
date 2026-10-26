@@ -37,6 +37,15 @@ Rect darkToggle() { return Rect(W - MARGIN - TOGGLE_W, CONTENT_Y + (ROW - TOGGLE
 Rect fontMinus() { return Rect(W - MARGIN - 210, CONTENT_Y + ROW + 22, 70, 58); }
 Rect fontPlus() { return Rect(W - MARGIN - 70, CONTENT_Y + ROW + 22, 70, 58); }
 Rect brightnessSeg() { return Rect(MARGIN, CONTENT_Y + 2 * ROW + 76, W - 2 * MARGIN, 54); }
+constexpr int REFRESH_ROW = CONTENT_Y + 2 * ROW + 160;
+Rect refreshSeg() { return Rect(MARGIN, REFRESH_ROW + 76, W - 2 * MARGIN, 54); }
+const int kRefreshOptions[] = {1, 3, 6, 12};
+constexpr int kRefreshOptionCount = 4;
+
+int refreshOptionIndex(int every) {
+    for (int i = 0; i < kRefreshOptionCount; i++) if (kRefreshOptions[i] == every) return i;
+    return 2;
+}
 
 // Power tab
 Rect sleepSeg() { return Rect(MARGIN, CONTENT_Y + 76, W - 2 * MARGIN, 54); }
@@ -127,6 +136,10 @@ void SettingsApp::drawContent() {
         y += ROW;
         settingLabel(y, 72, "Picture brightness", "Lightens photos and sleep pictures");
         segmented(brightnessSeg(), {"Original", "Light", "Lighter", "Lightest"}, s.imageBrightness, FONT_CAPTION + 1);
+        hRule(REFRESH_ROW - 8);
+        settingLabel(REFRESH_ROW, 72, "Full page refresh", "Less often = faster page turns");
+        segmented(refreshSeg(), {"Every page", "Every 3", "Every 6", "Every 12"},
+                  refreshOptionIndex(s.fullRefreshEvery), FONT_CAPTION + 1);
         break;
     }
     case TAB_POWER: {
@@ -258,6 +271,11 @@ void SettingsApp::handleTouch(int x, int y) {
         if (next != size) {
             EReaderApp::setReadingFontSize(next);
             s.readingFontSize = next;
+            changed = true;
+        }
+        int r = hitSegmented(refreshSeg(), kRefreshOptionCount, x, y);
+        if (r >= 0 && kRefreshOptions[r] != s.fullRefreshEvery) {
+            s.fullRefreshEvery = kRefreshOptions[r];
             changed = true;
         }
         int b = hitSegmented(brightnessSeg(), 4, x, y);

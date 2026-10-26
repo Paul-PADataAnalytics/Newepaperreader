@@ -19,6 +19,11 @@ public:
     static void updateScreenFull();
     static void updateScreenPartial();
     static void updateScreenFast();
+    // Whole-screen update without the black/white clearing flashes: erases
+    // with a few white pulses, then draws the new frame (~0.8s vs ~1.8s).
+    // Used for page turns; leaves faint ghosting, so mix in a regular
+    // updateScreenFull() every few pages. Falls back to full in dark mode.
+    static void updateScreenQuick();
     
     static uint8_t* frontBuffer;
     static uint8_t* backBuffer;

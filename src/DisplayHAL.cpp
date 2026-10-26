@@ -278,14 +278,20 @@ void DisplayHAL::clear() {
 }
 
 
+static void displayWithMode(uint8_t* framebuffer, DrawMode_t mode);
+
 void DisplayHAL::display(uint8_t* framebuffer) {
+    displayWithMode(framebuffer, BLACK_ON_WHITE);
+}
+
+static void displayWithMode(uint8_t* framebuffer, DrawMode_t mode) {
     EPD_POWER_SCOPE();
     uint8_t* targetFb = framebuffer;
     uint8_t* invertedFb = nullptr;
-    int fbSize = getWidth() * getHeight() / 2;
+    int fbSize = EPD_WIDTH * EPD_HEIGHT / 2;
 
-    if (s_darkMode) {
-        invertedFb = (uint8_t*)allocateFramebuffer();
+    if (DisplayHAL::isDarkMode()) {
+        invertedFb = DisplayHAL::allocateFramebuffer();
         if (invertedFb) {
             for (int i = 0; i < fbSize; i++) {
                 invertedFb[i] = ~framebuffer[i];
@@ -295,7 +301,7 @@ void DisplayHAL::display(uint8_t* framebuffer) {
     }
 
     if (_isPortrait) {
-        uint8_t* rotated = allocateFramebuffer();
+        uint8_t* rotated = DisplayHAL::allocateFramebuffer();
         if (rotated) {
             // Logical portrait (lx, ly) maps to physical (tx = ly, ty = 539 - lx).
             // Walk two logical rows at a time so every physical output byte
@@ -313,18 +319,43 @@ void DisplayHAL::display(uint8_t* framebuffer) {
                     rotated[(ty * 960 + tx) >> 1] = (uint8_t)((b << 4) | a);
                 }
             }
-            epd_draw_grayscale_image(epd_full_screen(), rotated);
-            freeFramebuffer(rotated);
-            if (invertedFb) freeFramebuffer(invertedFb);
+            epd_draw_image(epd_full_screen(), rotated, mode);
+            DisplayHAL::freeFramebuffer(rotated);
+            if (invertedFb) DisplayHAL::freeFramebuffer(invertedFb);
             return;
         }
     }
-    epd_draw_grayscale_image(epd_full_screen(), targetFb);
-    if (invertedFb) freeFramebuffer(invertedFb);
+    epd_draw_image(epd_full_screen(), targetFb, mode);
+    if (invertedFb) DisplayHAL::freeFramebuffer(invertedFb);
 }
 
 uint8_t* DisplayHAL::allocateFramebuffer() {
     return (uint8_t *)heap_caps_malloc(EPD_WIDTH * EPD_HEIGHT / 2, MALLOC_CAP_SPIRAM);
+}
+
+// White pulses used to erase the previous page in updateScreenQuick():
+// 4 (~140ms) leaves only a very faint ghost on this panel, cleaned up by the
+// periodic full refresh. Redrawing the old frame with WHITE_ON_WHITE instead
+// was tried: no cleaner, and it costs a full 15-frame draw (~640ms).
+static const int QUICK_ERASE_PULSES = 4;
+
+void DisplayHAL::updateScreenQuick() {
+    if (!frontBuffer || !backBuffer) return;
+    if (s_darkMode) {
+        // The white-ink erase below assumes a white page.
+        updateScreenFull();
+        return;
+    }
+    EPD_POWER_SCOPE();
+    uint32_t t0 = millis();
+    // Erase with a few white-only pulses (no black flash), then draw the new
+    // frame. Faint ghosting builds up; callers do a full updateScreenFull()
+    // every few pages.
+    for (int i = 0; i < QUICK_ERASE_PULSES; i++) epd_push_pixels(epd_full_screen(), 50, 1);
+    uint32_t t1 = millis();
+    displayWithMode(frontBuffer, BLACK_ON_WHITE);
+    memcpy(backBuffer, frontBuffer, EPD_WIDTH * EPD_HEIGHT / 2);
+    Serial.printf("EPD quick: erase %ums draw %ums\n", (unsigned)(t1 - t0), (unsigned)(millis() - t1));
 }
 
 void DisplayHAL::freeFramebuffer(uint8_t* framebuffer) {
@@ -460,6 +491,12 @@ uint8_t* DisplayHAL::allocateFramebuffer() {
     return (uint8_t*)malloc(EPD_WIDTH * EPD_HEIGHT / 2);
 }
 
+void DisplayHAL::updateScreenQuick() {
+    if (!frontBuffer || !backBuffer) return;
+    display(frontBuffer);
+    memcpy(backBuffer, frontBuffer, EPD_WIDTH * EPD_HEIGHT / 2);
+}
+
 void DisplayHAL::freeFramebuffer(uint8_t* framebuffer) {
     free(framebuffer);
 }
@@ -576,8 +613,16 @@ void DisplayHAL::updateScreenFull() {
     }
 #endif
 
+#ifndef NATIVE_TESTING
+    uint32_t t0 = millis();
+    clear();
+    uint32_t t1 = millis();
+    display(frontBuffer);
+    Serial.printf("EPD full: clear %ums draw %ums\n", (unsigned)(t1 - t0), (unsigned)(millis() - t1));
+#else
     clear();
     display(frontBuffer);
+#endif
     memcpy(backBuffer, frontBuffer, getWidth() * getHeight() / 2);
 }
 

@@ -11,6 +11,8 @@ static TouchDrvGT911 touch;
 #include <driver/gpio.h>
 #include "utilities.h"
 #include "PowerManager.h"
+#include "i2s_data_bus.h" // i2s_is_busy() for clearPhysicalArea()
+#include "ed047tc1.h"
 #else
 #include <unistd.h>
 #include <string.h>
@@ -636,15 +638,94 @@ void DisplayHAL::updateScreenFull() {
 // odd column or have an odd width: its in-place nibble shift carries the
 // previous row's pixels into the columns just past the region, which showed
 // up as a dark band along the bottom of the home-screen clock (in portrait
-// the physical x axis runs down the screen). Snapping regions to 8-pixel
-// boundaries keeps the driver on its straightforward byte-aligned path.
+// the physical x axis runs down the screen). Regions are snapped to whole
+// 16-pixel groups (see clearPhysicalArea() for why 8 was not enough).
+static const int PHYSICAL_ALIGN = 16;
+
 static void alignPhysicalSpan(int& x, int& w) {
-    int start = x & ~7;
-    int end = (x + w + 7) & ~7;
+    int start = x & ~(PHYSICAL_ALIGN - 1);
+    int end = (x + w + PHYSICAL_ALIGN - 1) & ~(PHYSICAL_ALIGN - 1);
     if (end > EPD_WIDTH) end = EPD_WIDTH;
     x = start;
     w = end - start;
 }
+
+#ifndef NATIVE_TESTING
+// Zeroes the line buffer once the bus has finished sending it (the S3 build
+// of the driver has a single line buffer that the DMA reads in place).
+static void clearLineBuffer() {
+    while (i2s_is_busy()) {}
+    memset((void*)epd_get_current_buffer(), 0, EPD_WIDTH / 4);
+}
+
+// One push of white (or black) over a physical area. Replaces the driver's
+// epd_push_pixels()/epd_clear_area() for partial regions, which on this
+// board:
+//  - swaps the two 8-pixel halves of every 16-pixel group (its
+//    reorder_line_buffer() suits the original ESP32's I2S bus, but the S3's
+//    LCD peripheral sends bytes in order). An area edge on an 8-but-not-16
+//    boundary was therefore never erased, while 8 pixels just outside it
+//    were flashed white and never redrawn - the stripes left on settings
+//    toggles and around the reading menu.
+//  - latched the area's last row with the 5us "skip" time instead of the
+//    full push time, and zeroed the line buffer while that row was still
+//    being sent, so the row was barely erased.
+// Regions are 16-aligned as well, so either byte order gives the same result.
+static void pushPhysicalArea(const Rect_t& area, int time, bool white) {
+    uint8_t row[EPD_WIDTH / 4];
+    memset(row, 0, sizeof(row));
+    const uint8_t pattern = white ? 0xAA : 0x55;
+    for (int x = area.x; x < area.x + area.width; x++) {
+        row[x >> 2] |= pattern & (0x03 << (2 * (x & 3)));
+    }
+    const int end = area.y + area.height;
+
+    epd_start_frame();
+    int skipped = 0;
+    bool driven = false;
+    for (int i = 0; i < EPD_HEIGHT; i++) {
+        if (i >= area.y && i < end) {
+            if (i == area.y) {
+                while (i2s_is_busy()) {}
+                memcpy((void*)epd_get_current_buffer(), row, sizeof(row));
+            }
+            epd_output_row(time * 10);
+            driven = true;
+            skipped = 0;
+        } else if (skipped == 0) {
+            // Latches the previous (area) row at full strength, then sends
+            // a no-op row.
+            clearLineBuffer();
+            epd_output_row(driven ? time * 10 : time);
+            skipped++;
+        } else if (skipped == 1) {
+            epd_output_row(10);
+            skipped++;
+        } else {
+            epd_skip();
+        }
+    }
+    // Leave no-op data latched: the driver's next frame may clock rows
+    // with epd_skip(), which drives whatever is still latched.
+    if (skipped == 0) {
+        clearLineBuffer();
+        epd_output_row(time * 10);
+        epd_output_row(10);
+    } else if (skipped == 1) {
+        epd_output_row(10);
+    }
+    epd_end_frame();
+}
+
+// Same black/white cycling as the driver's epd_clear_area().
+static void clearPhysicalArea(const Rect_t& area) {
+    const int cycles = 4, time = 50;
+    for (int c = 0; c < cycles; c++) {
+        for (int i = 0; i < 4; i++) pushPhysicalArea(area, time, false);
+        for (int i = 0; i < 4; i++) pushPhysicalArea(area, time, true);
+    }
+}
+#endif
 
 void DisplayHAL::updateScreenPartial() {
     if (!frontBuffer || !backBuffer) return;
@@ -729,7 +810,14 @@ void DisplayHAL::updateScreenPartial() {
         .height = physical_h 
     };
     const int stride = area.width / 2;
-    uint8_t* region = static_cast<uint8_t*>(malloc(stride * area.height));
+    // When the area stops short of the panel's last row, the driver zeroes
+    // its line buffer while the area's last row is still being sent, so that
+    // row would mostly not be drawn. Draw one extra all-white (no-op) row to
+    // absorb that.
+    const bool padRow = area.y + area.height < EPD_HEIGHT;
+    Rect_t drawArea = area;
+    if (padRow) drawArea.height++;
+    uint8_t* region = static_cast<uint8_t*>(malloc(stride * drawArea.height));
     if (!region) {
         Serial.println("[display] partial allocation failed; full refresh");
         updateScreenFull();
@@ -751,9 +839,14 @@ void DisplayHAL::updateScreenPartial() {
             region[py * stride + px / 2] = a | (b << 4);
         }
     }
-    epd_clear_area(area);
-    epd_draw_grayscale_image(area, region);
+    if (padRow) memset(region + stride * area.height, 0xFF, stride);
+    uint32_t t0 = millis();
+    clearPhysicalArea(area);
+    uint32_t t1 = millis();
+    epd_draw_grayscale_image(drawArea, region);
     free(region);
+    Serial.printf("EPD partial %dx%d@%d,%d: clear %ums draw %ums\n", area.width, area.height, area.x, area.y,
+                  (unsigned)(t1 - t0), (unsigned)(millis() - t1));
 #endif
 
 #ifdef NATIVE_TESTING

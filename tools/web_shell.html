@@ -1,138 +1,123 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111827">
     <title>LilyGO T5-EPD47 E-Reader Simulator</title>
     <style>
         :root {
-            --bg-color: #0f172a;
-            --card-bg: #1e293b;
-            --accent-color: #3b82f6;
-            --text-color: #f8fafc;
-            --text-dim: #94a3b8;
-            --border-color: #334155;
-            --device-bezel: #27272a;
+            color-scheme: dark;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #111827;
+            color: #f9fafb;
         }
 
         * {
             box-sizing: border-box;
-            margin: 0;
-            padding: 0;
         }
 
         body {
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-color);
             min-height: 100vh;
+            margin: 0;
+            padding: clamp(1rem, 4vw, 2.5rem);
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 1.5rem;
+            justify-content: center;
+            gap: 1.25rem;
         }
 
         header {
             text-align: center;
-            margin-bottom: 1.5rem;
         }
 
-        header h1 {
-            font-size: 1.75rem;
-            font-weight: 700;
-            background: linear-gradient(135deg, #60a5fa, #a78bfa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            margin-bottom: 0.25rem;
+        h1 {
+            margin: 0;
+            font-size: clamp(1.25rem, 4vw, 1.8rem);
         }
 
         header p {
-            color: var(--text-dim);
-            font-size: 0.95rem;
+            margin: 0.4rem 0 0;
+            color: #cbd5e1;
         }
 
-        .main-container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1.5rem;
-            max-width: 1040px;
-            width: 100%;
+        main {
+            width: min(100%, 588px);
         }
 
         .device-frame {
-            background-color: var(--device-bezel);
-            padding: 24px;
-            border-radius: 20px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
-            position: relative;
+            width: 100%;
+            padding: clamp(8px, 2.4vw, 24px);
+            border: 1px solid #475569;
+            border-radius: 16px;
+            background: #27272a;
+            box-shadow: 0 20px 50px #0008;
         }
 
         canvas.emscripten {
-            border: none;
-            background-color: #ffffff;
             display: block;
+            width: 100%;
+            height: auto;
+            aspect-ratio: 540 / 960;
             border-radius: 4px;
-            box-shadow: inset 0 0 10px rgba(0,0,0,0.1);
-            width: 960px;
-            height: 540px;
+            background: #fff;
+            image-rendering: pixelated;
+            touch-action: none;
         }
 
-        @media (max-width: 1024px) {
-            canvas.emscripten {
-                width: 100%;
-                height: auto;
-                aspect-ratio: 960 / 540;
-            }
+        canvas.emscripten:focus-visible {
+            outline: 3px solid #60a5fa;
+            outline-offset: 3px;
         }
 
-        .status-container {
-            margin-top: 1rem;
-            color: var(--text-dim);
-            font-size: 0.9rem;
+        #status {
+            min-height: 1.5em;
+            color: #cbd5e1;
             text-align: center;
         }
     </style>
 </head>
 <body>
     <header>
-        <h1>LilyGO T5-EPD47 E-Reader Web Simulator</h1>
-        <p>Interactive WebAssembly Demo of Firmware v2.3</p>
+        <h1>LilyGO T5-EPD47 E-Reader Simulator</h1>
+        <p>Browser build of the C++ firmware using WebAssembly</p>
     </header>
-    <div class="main-container">
+    <main>
         <div class="device-frame">
-            <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+            <canvas class="emscripten" id="canvas" tabindex="0"
+                    aria-label="Interactive e-reader firmware display"></canvas>
         </div>
-        <div class="status-container" id="status">Loading WebAssembly engine...</div>
-    </div>
-    <script type="text/javascript">
-        var statusElement = document.getElementById('status');
+        <p id="status" role="status" aria-live="polite">Loading firmware…</p>
+    </main>
+    <script>
+        const statusElement = document.getElementById("status");
+        const canvas = document.getElementById("canvas");
+        canvas.addEventListener("contextmenu", (event) => event.preventDefault());
+        canvas.addEventListener("webglcontextlost", (event) => {
+            event.preventDefault();
+            Module.setStatus("Graphics context lost. Reload the page to restart.");
+        });
+
         var Module = {
             preRun: [],
             postRun: [],
-            print: function(text) {
-                console.log(text);
+            print: (...args) => console.log(...args),
+            printErr: (...args) => console.error(...args),
+            canvas,
+            setStatus(text) {
+                statusElement.textContent = text;
             },
-            printErr: function(text) {
-                console.error(text);
+            onAbort(reason) {
+                this.setStatus(`Firmware failed to start: ${reason}`);
             },
-            canvas: (function() {
-                var canvas = document.getElementById('canvas');
-                canvas.addEventListener("webglcontextlost", function(e) { alert('WebGL context lost. Reload page.'); e.preventDefault(); }, false);
-                return canvas;
-            })(),
-            setStatus: function(text) {
-                if (!Module.setStatus.last) Module.setStatus.last = { time: Date.now(), text: '' };
-                if (text === Module.setStatus.last.text) return;
-                statusElement.innerHTML = text;
-            },
-            totalDependencies: 0,
-            monitorRunDependencies: function(left) {
-                this.totalDependencies = Math.max(this.totalDependencies, left);
-                Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'System Ready');
+            monitorRunDependencies(left) {
+                this.totalDependencies = Math.max(this.totalDependencies || 0, left);
+                this.setStatus(left
+                    ? `Preparing firmware… (${this.totalDependencies - left}/${this.totalDependencies})`
+                    : "Firmware running");
             }
         };
-        Module.setStatus('Downloading firmware...');
     </script>
     {{{ SCRIPT }}}
 </body>

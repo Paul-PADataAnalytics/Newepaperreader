@@ -13,7 +13,9 @@ struct SystemSettingsData {
     // Never auto-sleep while a USB host (computer) is connected.
     bool stayAwakeOnUsb = true;
     // Bluetooth companion sync radio.
-    bool bleEnabled = true;
+    bool bleEnabled = false;
+    // Explicit light sleep retains the visible page and touch wake.
+    bool idleSleep = true;
     // Image brightening filter: 0 = off (linear), 1 = light, 2 = lighter, 3 = lightest.
     int imageBrightness = 2;
     bool darkMode = false;

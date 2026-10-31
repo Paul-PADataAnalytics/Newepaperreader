@@ -13,6 +13,22 @@ extern uint8_t* framebuffer;
 
 namespace {
 using namespace UI;
+constexpr float GAME_SMALL = FONT_BODY - 2;
+constexpr float GAME_CAPTION = FONT_BODY - 2;
+
+void gameSectionLabel(int y, const std::string& label) {
+    text(label, MARGIN, y, FONT_BODY - 2, DARK, true);
+}
+
+void drawPageFooter(int page, int pages) {
+    fillRect(0, H - FOOTER_H, W, 2, BLACK);
+    Rect previous(MARGIN, H - FOOTER_H + 12, 118, 64);
+    Rect next(W - MARGIN - 118, H - FOOTER_H + 12, 118, 64);
+    button(previous, "Previous", ButtonStyle::SECONDARY, FONT_BODY - 2, page > 0);
+    button(next, "Next", ButtonStyle::SECONDARY, FONT_BODY - 2, page + 1 < pages);
+    textCentered("Page " + std::to_string(page + 1) + " of " + std::to_string(pages),
+                 W / 2, H - FOOTER_H + 27, FONT_BODY - 2, DARK);
+}
 
 // Balanced with a Monte Carlo model: careful play survives ~98% of winters
 // with ~2 wrecks; never rowing ashore averages ~7.5 wrecks, always sleeping
@@ -62,15 +78,15 @@ void optionButton(const Rect& r, const std::string& title, const std::string& de
     uint8_t fg = primary && enabled ? WHITE : (enabled ? BLACK : MID);
     uint8_t sub = primary && enabled ? LIGHT : (enabled ? DARK : LIGHT);
     int lh1 = lineHeight(FONT_BODY - 2);
-    int lh2 = detail.empty() ? 0 : lineHeight(FONT_CAPTION) + 4;
+    int lh2 = detail.empty() ? 0 : lineHeight(GAME_CAPTION) + 4;
     int y = r.y + (r.h - lh1 - lh2) / 2;
     text(ellipsize(title, r.w - 32, FONT_BODY - 2, true), r.x + 18, y, FONT_BODY - 2, fg, true);
-    if (!detail.empty()) text(ellipsize(detail, r.w - 32, FONT_CAPTION), r.x + 18, y + lh1 + 4, FONT_CAPTION, sub);
+    if (!detail.empty()) text(ellipsize(detail, r.w - 32, GAME_CAPTION), r.x + 18, y + lh1 + 4, GAME_CAPTION, sub);
 }
 
 void meter(int y, const std::string& label, int pct) {
-    text(label, MARGIN, y, FONT_SMALL, INK);
-    textRight(std::to_string(pct) + "%", W - MARGIN, y, FONT_SMALL, pct < 35 ? BLACK : INK, true);
+    text(label, MARGIN, y, GAME_SMALL, INK);
+    textRight(std::to_string(pct) + "%", W - MARGIN, y, GAME_SMALL, pct < 35 ? BLACK : INK, true);
     progressBar(MARGIN + 130, y + 9, W - 2 * MARGIN - 130 - 70, 8, pct / 100.0f);
 }
 } // namespace
@@ -332,6 +348,25 @@ void KeeperApp::saveBest() {
 // ---------------------------------------------------------------------------
 
 void KeeperApp::handleTouch(int x, int y) {
+    if (m_screen == HELP) {
+        if (UI::hitHeaderAction(x, y, "Done")) {
+            m_screen = TITLE;
+            render();
+            return;
+        }
+        if (x >= UI::MARGIN && x < UI::MARGIN + 118 && y >= UI::H - UI::FOOTER_H + 12 &&
+            y < UI::H - 12 && m_helpPage > 0) {
+            --m_helpPage;
+            render();
+            return;
+        }
+        if (x >= UI::W - UI::MARGIN - 118 && x < UI::W - UI::MARGIN &&
+            y >= UI::H - UI::FOOTER_H + 12 && y < UI::H - 12 && m_helpPage < 1) {
+            ++m_helpPage;
+            render();
+            return;
+        }
+    }
     int action = 0;
     for (const Button& b : m_buttons) {
         if (b.rect.contains(x, y)) { action = b.action; break; }
@@ -339,7 +374,7 @@ void KeeperApp::handleTouch(int x, int y) {
     switch (action) {
         case A_NEW: newGame(); break;
         case A_CONTINUE: m_screen = DAY; render(); break;
-        case A_HELP: m_screen = HELP; render(); break;
+        case A_HELP: m_helpPage = 0; m_screen = HELP; render(); break;
         case A_BACK: m_screen = TITLE; render(); break;
         case A_TASK_FISH: doTask(T_FISH); break;
         case A_TASK_GATHER: doTask(T_GATHER); break;
@@ -393,7 +428,7 @@ void KeeperApp::render() {
 }
 
 void KeeperApp::drawSupplies(int y) {
-    sectionLabel(y, "Stores");
+    gameSectionLabel(y, "Stores");
     y += 30;
     struct Cell { const char* label; std::string value; std::string hint; };
     int oilNights = m_oil / oilPerNight(m_weather);
@@ -406,9 +441,10 @@ void KeeperApp::drawSupplies(int y) {
     int cw = (W - 2 * MARGIN) / 4;
     for (int i = 0; i < 4; i++) {
         int x = MARGIN + i * cw;
-        text(cells[i].label, x, y, FONT_CAPTION, DARK);
-        text(cells[i].value, x, y + 24, FONT_BODY - 2, BLACK, true);
-        if (!cells[i].hint.empty()) text(cells[i].hint, x, y + 56, FONT_CAPTION, DARK);
+        text(ellipsize(cells[i].label, cw - 8, GAME_CAPTION), x, y, GAME_CAPTION, DARK);
+        text(ellipsize(cells[i].value, cw - 8, FONT_BODY - 2, true), x, y + 30, FONT_BODY - 2, BLACK, true);
+        if (!cells[i].hint.empty())
+            text(ellipsize(cells[i].hint, cw - 8, GAME_CAPTION), x, y + 60, GAME_CAPTION, DARK);
     }
     y += 90;
     meter(y, "Spirit", m_spirit);
@@ -421,7 +457,7 @@ void KeeperApp::drawTitle() {
     textWrapped("Winter, 1891. You are alone on the Skerry light, a tower on a rock off a bad coast. "
                 "The relief boat comes in twenty-one days. Keep the light burning. Keep your wits.",
                 MARGIN + 10, 360, W - 2 * MARGIN - 20, FONT_BODY - 2, INK, 0, 8, true);
-    if (m_best > 0) textCentered("Best winter: " + std::to_string(m_best) + " points", W / 2, 560, FONT_SMALL, DARK, true);
+    if (m_best > 0) textCentered("Best winter: " + std::to_string(m_best) + " points", W / 2, 560, GAME_SMALL, DARK, true);
     int y = H - 300;
     if (m_inProgress) {
         Rect c(MARGIN, y, W - 2 * MARGIN, 76);
@@ -433,48 +469,41 @@ void KeeperApp::drawTitle() {
     button(n, m_inProgress ? "Start a new winter" : "Begin", ButtonStyle::PRIMARY, FONT_BODY);
     addButton(n, A_NEW);
     Rect h(MARGIN, y + 92, W - 2 * MARGIN, 64);
-    button(h, "How to play", ButtonStyle::SECONDARY, FONT_SMALL + 2);
+    button(h, "How to play", ButtonStyle::SECONDARY, GAME_SMALL + 2);
     addButton(h, A_HELP);
 }
 
 void KeeperApp::drawHelp() {
-    header("How to play", true);
-    int y = HEADER_H + 24;
-    const char* para[] = {
-        "Survive 21 days and nights on the rock, and lose as few ships as you can.",
-        "Each day you have two tasks: fish, gather fuel from the shore (more after a storm), trim the lamp, or rest. "
-        "In calm or a fresh breeze you can spend the whole day rowing to the harbour for oil, food, fuel and a rocket.",
-        "Each night the lamp burns oil (more in storm and fog) and the stove burns fuel (more in a gale). "
-        "Hunger and cold sap your spirit; so does keeping watch.",
-        "A neglected lamp gutters out. Keeping watch catches most failures, and in fog you must ring the bell. "
-        "When the light is dark, ships strike the reef.",
-        "In gales, ships may come into distress. Rockets, the boat, or prayer.",
-        "If your spirit breaks, you are taken off the rock.",
+    header("How to play", true, "Done");
+    textCentered("Page " + std::to_string(m_helpPage + 1) + " of 2",
+                 W / 2, HEADER_H + 18, FONT_BODY - 2, DARK);
+    const char* pages[] = {
+        "Survive 21 days and nights on the rock, and lose as few ships as you can. Each day, use two tasks: fish, gather fuel (more after storms), trim the lamp, or rest. In calm or fresh weather, row to the harbour for supplies.",
+        "Each night the lamp burns oil and the stove burns fuel. Hunger, cold and keeping watch wear down your spirit. Tend the lamp; watch for ships and ring the fog bell. In gales, rescue ships in distress. If your spirit breaks, you are taken off the rock."
     };
-    for (const char* p : para) y = textWrapped(p, MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 1, INK, 0, 6) + 16;
-    Rect b(MARGIN, H - 110, W - 2 * MARGIN, 72);
-    button(b, "Back", ButtonStyle::SECONDARY, FONT_BODY);
-    addButton(b, A_BACK);
+    textWrapped(pages[m_helpPage], MARGIN + 18, HEADER_H + 92, W - 2 * MARGIN - 36,
+                FONT_BODY, INK, 0, 14);
+    drawPageFooter(m_helpPage, 2);
 }
 
 void KeeperApp::drawDay() {
     header("Day " + std::to_string(m_day + 1) + " of 21", true);
     int y = HEADER_H + 16;
-    Rect card(MARGIN, y, W - 2 * MARGIN, 108);
+    Rect card(MARGIN, y, W - 2 * MARGIN, 132);
     fillRoundRect(card.x, card.y, card.w, card.h, 14, PALE);
     text(kWeatherName[m_weather], card.x + 18, card.y + 12, FONT_TITLE - 2, BLACK, true);
-    textWrapped(kWeatherDay[m_weather], card.x + 18, card.y + 56, card.w - 36, FONT_SMALL, INK, 2, 4);
+    textWrapped(kWeatherDay[m_weather], card.x + 18, card.y + 56, card.w - 36, GAME_SMALL, INK, 2, 4);
 
-    drawSupplies(y + 124);
+    drawSupplies(y + 146);
 
-    int ly = y + 124 + 30 + 90 + 72;
-    sectionLabel(ly, m_blocks > 0 ? (m_blocks == 2 ? "Two tasks today" : "One more task") : "Today");
+    int ly = y + 146 + 30 + 90 + 72;
+    gameSectionLabel(ly, m_blocks > 0 ? (m_blocks == 2 ? "Two tasks today" : "One more task") : "Today");
     ly += 30;
     if (m_spirit < 30) {
         ly = textWrapped("You are close to breaking. Rest, or row ashore for company.", MARGIN, ly, W - 2 * MARGIN,
-                         FONT_SMALL, BLACK, 2, 4) + 8;
+                         GAME_SMALL, BLACK, 2, 4) + 8;
     }
-    for (const std::string& l : m_dayLog) ly = textWrapped(l, MARGIN, ly, W - 2 * MARGIN, FONT_SMALL, INK, 2, 4) + 6;
+    for (const std::string& l : m_dayLog) ly = textWrapped(l, MARGIN, ly, W - 2 * MARGIN, GAME_SMALL, INK, 2, 4) + 6;
 
     int gy = H - 290;
     if (m_blocks <= 0) {
@@ -518,7 +547,7 @@ void KeeperApp::drawNight() {
     y = textWrapped(kNight[m_weather], MARGIN, y, W - 2 * MARGIN, FONT_BODY - 2, INK, 0, 6);
     std::string burn = "Tonight: " + std::to_string(oilPerNight(m_weather)) + " gal of oil, " +
                        std::to_string(coalPerNight(m_weather)) + " fuel, 1 day of food.";
-    y = textWrapped(burn, MARGIN, y + 10, W - 2 * MARGIN, FONT_SMALL, DARK, 0, 6);
+    y = textWrapped(burn, MARGIN, y + 10, W - 2 * MARGIN, GAME_SMALL, DARK, 0, 6);
     drawSupplies(y + 30);
 
     bool fog = m_weather == FOG;
@@ -541,7 +570,7 @@ void KeeperApp::drawDistress() {
                     ", her sails in rags, driving towards the reef. She is firing guns for help.",
                     MARGIN, y, W - 2 * MARGIN, FONT_BODY - 2, INK, 0, 6);
     meter(y + 30, "Spirit", m_spirit);
-    text("Rockets: " + std::to_string(m_rockets), MARGIN, y + 70, FONT_SMALL, INK, true);
+    text("Rockets: " + std::to_string(m_rockets), MARGIN, y + 70, GAME_SMALL, INK, true);
 
     bool rockets = m_rockets > 0;
     bool boat = m_spirit >= 30;
@@ -562,17 +591,17 @@ void KeeperApp::drawReport() {
     int y = HEADER_H + 24;
     y = textWrapped(m_reportTitle, MARGIN, y, W - 2 * MARGIN, FONT_TITLE + 4, BLACK, 2, 4);
     y += 16;
-    for (const std::string& l : m_report) y = textWrapped(l, MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 2, INK, 3, 6) + 12;
+    for (const std::string& l : m_report) y = textWrapped(l, MARGIN, y, W - 2 * MARGIN, GAME_SMALL + 2, INK, 3, 6) + 12;
     if (m_takenOff) {
         y = textWrapped("Something in you gave way in the night. A passing trawler found the light dark and you "
                         "talking to the gulls. They took you off the rock.",
-                        MARGIN, y + 6, W - 2 * MARGIN, FONT_SMALL + 2, BLACK, 0, 6) + 12;
+                        MARGIN, y + 6, W - 2 * MARGIN, GAME_SMALL + 2, BLACK, 0, 6) + 12;
     }
     int ty = std::max(y + 10, H - 420);
-    sectionLabel(ty, "Tally");
-    text("Ships safe " + std::to_string(m_safe), MARGIN, ty + 30, FONT_SMALL, INK, true);
-    textCentered("Wrecks " + std::to_string(m_wrecks), W / 2, ty + 30, FONT_SMALL, m_wrecks ? BLACK : INK, true);
-    textRight("Lives saved " + std::to_string(m_lives), W - MARGIN, ty + 30, FONT_SMALL, INK, true);
+    gameSectionLabel(ty, "Tally");
+    text("Ships safe " + std::to_string(m_safe), MARGIN, ty + 30, GAME_SMALL, INK, true);
+    textCentered("Wrecks " + std::to_string(m_wrecks), W / 2, ty + 30, GAME_SMALL, m_wrecks ? BLACK : INK, true);
+    textRight("Lives saved " + std::to_string(m_lives), W - MARGIN, ty + 30, GAME_SMALL, INK, true);
     drawSupplies(ty + 74);
     Rect b(MARGIN, H - 100, W - 2 * MARGIN, 72);
     button(b, last ? "The end of the watch" : "Continue", ButtonStyle::PRIMARY, FONT_BODY);
@@ -587,7 +616,7 @@ void KeeperApp::drawEnd() {
     textWrapped(headline, MARGIN + 110, y + 10, W - 2 * MARGIN - 110, FONT_TITLE, BLACK, 2, 4);
     y += 120;
     if (!m_takenOff) y = textWrapped("On the twenty-first morning the relief boat came round the point.",
-                                     MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 2, INK, 0, 6) + 16;
+                                     MARGIN, y, W - 2 * MARGIN, GAME_SMALL + 2, INK, 0, 6) + 16;
     else y += 10;
 
     auto row = [&](const std::string& label, const std::string& value) {
@@ -610,11 +639,11 @@ void KeeperApp::drawEnd() {
                        : m_wrecks <= 5 ? "A hard winter. The board will want a report."
                                        : "The light failed too often. The fishermen won't meet your eye.";
     y = textWrapped(rating, MARGIN, y, W - 2 * MARGIN, FONT_BODY - 2, BLACK, 3, 6);
-    text(score() > 0 && score() >= m_best ? "New best!" : "Best " + std::to_string(m_best), MARGIN, y + 12, FONT_SMALL, DARK, true);
+    text(score() > 0 && score() >= m_best ? "New best!" : "Best " + std::to_string(m_best), MARGIN, y + 12, GAME_SMALL, DARK, true);
 
     Rect again(MARGIN, H - 100, (W - 2 * MARGIN - 16) / 2, 72);
     Rect done(again.x + again.w + 16, H - 100, again.w, 72);
-    button(again, "Another winter", ButtonStyle::PRIMARY, FONT_SMALL + 2);
+    button(again, "Another winter", ButtonStyle::PRIMARY, GAME_SMALL + 2);
     button(done, "Done", ButtonStyle::SECONDARY, FONT_BODY);
     addButton(again, A_NEW);
     addButton(done, A_DONE);

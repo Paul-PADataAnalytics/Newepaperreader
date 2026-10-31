@@ -38,10 +38,12 @@ public:
     // subdirectories (a single directory visit alone gives no useful signal
     // for how much of a long scan remains).
     std::vector<FileInfo> scanRecursive(const char* rootPath, std::function<void()> onProgress = nullptr, int maxDepth = 8);
+    bool scanSucceeded() const { return m_scanSucceeded; }
 
 private:
     std::string currentPath;
     std::vector<FileInfo> files;
+    bool m_scanSucceeded = true;
     
     void loadDirectory(const char* path);
     void scanRecursiveHelper(const std::string& path, std::vector<FileInfo>& out, int depth, int maxDepth, const std::function<void()>& onProgress);

@@ -80,6 +80,7 @@ void load() {
     d.alwaysOn = doc["alwaysOn"] | d.alwaysOn;
     d.stayAwakeOnUsb = doc["stayAwakeOnUsb"] | d.stayAwakeOnUsb;
     d.bleEnabled = doc["bleEnabled"] | d.bleEnabled;
+    d.idleSleep = doc["idleSleep"] | d.idleSleep;
     d.imageBrightness = clampInt(doc["imageBrightness"] | d.imageBrightness, 0, 3);
     d.darkMode = doc["darkMode"] | d.darkMode;
     float font = doc["readingFontSize"] | d.readingFontSize;
@@ -97,6 +98,7 @@ bool save() {
     doc["alwaysOn"] = g_settings.alwaysOn;
     doc["stayAwakeOnUsb"] = g_settings.stayAwakeOnUsb;
     doc["bleEnabled"] = g_settings.bleEnabled;
+    doc["idleSleep"] = g_settings.idleSleep;
     doc["imageBrightness"] = g_settings.imageBrightness;
     doc["darkMode"] = g_settings.darkMode;
     doc["readingFontSize"] = g_settings.readingFontSize;

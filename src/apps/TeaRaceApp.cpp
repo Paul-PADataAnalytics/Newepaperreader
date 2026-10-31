@@ -17,6 +17,22 @@ extern uint8_t* framebuffer;
 
 namespace {
 using namespace UI;
+constexpr float GAME_SMALL = FONT_BODY - 2;
+constexpr float GAME_CAPTION = FONT_BODY - 2;
+
+void gameSectionLabel(int y, const std::string& label) {
+    text(label, MARGIN, y, FONT_BODY - 2, DARK, true);
+}
+
+void drawPageFooter(int page, int pages) {
+    fillRect(0, H - FOOTER_H, W, 2, BLACK);
+    Rect previous(MARGIN, H - FOOTER_H + 12, 118, 64);
+    Rect next(W - MARGIN - 118, H - FOOTER_H + 12, 118, 64);
+    button(previous, "Previous", ButtonStyle::SECONDARY, FONT_BODY - 2, page > 0);
+    button(next, "Next", ButtonStyle::SECONDARY, FONT_BODY - 2, page + 1 < pages);
+    textCentered("Page " + std::to_string(page + 1) + " of " + std::to_string(pages),
+                 W / 2, H - FOOTER_H + 27, FONT_BODY - 2, DARK);
+}
 
 // ---- Voyage data ----------------------------------------------------------
 // Tuned with a Monte Carlo model: sensible play averages ~£3,100 and wins
@@ -578,6 +594,25 @@ int TeaRaceApp::addButton(const Rect& r, int action) {
 }
 
 void TeaRaceApp::handleTouch(int x, int y) {
+    if (m_screen == HELP) {
+        if (UI::hitHeaderAction(x, y, "Done")) {
+            m_screen = TITLE;
+            render();
+            return;
+        }
+        if (x >= UI::MARGIN && x < UI::MARGIN + 118 && y >= UI::H - UI::FOOTER_H + 12 &&
+            y < UI::H - 12 && m_helpPage > 0) {
+            --m_helpPage;
+            render();
+            return;
+        }
+        if (x >= UI::W - UI::MARGIN - 118 && x < UI::W - UI::MARGIN &&
+            y >= UI::H - UI::FOOTER_H + 12 && y < UI::H - 12 && m_helpPage < 2) {
+            ++m_helpPage;
+            render();
+            return;
+        }
+    }
     int action = 0;
     for (const Button& b : m_buttons) {
         if (b.rect.contains(x, y)) {
@@ -588,7 +623,7 @@ void TeaRaceApp::handleTouch(int x, int y) {
     switch (action) {
         case A_NEW: m_screen = CARGO; render(); break;
         case A_CONTINUE_VOYAGE: m_screen = m_leg >= 0 && m_leg < LEG_COUNT ? LEG : TITLE; render(); break;
-        case A_HELP: m_screen = HELP; render(); break;
+        case A_HELP: m_helpPage = 0; m_screen = HELP; render(); break;
         case A_BACK_TITLE: m_screen = TITLE; render(); break;
         case A_CARGO_FINE: newVoyage(0); break;
         case A_CARGO_CONGOU: newVoyage(1); break;
@@ -653,22 +688,22 @@ void optionButton(const Rect& r, const std::string& title, const std::string& de
     uint8_t fg = primary ? WHITE : BLACK;
     uint8_t sub = primary ? LIGHT : DARK;
     int lh1 = lineHeight(FONT_BODY);
-    int lh2 = detail.empty() ? 0 : lineHeight(FONT_CAPTION) + 6;
+    int lh2 = detail.empty() ? 0 : lineHeight(GAME_CAPTION) + 6;
     int y = r.y + (r.h - lh1 - lh2) / 2;
     text(ellipsize(title, r.w - 40, FONT_BODY, true), r.x + 22, y, FONT_BODY, fg, true);
-    if (!detail.empty()) text(ellipsize(detail, r.w - 40, FONT_CAPTION), r.x + 22, y + lh1 + 6, FONT_CAPTION, sub);
+    if (!detail.empty()) text(ellipsize(detail, r.w - 40, GAME_CAPTION), r.x + 22, y + lh1 + 6, GAME_CAPTION, sub);
 }
 
 void meter(int y, const std::string& label, int pct, bool lowIsBad = true) {
-    text(label, MARGIN, y, FONT_SMALL, INK);
+    text(label, MARGIN, y, GAME_SMALL, INK);
     std::string v = std::to_string(pct) + "%";
-    textRight(v, W - MARGIN, y, FONT_SMALL, (lowIsBad ? pct < 40 : pct > 15) ? BLACK : INK, true);
+    textRight(v, W - MARGIN, y, GAME_SMALL, (lowIsBad ? pct < 40 : pct > 15) ? BLACK : INK, true);
     progressBar(MARGIN + 190, y + 9, W - 2 * MARGIN - 190 - 70, 8, pct / 100.0f);
 }
 } // namespace
 
 void TeaRaceApp::drawStandings(int y) {
-    sectionLabel(y, "The race");
+    gameSectionLabel(y, "The race");
     y += 30;
     struct Entry { const char* name; float day; bool you; };
     Entry e[4] = {{"Taeping (you)", m_day, true}};
@@ -676,17 +711,17 @@ void TeaRaceApp::drawStandings(int y) {
     std::sort(e, e + 4, [](const Entry& a, const Entry& b) { return a.day < b.day; });
     for (int i = 0; i < 4; i++) {
         std::string pos = std::to_string(i + 1) + ".";
-        text(pos, MARGIN, y, FONT_SMALL, INK, e[i].you);
-        text(e[i].name, MARGIN + 34, y, FONT_SMALL, e[i].you ? BLACK : INK, e[i].you);
+        text(pos, MARGIN, y, GAME_SMALL, INK, e[i].you);
+        text(e[i].name, MARGIN + 34, y, GAME_SMALL, e[i].you ? BLACK : INK, e[i].you);
         float d = e[i].day - e[0].day;
         std::string gap = i == 0 ? "leading" : (d < 0.05f ? "level" : "+" + fmt1(d) + " days");
-        textRight(gap, W - MARGIN, y, FONT_SMALL, e[i].you ? BLACK : DARK, e[i].you);
+        textRight(gap, W - MARGIN, y, GAME_SMALL, e[i].you ? BLACK : DARK, e[i].you);
         y += 32;
     }
 }
 
 void TeaRaceApp::drawShipStatus(int y) {
-    sectionLabel(y, "Your ship");
+    gameSectionLabel(y, "Your ship");
     meter(y + 30, "Hull & rigging", m_hull);
     meter(y + 62, "Crew", m_crew);
     meter(y + 94, "Wet chests", std::min(m_wet, 100), false);
@@ -698,7 +733,7 @@ void TeaRaceApp::drawTitle() {
     textWrapped("Foochow, May 1866. The new season's tea is loaded and the fastest clippers in the world "
                 "race for London. The first ship home sells at the premium.",
                 MARGIN + 10, 380, W - 2 * MARGIN - 20, FONT_BODY - 2, INK, 0, 8, true);
-    if (m_best > 0) textCentered("Best voyage: " + money(m_best), W / 2, 560, FONT_SMALL, DARK, true);
+    if (m_best > 0) textCentered("Best voyage: " + money(m_best), W / 2, 560, GAME_SMALL, DARK, true);
 
     int y = H - 300;
     if (m_leg >= 0 && m_leg < LEG_COUNT) {
@@ -711,40 +746,35 @@ void TeaRaceApp::drawTitle() {
     button(n, m_leg >= 0 && m_leg < LEG_COUNT ? "New voyage" : "Set sail", ButtonStyle::PRIMARY, FONT_BODY);
     addButton(n, A_NEW);
     Rect h(MARGIN, y + 92, W - 2 * MARGIN, 64);
-    button(h, "How to play", ButtonStyle::SECONDARY, FONT_SMALL + 2);
+    button(h, "How to play", ButtonStyle::SECONDARY, GAME_SMALL + 2);
     addButton(h, A_HELP);
 }
 
 void TeaRaceApp::drawHelp() {
-    header("How to play", true);
-    int y = HEADER_H + 24;
-    const char* para[] = {
-        "Race three rival clippers from Foochow to London over nine legs.",
-        "Each leg, read the glass (the barometer). It is right about seven times in ten.",
-        "Then choose your sail plan. Cracking on is fastest but risks damage and tires the crew. "
-        "Shortening sail is safe but slow. The odds are shown on every button.",
-        "Damage slows the ship and wets the cargo. A tired crew makes more mistakes.",
-        "You can put into Anjer and St Helena to repair, at a cost in days and money.",
-        "First home sells the tea at the premium. Fine first-flush pays most but suffers if you are late; "
-        "congou pays less but is steadier.",
+    header("How to play", true, "Done");
+    textCentered("Page " + std::to_string(m_helpPage + 1) + " of 3",
+                 W / 2, HEADER_H + 18, FONT_BODY - 2, DARK);
+    const char* pages[3] = {
+        "Race three rival clippers from Foochow to London over nine legs. Each leg, read the glass (barometer): its forecast is right about seven times in ten. Choose a sail plan; every button shows expected days, damage risk and crew effect.",
+        "Cracking on is fast but risky and tires the crew. Shortening sail is safe but slow. Damage slows the ship and wet cargo loses value. You can put into Anjer or St Helena to repair, at a cost in days and money.",
+        "First home sells the tea at a premium. Fine first-flush pays most but loses value if late; congou pays less but is steadier. After each leg, read the outcome and continue. Your best voyage is saved."
     };
-    for (const char* p : para) y = textWrapped(p, MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 1, INK, 0, 6) + 18;
-    Rect b(MARGIN, H - 110, W - 2 * MARGIN, 72);
-    button(b, "Back", ButtonStyle::SECONDARY, FONT_BODY);
-    addButton(b, A_BACK_TITLE);
+    textWrapped(pages[m_helpPage], MARGIN + 18, HEADER_H + 92, W - 2 * MARGIN - 36,
+                FONT_BODY, INK, 0, 14);
+    drawPageFooter(m_helpPage, 3);
 }
 
 void TeaRaceApp::drawCargo() {
     header("Choose your cargo", true);
     textWrapped("The hongs are offering two grades this season. You can only carry one.",
-                MARGIN, HEADER_H + 24, W - 2 * MARGIN, FONT_SMALL + 1, INK, 0, 6);
+                MARGIN, HEADER_H + 24, W - 2 * MARGIN, GAME_SMALL + 1, INK, 0, 6);
     Rect fine(MARGIN, HEADER_H + 110, W - 2 * MARGIN, 250);
     Rect congou(MARGIN, HEADER_H + 390, W - 2 * MARGIN, 250);
     auto card = [](const Rect& r, const char* title, const char* body, const char* odds) {
         strokeRoundRect(r.x, r.y, r.w, r.h, 18, 2, BLACK);
         text(title, r.x + 24, r.y + 24, FONT_TITLE - 4, BLACK, true);
-        textWrapped(body, r.x + 24, r.y + 76, r.w - 48, FONT_SMALL, INK, 4, 6);
-        text(odds, r.x + 24, r.y + r.h - 46, FONT_CAPTION, DARK, true);
+        textWrapped(body, r.x + 24, r.y + 76, r.w - 48, GAME_SMALL, INK, 3, 6);
+        text(odds, r.x + 24, r.y + r.h - 46, GAME_CAPTION, DARK, true);
     };
     card(fine, "Fine first-flush", "400 chests of the season's best leaf. London pays a fortune for the first cargo home, "
                                    "but the price falls away fast if you are beaten.",
@@ -760,15 +790,15 @@ void TeaRaceApp::drawLeg() {
     const LegInfo& leg = kLegs[m_leg];
     header(leg.name, true);
     int y = HEADER_H + 10;
-    text("Leg " + std::to_string(m_leg + 1) + " of 9", MARGIN, y, FONT_SMALL, DARK, true);
-    textRight("Day " + std::to_string((int)m_day) + (m_money ? "   " + money(m_money) : ""), W - MARGIN, y, FONT_SMALL, DARK, true);
+    text("Leg " + std::to_string(m_leg + 1) + " of 9", MARGIN, y, GAME_SMALL, DARK, true);
+    textRight("Day " + std::to_string((int)m_day) + (m_money ? "   " + money(m_money) : ""), W - MARGIN, y, GAME_SMALL, DARK, true);
     // Voyage progress with a little ship.
     int barY = y + 66;
     float frac = (float)m_leg / LEG_COUNT;
     progressBar(MARGIN, barY, W - 2 * MARGIN, 6, frac);
     int sx = MARGIN + (int)((W - 2 * MARGIN - 34) * frac);
     icon(ICON_SHIP, sx, barY - 32, 30);
-    textWrapped(leg.intro, MARGIN, barY + 16, W - 2 * MARGIN, FONT_CAPTION + 1, DARK, 2, 4);
+    textWrapped(leg.intro, MARGIN, barY + 16, W - 2 * MARGIN, GAME_CAPTION + 1, DARK, 2, 4);
 
     drawStandings(HEADER_H + 136);
     drawShipStatus(HEADER_H + 300);
@@ -777,8 +807,8 @@ void TeaRaceApp::drawLeg() {
     int gy = HEADER_H + 432;
     Rect g(MARGIN, gy, W - 2 * MARGIN, 110);
     fillRoundRect(g.x, g.y, g.w, g.h, 14, PALE);
-    text("THE GLASS", g.x + 18, g.y + 12, FONT_CAPTION, DARK, true);
-    textWrapped(kForecast[m_forecast], g.x + 18, g.y + 40, g.w - 36, FONT_SMALL + 1, BLACK, 2, 4);
+    text("THE GLASS", g.x + 18, g.y + 12, GAME_CAPTION, DARK, true);
+    textWrapped(kForecast[m_forecast], g.x + 18, g.y + 40, g.w - 36, GAME_SMALL + 1, BLACK, 2, 4);
 
     // Sail plans
     int by = gy + 118;
@@ -800,7 +830,7 @@ void TeaRaceApp::drawOutcome() {
     int y = HEADER_H + 30;
     text(m_outTitle, MARGIN, y, FONT_TITLE + 6, BLACK, true);
     y += 70;
-    for (const std::string& l : m_outLines) y = textWrapped(l, MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 2, INK, 3, 6) + 12;
+    for (const std::string& l : m_outLines) y = textWrapped(l, MARGIN, y, W - 2 * MARGIN, GAME_SMALL + 2, INK, 3, 6) + 12;
     int standY = std::max(y + 10, H - 470);
     drawStandings(standY);
     drawShipStatus(standY + 166);
@@ -925,13 +955,13 @@ void TeaRaceApp::drawResult() {
     static const char* kHeadline[4] = {"First home!", "Second home", "Third home", "Last home"};
     text(kHeadline[rank - 1], MARGIN, y, FONT_TITLE + 8, BLACK, true);
     y += 66;
-    text("Docked at Gravesend on day " + std::to_string((int)(m_day + 0.5f)), MARGIN, y, FONT_SMALL + 1, DARK);
+    text("Docked at Gravesend on day " + std::to_string((int)(m_day + 0.5f)), MARGIN, y, GAME_SMALL + 1, DARK);
     drawStandings(y + 50);
     y += 50 + 30 + 4 * 32 + 20;
-    sectionLabel(y, "The owners' account");
+    gameSectionLabel(y, "The owners' account");
     y += 34;
     for (const std::string& l : breakdown) {
-        y = textWrapped(l, MARGIN, y, W - 2 * MARGIN, FONT_SMALL, INK, 2, 4) + 6;
+        y = textWrapped(l, MARGIN, y, W - 2 * MARGIN, GAME_SMALL, INK, 2, 4) + 6;
     }
     hRule(y + 4, BLACK, MARGIN, W - MARGIN, 2);
     text("Total", MARGIN, y + 16, FONT_BODY + 4, BLACK, true);
@@ -943,8 +973,8 @@ void TeaRaceApp::drawResult() {
                        : value >= 2200 ? "The owners are disappointed."
                                        : "The insurers would like a word.";
     textWrapped(rating, MARGIN, y, W - 2 * MARGIN, FONT_BODY - 2, BLACK, 2, 4);
-    if (value >= m_best) textRight("New best!", W - MARGIN, y + 40, FONT_SMALL, BLACK, true);
-    else textRight("Best " + money(m_best), W - MARGIN, y + 40, FONT_SMALL, DARK);
+    if (value >= m_best) textRight("New best!", W - MARGIN, y + 40, GAME_SMALL, BLACK, true);
+    else textRight("Best " + money(m_best), W - MARGIN, y + 40, GAME_SMALL, DARK);
 
     Rect again(MARGIN, H - 100, (W - 2 * MARGIN - 16) / 2, 72);
     Rect done(again.x + again.w + 16, H - 100, again.w, 72);

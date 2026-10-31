@@ -5,259 +5,367 @@
 #endif
 #include <miniz.h>
 #include <tinyxml2.h>
-#include <iostream>
-#include <cstdio>
+#include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <sstream>
 
 using namespace tinyxml2;
 
-EpubParser::EpubParser() {
+namespace {
+
+void* epubAllocate(size_t size) {
+#ifndef NATIVE_TESTING
+    void* buffer = ps_malloc(size);
+    if (buffer) return buffer;
+#endif
+    return malloc(size);
 }
+
+std::string localName(const char* name) {
+    if (!name) return "";
+    const char* colon = strrchr(name, ':');
+    return colon ? colon + 1 : name;
+}
+
+XMLElement* child(XMLElement* parent, const char* name) {
+    for (XMLElement* el = parent ? parent->FirstChildElement() : nullptr;
+         el; el = el->NextSiblingElement()) {
+        if (localName(el->Name()) == name) return el;
+    }
+    return nullptr;
+}
+
+bool hasToken(const char* value, const char* token) {
+    std::istringstream stream(value ? value : "");
+    std::string word;
+    while (stream >> word) {
+        if (word == token) return true;
+    }
+    return false;
+}
+
+std::string elementText(const XMLElement* element) {
+    std::string text;
+    for (const XMLNode* node = element ? element->FirstChild() : nullptr;
+         node; node = node->NextSibling()) {
+        if (node->ToText()) text += node->Value();
+        else if (node->ToElement()) text += elementText(node->ToElement());
+    }
+    const size_t start = text.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "";
+    return text.substr(start, text.find_last_not_of(" \t\r\n") - start + 1);
+}
+
+int hexDigit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+std::string decodePath(const std::string& path) {
+    std::string decoded;
+    decoded.reserve(path.size());
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (path[i] == '%' && i + 2 < path.size()) {
+            const int hi = hexDigit(path[i + 1]);
+            const int lo = hexDigit(path[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                decoded.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        decoded.push_back(path[i]);
+    }
+    return decoded;
+}
+
+std::string normalizePath(const std::string& base, const std::string& href) {
+    std::string relative = href.substr(0, href.find_first_of("?#"));
+    relative = decodePath(relative);
+    std::string combined;
+    if (!relative.empty() && relative[0] == '/') {
+        combined = relative.substr(1);
+    } else {
+        combined = base + relative;
+    }
+
+    std::vector<std::string> components;
+    std::istringstream parts(combined);
+    std::string component;
+    while (std::getline(parts, component, '/')) {
+        if (component.empty() || component == ".") continue;
+        if (component == "..") {
+            if (!components.empty()) components.pop_back();
+        } else {
+            components.push_back(component);
+        }
+    }
+
+    std::string result;
+    for (const auto& part : components) {
+        if (!result.empty()) result += '/';
+        result += part;
+    }
+    return result;
+}
+
+std::string dirname(const std::string& path) {
+    const size_t slash = path.find_last_of('/');
+    return slash == std::string::npos ? "" : path.substr(0, slash + 1);
+}
+
+std::string basename(const std::string& path) {
+    const size_t slash = path.find_last_of('/');
+    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    const size_t dot = name.find_last_of('.');
+    return dot == std::string::npos ? name : name.substr(0, dot);
+}
+
+} // namespace
+
+EpubParser::EpubParser() = default;
 
 EpubParser::~EpubParser() {
     close();
 }
 
 bool EpubParser::open(const std::string& filepath) {
+    close();
     m_filepath = AppStorage::toVfsPath(filepath);
-    m_manifest.clear();
-    m_spine.clear();
-    m_opfPath.clear();
-    m_opfDir.clear();
-
-    if (!parseContainer()) {
+    mz_zip_archive* archive = new mz_zip_archive{};
+    if (!mz_zip_reader_init_file(archive, m_filepath.c_str(), 0)) {
+        delete archive;
+        close();
         return false;
     }
-
-    if (!parseOpf()) {
+    m_archive = archive;
+    if (!parseContainer() || !parseOpf()) {
+        close();
         return false;
     }
-
     return true;
 }
 
 void EpubParser::close() {
+    if (m_archive) {
+        mz_zip_reader_end(static_cast<mz_zip_archive*>(m_archive));
+        delete static_cast<mz_zip_archive*>(m_archive);
+        m_archive = nullptr;
+    }
     m_filepath.clear();
     m_manifest.clear();
     m_spine.clear();
+    m_chapterTitles.clear();
     m_opfPath.clear();
     m_opfDir.clear();
+    m_coverPath.clear();
+    m_title.clear();
+    m_author.clear();
 }
 
 std::vector<std::string> EpubParser::getChapterList() const {
     return m_spine;
 }
 
+std::vector<std::string> EpubParser::getChapterTitles() const {
+    return m_chapterTitles;
+}
+
 char* EpubParser::getFileContent(const std::string& internalPath, size_t& outSize) {
     outSize = 0;
-    printf("EPUB DEBUG: getFileContent('%s')\n", internalPath.c_str());
-    mz_zip_archive zip_archive;
-    memset(&zip_archive, 0, sizeof(zip_archive));
-    if (!mz_zip_reader_init_file(&zip_archive, m_filepath.c_str(), 0)) {
-        printf("EPUB DEBUG: mz_zip_reader_init_file failed for '%s'\n", m_filepath.c_str());
-        std::cerr << "Failed to open zip file: " << m_filepath << std::endl;
+    if (!m_archive) return nullptr;
+
+    mz_zip_archive& archive = *static_cast<mz_zip_archive*>(m_archive);
+    const int located = mz_zip_reader_locate_file(&archive, internalPath.c_str(), nullptr, 0);
+    if (located < 0) return nullptr;
+
+    const mz_uint index = static_cast<mz_uint>(located);
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(&archive, index, &stat) ||
+        stat.m_uncomp_size > 4 * 1024 * 1024 ||
+        stat.m_comp_size > 4 * 1024 * 1024) {
         return nullptr;
     }
 
-    void* p = nullptr;
-    int located = mz_zip_reader_locate_file(&zip_archive, internalPath.c_str(), nullptr, 0);
-    mz_uint targetIndex = (located >= 0) ? static_cast<mz_uint>(located) : 0xFFFFFFFF;
-    mz_zip_archive_file_stat stat;
-    if (targetIndex == 0xFFFFFFFF) {
-        printf("EPUB DEBUG: locate failed for '%s'\n", internalPath.c_str());
-    }
-    if (targetIndex != 0xFFFFFFFF && mz_zip_reader_file_stat(&zip_archive, targetIndex, &stat)) {
-        printf("MINIZ DEBUG: '%s' uncomp=%llu comp=%llu\n",
-               internalPath.c_str(),
-               stat.m_uncomp_size,
-               stat.m_comp_size);
-    }
+    const size_t outputSize = static_cast<size_t>(stat.m_uncomp_size);
+    void* output = epubAllocate(outputSize ? outputSize : 1);
+    if (!output) return nullptr;
 
-    if (targetIndex != 0xFFFFFFFF) {
-        if (stat.m_method == 0) {
-            outSize = static_cast<size_t>(stat.m_uncomp_size);
-            p = malloc(outSize ? outSize : 1);
-            if (p) {
-                bool ok = mz_zip_reader_extract_to_mem(&zip_archive, targetIndex, p, outSize, 0);
-                if (!ok) {
-                    mz_zip_error err = mz_zip_get_last_error(&zip_archive);
-                    printf("MINIZ DEBUG: store extract failed out=%u error=%d (%s)\n",
-                           static_cast<unsigned>(outSize),
-                           (int)err,
-                           mz_zip_get_error_string(err));
-                    free(p);
-                    p = nullptr;
-                    outSize = 0;
-                }
-            }
-        } else if (stat.m_method == MZ_DEFLATED) {
-            size_t compSize = 0;
-            void* compBuf = mz_zip_reader_extract_to_heap(&zip_archive, targetIndex, &compSize, MZ_ZIP_FLAG_COMPRESSED_DATA);
-            if (compBuf) {
-                outSize = static_cast<size_t>(stat.m_uncomp_size);
-                p = malloc(outSize ? outSize : 1);
-                if (p) {
-                    size_t result = tinfl_decompress_mem_to_mem(p, outSize, compBuf, compSize, 0);
-                    if (result == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) {
-                        printf("MINIZ DEBUG: tinfl_decompress_mem_to_mem failed comp=%u out=%u\n",
-                               static_cast<unsigned>(compSize),
-                               static_cast<unsigned>(outSize));
-                        free(p);
-                        p = nullptr;
-                        outSize = 0;
-                    }
-                } else {
-                    printf("MINIZ DEBUG: output alloc failed out=%u\n", static_cast<unsigned>(outSize));
-                    outSize = 0;
-                }
-                mz_free(compBuf);
-            } else {
-                mz_zip_error err = mz_zip_get_last_error(&zip_archive);
-                printf("MINIZ DEBUG: comp extract failed error=%d (%s)\n",
-                       (int)err,
-                       mz_zip_get_error_string(err));
-            }
-        }
-
-        if (!p) {
-            outSize = 0;
+    bool extracted = false;
+    if (stat.m_method == 0) {
+        extracted = mz_zip_reader_extract_to_mem(&archive, index, output, outputSize, 0);
+    } else if (stat.m_method == MZ_DEFLATED) {
+        size_t compressedSize = 0;
+        void* compressed = mz_zip_reader_extract_to_heap(
+            &archive, index, &compressedSize, MZ_ZIP_FLAG_COMPRESSED_DATA);
+        if (compressed) {
+            const size_t result = tinfl_decompress_mem_to_mem(
+                output, outputSize, compressed, compressedSize, 0);
+            extracted = result == outputSize;
+            mz_free(compressed);
         }
     }
-    
-    if (!p) {
-        std::cerr << "Failed to extract file: " << internalPath << std::endl;
-        outSize = 0;
-    }
 
-    mz_zip_reader_end(&zip_archive);
-    return static_cast<char*>(p);
+    if (!extracted) {
+        free(output);
+        return nullptr;
+    }
+    outSize = outputSize;
+    return static_cast<char*>(output);
 }
 
 bool EpubParser::parseContainer() {
-    printf("EPUB DEBUG: parseContainer start\n");
     size_t size = 0;
-    char* containerBuffer = getFileContent("META-INF/container.xml", size);
-    if (!containerBuffer) {
-        printf("EPUB DEBUG: parseContainer extraction failed\n");
-        std::cerr << "META-INF/container.xml not found or empty." << std::endl;
-        return false;
-    }
-    std::string containerContent(containerBuffer, size);
-    mz_free(containerBuffer);
+    char* buffer = getFileContent("META-INF/container.xml", size);
+    if (!buffer) return false;
 
-    XMLDocument* doc = new XMLDocument();
-    XMLError err = doc->Parse(containerContent.c_str(), containerContent.size());
-    if (err != XML_SUCCESS) {
-        printf("EPUB DEBUG: parseContainer XML parse failed\n");
-        std::cerr << "Failed to parse container.xml" << std::endl;
-        delete doc;
-        return false;
-    }
+    XMLDocument doc;
+    const XMLError error = doc.Parse(buffer, size);
+    free(buffer);
+    if (error != XML_SUCCESS) return false;
 
-    XMLElement* container = doc->FirstChildElement("container");
-    if (!container) { delete doc; return false; }
-
-    XMLElement* rootfiles = container->FirstChildElement("rootfiles");
-    if (!rootfiles) { delete doc; return false; }
-
-    XMLElement* rootfile = rootfiles->FirstChildElement("rootfile");
-    while (rootfile) {
+    XMLElement* container = doc.RootElement();
+    XMLElement* rootfiles = child(container, "rootfiles");
+    for (XMLElement* rootfile = child(rootfiles, "rootfile"); rootfile;
+         rootfile = rootfile->NextSiblingElement()) {
         const char* mediaType = rootfile->Attribute("media-type");
-        if (mediaType && std::string(mediaType) == "application/oebps-package+xml") {
-            const char* fullPath = rootfile->Attribute("full-path");
-            if (fullPath) {
-                m_opfPath = fullPath;
-                size_t slashPos = m_opfPath.find_last_of('/');
-                if (slashPos != std::string::npos) {
-                    m_opfDir = m_opfPath.substr(0, slashPos + 1);
-                } else {
-                    m_opfDir = "";
-                }
-                delete doc;
-                printf("EPUB DEBUG: parseContainer ok, OPF='%s'\n", m_opfPath.c_str());
-                return true;
-            }
+        const char* fullPath = rootfile->Attribute("full-path");
+        if (mediaType && fullPath &&
+            std::string(mediaType) == "application/oebps-package+xml") {
+            m_opfPath = normalizePath("", fullPath);
+            m_opfDir = dirname(m_opfPath);
+            return !m_opfPath.empty();
         }
-        rootfile = rootfile->NextSiblingElement("rootfile");
     }
-
-    std::cerr << "No valid OPF rootfile found in container.xml." << std::endl;
-    printf("EPUB DEBUG: parseContainer no rootfile\n");
-    delete doc;
     return false;
 }
 
 bool EpubParser::parseOpf() {
-    printf("EPUB DEBUG: parseOpf start '%s'\n", m_opfPath.c_str());
     if (m_opfPath.empty()) return false;
 
     size_t size = 0;
-    char* opfBuffer = getFileContent(m_opfPath, size);
-    if (!opfBuffer) {
-        printf("EPUB DEBUG: parseOpf extraction failed\n");
-        std::cerr << "OPF file not found: " << m_opfPath << std::endl;
-        return false;
-    }
-    std::string opfContent(opfBuffer, size);
-    mz_free(opfBuffer);
+    char* buffer = getFileContent(m_opfPath, size);
+    if (!buffer) return false;
 
-    XMLDocument* doc = new XMLDocument();
-    XMLError err = doc->Parse(opfContent.c_str(), opfContent.size());
-    if (err != XML_SUCCESS) {
-        printf("EPUB DEBUG: parseOpf XML parse failed\n");
-        std::cerr << "Failed to parse OPF file." << std::endl;
-        delete doc;
-        return false;
-    }
+    XMLDocument doc;
+    const XMLError error = doc.Parse(buffer, size);
+    free(buffer);
+    if (error != XML_SUCCESS) return false;
 
-    XMLElement* package = doc->FirstChildElement("package");
-    if (!package) { delete doc; return false; }
+    XMLElement* package = doc.RootElement();
+    if (!package) return false;
 
-    XMLElement* manifest = package->FirstChildElement("manifest");
-    if (manifest) {
-        XMLElement* item = manifest->FirstChildElement("item");
-        while (item) {
-            const char* id = item->Attribute("id");
-            const char* href = item->Attribute("href");
-            if (id && href) {
-                // Resolve href relative to OPF directory
-                m_manifest[id] = m_opfDir + href;
-            }
-            item = item->NextSiblingElement("item");
+    std::string coverId;
+    std::string navPath;
+    std::string ncxPath;
+    XMLElement* metadata = child(package, "metadata");
+    for (XMLElement* el = metadata ? metadata->FirstChildElement() : nullptr;
+         el; el = el->NextSiblingElement()) {
+        const std::string name = localName(el->Name());
+        if (name == "title" && m_title.empty()) m_title = elementText(el);
+        if (name == "creator" && m_author.empty()) m_author = elementText(el);
+        if (name == "meta" && el->Attribute("name", "cover") && el->Attribute("content")) {
+            coverId = el->Attribute("content");
         }
-    } else {
-        std::cerr << "No manifest found in OPF." << std::endl;
-        delete doc;
-        return false;
     }
 
-    XMLElement* spine = package->FirstChildElement("spine");
-    if (spine) {
-        XMLElement* itemref = spine->FirstChildElement("itemref");
-        while (itemref) {
-            const char* idref = itemref->Attribute("idref");
-            if (idref) {
-                auto it = m_manifest.find(idref);
-                if (it != m_manifest.end()) {
-                    m_spine.push_back(it->second);
+    XMLElement* manifest = child(package, "manifest");
+    if (!manifest) return false;
+    for (XMLElement* item = child(manifest, "item"); item;
+         item = item->NextSiblingElement()) {
+        const char* id = item->Attribute("id");
+        const char* href = item->Attribute("href");
+        if (!id || !href) continue;
+
+        const std::string resolved = resolvePath(m_opfDir, href);
+        m_manifest[id] = resolved;
+        if (hasToken(item->Attribute("properties"), "cover-image")) m_coverPath = resolved;
+        if (hasToken(item->Attribute("properties"), "nav")) navPath = resolved;
+        if (item->Attribute("media-type", "application/x-dtbncx+xml")) ncxPath = resolved;
+    }
+    if (m_coverPath.empty() && m_manifest.count(coverId)) m_coverPath = m_manifest[coverId];
+
+    XMLElement* spine = child(package, "spine");
+    if (!spine) return false;
+    for (XMLElement* itemref = child(spine, "itemref"); itemref;
+         itemref = itemref->NextSiblingElement()) {
+        const char* idref = itemref->Attribute("idref");
+        if (!idref) continue;
+        const auto item = m_manifest.find(idref);
+        if (item != m_manifest.end()) m_spine.push_back(item->second);
+    }
+
+    if (m_coverPath.empty()) {
+        for (const auto& item : m_manifest) {
+            std::string lower = item.second;
+            for (char& c : lower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+            if (lower.find("cover") != std::string::npos &&
+                (lower.find(".jpg") != std::string::npos ||
+                 lower.find(".jpeg") != std::string::npos ||
+                 lower.find(".png") != std::string::npos)) {
+                m_coverPath = item.second;
+                break;
+            }
+        }
+    }
+
+    std::map<std::string, std::string> labels;
+    auto readNavigation = [this, &labels](const std::string& path, bool ncx) {
+        if (path.empty()) return;
+        size_t length = 0;
+        char* contents = getFileContent(path, length);
+        if (!contents) return;
+
+        XMLDocument nav;
+        const XMLError parsed = nav.Parse(contents, length);
+        free(contents);
+        if (parsed != XML_SUCCESS) return;
+
+        std::function<void(XMLElement*, bool)> walk =
+            [&](XMLElement* element, bool inToc) {
+                for (XMLElement* el = element; el; el = el->NextSiblingElement()) {
+                    bool toc = inToc;
+                    if (localName(el->Name()) == "nav") {
+                        toc = hasToken(el->Attribute("epub:type"), "toc") ||
+                              hasToken(el->Attribute("role"), "doc-toc");
+                    }
+
+                    const char* href = nullptr;
+                    std::string label;
+                    if (!ncx && toc && localName(el->Name()) == "a") {
+                        href = el->Attribute("href");
+                        label = elementText(el);
+                    } else if (ncx && localName(el->Name()) == "navPoint") {
+                        XMLElement* content = child(el, "content");
+                        XMLElement* labelElement = child(child(el, "navLabel"), "text");
+                        href = content ? content->Attribute("src") : nullptr;
+                        label = elementText(labelElement);
+                    }
+                    if (href && !label.empty()) {
+                        labels[resolvePath(dirname(path), href)] = label;
+                    }
+                    walk(el->FirstChildElement(), toc);
                 }
-            }
-            itemref = itemref->NextSiblingElement("itemref");
-        }
-    } else {
-        std::cerr << "No spine found in OPF." << std::endl;
-        delete doc;
-        return false;
-    }
+            };
+        walk(nav.RootElement(), false);
+    };
 
-    delete doc;
-    printf("EPUB DEBUG: parseOpf ok chapters=%u\n", static_cast<unsigned>(m_spine.size()));
-    return true;
+    readNavigation(navPath, false);
+    if (labels.empty()) readNavigation(ncxPath, true);
+
+    m_chapterTitles.reserve(m_spine.size());
+    for (const auto& chapter : m_spine) {
+        const auto title = labels.find(chapter);
+        m_chapterTitles.push_back(title == labels.end() ? basename(chapter) : title->second);
+    }
+    return !m_spine.empty();
 }
 
 std::string EpubParser::resolvePath(const std::string& basePath, const std::string& relPath) {
-    // A simple path resolver. basePath is expected to be a directory (ending with /)
-    // For a more robust solution, we'd handle "../" and "./".
-    // Here we just append, assuming relPath is relative to basePath without traversing up.
-    return basePath + relPath;
+    return normalizePath(basePath, relPath);
 }

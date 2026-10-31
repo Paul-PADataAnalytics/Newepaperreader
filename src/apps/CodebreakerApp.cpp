@@ -15,6 +15,22 @@ extern uint8_t* framebuffer;
 
 namespace {
 using namespace UI;
+constexpr float GAME_SMALL = FONT_BODY - 2;
+constexpr float GAME_CAPTION = FONT_BODY - 2;
+
+void gameSectionLabel(int y, const std::string& label) {
+    text(label, MARGIN, y, FONT_BODY - 2, DARK, true);
+}
+
+void drawPageFooter(int page, int pages) {
+    fillRect(0, H - FOOTER_H, W, 2, BLACK);
+    Rect previous(MARGIN, H - FOOTER_H + 12, 118, 64);
+    Rect next(W - MARGIN - 118, H - FOOTER_H + 12, 118, 64);
+    button(previous, "Previous", ButtonStyle::SECONDARY, FONT_BODY - 2, page > 0);
+    button(next, "Next", ButtonStyle::SECONDARY, FONT_BODY - 2, page + 1 < pages);
+    textCentered("Page " + std::to_string(page + 1) + " of " + std::to_string(pages),
+                 W / 2, H - FOOTER_H + 27, FONT_BODY - 2, DARK);
+}
 
 // ---- Difficulty -------------------------------------------------------------
 
@@ -180,10 +196,10 @@ void optionButton(const Rect& r, const std::string& title, const std::string& de
     uint8_t fg = primary ? WHITE : BLACK;
     uint8_t sub = primary ? LIGHT : DARK;
     int lh1 = lineHeight(FONT_BODY);
-    int lh2 = detail.empty() ? 0 : lineHeight(FONT_CAPTION) + 6;
+    int lh2 = detail.empty() ? 0 : lineHeight(GAME_CAPTION) + 6;
     int y = r.y + (r.h - lh1 - lh2) / 2;
     text(ellipsize(title, r.w - 40, FONT_BODY, true), r.x + 22, y, FONT_BODY, fg, true);
-    if (!detail.empty()) text(ellipsize(detail, r.w - 40, FONT_CAPTION), r.x + 22, y + lh1 + 6, FONT_CAPTION, sub);
+    if (!detail.empty()) text(ellipsize(detail, r.w - 40, GAME_CAPTION), r.x + 22, y + lh1 + 6, GAME_CAPTION, sub);
 }
 
 // Enciphers the intercept for display: letters and digits only, in the
@@ -470,6 +486,25 @@ void CodebreakerApp::saveStats() {
 void CodebreakerApp::addButton(const Rect& r, int action) { m_buttons.push_back({r, action}); }
 
 void CodebreakerApp::handleTouch(int x, int y) {
+    if (m_screen == HELP) {
+        if (UI::hitHeaderAction(x, y, "Done")) {
+            m_screen = m_helpReturn;
+            render();
+            return;
+        }
+        if (x >= UI::MARGIN && x < UI::MARGIN + 118 && y >= UI::H - UI::FOOTER_H + 12 &&
+            y < UI::H - 12 && m_helpPage > 0) {
+            --m_helpPage;
+            render();
+            return;
+        }
+        if (x >= UI::W - UI::MARGIN - 118 && x < UI::W - UI::MARGIN &&
+            y >= UI::H - UI::FOOTER_H + 12 && y < UI::H - 12 && m_helpPage < 1) {
+            ++m_helpPage;
+            render();
+            return;
+        }
+    }
     int action = A_NONE;
     for (const Button& b : m_buttons) {
         if (b.rect.contains(x, y)) {
@@ -499,6 +534,7 @@ void CodebreakerApp::handleTouch(int x, int y) {
             break;
         case A_HELP:
             m_helpReturn = m_screen;
+            m_helpPage = 0;
             m_screen = HELP;
             render();
             break;
@@ -578,13 +614,13 @@ void CodebreakerApp::drawTitle() {
     y = textWrapped("The Admiralty, London, 1917. In Room 40 a handful of codebreakers read the enemy's "
                     "wireless signals. A new cipher key came into force at midnight. Recover it before "
                     "the attack date, or the Fleet sails blind.",
-                    MARGIN + 4, y, W - 2 * MARGIN - 8, FONT_SMALL + 2, INK, 0, 7, true);
+                    MARGIN + 4, y, W - 2 * MARGIN - 8, GAME_SMALL + 2, INK, 0, 7, true);
 
     y += 16;
-    sectionLabel(y, "Service record");
+    gameSectionLabel(y, "Service record");
     y += 28;
     if (m_played == 0) {
-        text("No keys attempted yet.", MARGIN, y + 8, FONT_SMALL + 1, DARK);
+        text("No keys attempted yet.", MARGIN, y + 8, GAME_SMALL + 1, DARK);
     } else {
         const int values[4] = {m_played, m_wins, m_streak, m_bestStreak};
         const char* labels[4] = {"Played", "Won", "Streak", "Best streak"};
@@ -592,7 +628,7 @@ void CodebreakerApp::drawTitle() {
         for (int i = 0; i < 4; i++) {
             int x = MARGIN + i * cw;
             text(std::to_string(values[i]), x, y, FONT_TITLE, BLACK, true);
-            text(labels[i], x, y + lineHeight(FONT_TITLE) + 2, FONT_CAPTION, DARK);
+            text(ellipsize(labels[i], cw - 8, GAME_CAPTION), x, y + lineHeight(FONT_TITLE) + 2, GAME_CAPTION, DARK);
         }
     }
 
@@ -605,7 +641,7 @@ void CodebreakerApp::drawTitle() {
     }
 
     int by = 588;
-    sectionLabel(by - 30, inProgress ? "New key (abandons the current one)" : "Choose your post");
+    gameSectionLabel(by - 30, inProgress ? "New key (abandons the current one)" : "Choose your post");
     for (int i = 0; i < LEVEL_COUNT; i++) {
         Rect r(MARGIN, by + i * 96, W - 2 * MARGIN, 84);
         std::string detail = kLevels[i].detail;
@@ -614,46 +650,33 @@ void CodebreakerApp::drawTitle() {
         addButton(r, A_LEVEL_0 + i);
     }
     Rect h(MARGIN, H - 24 - 60, W - 2 * MARGIN, 60);
-    button(h, "How to play", ButtonStyle::SECONDARY, FONT_SMALL + 2);
+    button(h, "How to play", ButtonStyle::SECONDARY, GAME_SMALL + 2);
     addButton(h, A_HELP);
 }
 
 void CodebreakerApp::drawHelp() {
-    header("How to play", true);
-    int y = HEADER_H + 22;
-    const int tw = W - 2 * MARGIN;
-    const float fs = FONT_SMALL + 1;
-    y = textWrapped("Room 40 has intercepted an enemy signal, enciphered with a secret key: a short row of "
-                    "cipher symbols, such as C A F E.",
-                    MARGIN, y, tw, fs, INK, 0, 6) + 14;
-    y = textWrapped("Each day, send the cryptanalysts a trial key. They report how close it came:",
-                    MARGIN, y, tw, fs, INK, 0, 6) + 14;
-
-    // Worked example: key C A F E, trial A B C E -> one placed (E), two
-    // elsewhere (A, C).
-    const uint8_t ex[4] = {0, 1, 2, 4};
-    for (int i = 0; i < 4; i++) tile(Rect(MARGIN + i * 58, y, 50, 50), ex[i], TILE_NORMAL, 28);
-    feedback(MARGIN + 4 * 58 + 24, y + 25, 1, 2, 4, 30, 10);
-    y += 66;
-    exactDot(MARGIN + 10, y + 13, 10);
-    y = textWrapped("Solid: a symbol in the right place (here E).", MARGIN + 34, y, tw - 34, fs, INK, 0, 6) + 6;
-    nearDot(MARGIN + 10, y + 13, 10);
-    y = textWrapped("Hollow: a symbol in the key, but in a different place (A and C).", MARGIN + 34, y, tw - 34,
-                    fs, INK, 0, 6) + 6;
-    y = textWrapped("The dots never say which symbols they mean. Use each report to narrow down the key.",
-                    MARGIN, y + 8, tw, fs, INK, 0, 6) + 14;
-    y = textWrapped("You have ten days before the attack. Tap a slot to select it, then a symbol to fill it. "
-                    "Tap a selected slot again to empty it.",
-                    MARGIN, y, tw, fs, INK, 0, 6) + 14;
-    y = textWrapped("Recruit: 4 symbols from A\xE2\x80\x93" "F, never repeated. Analyst: 4 from A\xE2\x80\x93" "H, "
-                    "repeats possible. Room 40: 5 from A\xE2\x80\x93" "H, repeats possible.",
-                    MARGIN, y, tw, fs, INK, 0, 6) + 14;
-    textWrapped("Break the key and the intercept is read in time. Starting a new key part-way through "
-                "counts as a loss on your service record.",
-                MARGIN, y, tw, fs, INK, 0, 6);
-    Rect b(MARGIN, H - 24 - 64, W - 2 * MARGIN, 64);
-    button(b, m_helpReturn == BOARD ? "Back to the key" : "Back", ButtonStyle::SECONDARY, FONT_BODY);
-    addButton(b, A_HELP_BACK);
+    header("How to play", true, "Done");
+    textCentered("Page " + std::to_string(m_helpPage + 1) + " of 2",
+                 W / 2, HEADER_H + 18, FONT_BODY - 2, DARK);
+    if (m_helpPage == 0) {
+        int y = HEADER_H + 82;
+        const int tw = W - 2 * MARGIN;
+        y = textWrapped("Recover the secret cipher key before the attack date. Each guess costs one day; you have ten.",
+                        MARGIN, y, tw, FONT_BODY, INK, 0, 10) + 12;
+        y = textWrapped("Example: with key C A F E and guess A B C E, E is in the right place; A and C are in the key but elsewhere.",
+                        MARGIN, y, tw, FONT_BODY, INK, 0, 10) + 12;
+        const uint8_t ex[4] = {0, 1, 2, 4};
+        for (int i = 0; i < 4; i++) tile(Rect(MARGIN + i * 58, y, 50, 50), ex[i], TILE_NORMAL, 28);
+        feedback(MARGIN + 4 * 58 + 24, y + 25, 1, 2, 4, 30, 10);
+        y += 62;
+        textWrapped("Solid dots mean correct place; hollow dots mean correct symbol, different place. Feedback never identifies which symbols match.",
+                    MARGIN, y, tw, FONT_BODY, INK, 0, 10);
+    } else {
+        const char* textRules = "Tap a slot, then a symbol to fill it. Tap a selected slot again to empty it. Recruit uses four symbols A–F without repeats; Analyst uses four A–H with repeats; Room 40 uses five A–H with repeats. Break the key to decrypt the intercept. Starting a new key part-way through counts as a loss.";
+        textWrapped(textRules, MARGIN + 12, HEADER_H + 92, W - 2 * MARGIN - 24,
+                    FONT_BODY, INK, 0, 14);
+    }
+    drawPageFooter(m_helpPage, 2);
 }
 
 int CodebreakerApp::slotSize() const {
@@ -693,7 +716,7 @@ void CodebreakerApp::drawHistory() {
         bool today = d == m_guessCount;
         std::string label = "Day " + std::to_string(d + 1);
         uint8_t lc = past ? DARK : (today ? BLACK : MID);
-        text(label, MARGIN, cy - lineHeight(FONT_CAPTION) / 2, FONT_CAPTION, lc, today);
+        text(label, MARGIN, cy - lineHeight(GAME_CAPTION) / 2, GAME_CAPTION, lc, today);
         if (today) {
             // Pointer to the row being composed below.
             int tx = MARGIN + 66;
@@ -701,8 +724,8 @@ void CodebreakerApp::drawHistory() {
         }
         for (int i = 0; i < L.slots; i++) {
             Rect r(HIST_TILES_X + i * (HIST_TILE + HIST_TILE_GAP), cy - HIST_TILE / 2, HIST_TILE, HIST_TILE);
-            if (past) tile(r, m_guesses[d][i], TILE_NORMAL, 22);
-            else tile(r, EMPTY, TILE_FAINT, 22);
+            if (past) tile(r, m_guesses[d][i], TILE_NORMAL, 24);
+            else tile(r, EMPTY, TILE_FAINT, 24);
         }
         int fx = HIST_TILES_X + L.slots * (HIST_TILE + HIST_TILE_GAP) + 18;
         if (past) feedback(fx, cy, m_exact[d], m_near[d], L.slots, 24, 9);
@@ -710,25 +733,14 @@ void CodebreakerApp::drawHistory() {
         if (past) {
             std::string res;
             if (m_exact[d] == 0 && m_near[d] == 0) res = "none";
-            if (!res.empty()) textRight(res, W - MARGIN, cy - lineHeight(FONT_CAPTION) / 2, FONT_CAPTION, MID);
+            if (!res.empty()) textRight(res, W - MARGIN, cy - lineHeight(GAME_CAPTION) / 2, GAME_CAPTION, MID);
         }
         if (d < MAX_DAYS - 1) hRule(y + HIST_ROW, PALE, MARGIN, W - MARGIN);
     }
 
-    // Legend + key description.
+    // Keep the compact legend on one readable line above the input.
     int ly = LEGEND_Y;
-    int lh = lineHeight(FONT_CAPTION);
-    std::string desc = std::to_string(L.slots) + " of A\xE2\x80\x93" + std::string(1, (char)('A' + L.symbols - 1)) +
-                       (L.repeats ? ", repeats possible" : ", no repeats");
-    text(desc, MARGIN, ly, FONT_CAPTION, DARK);
-    int rx = W - MARGIN;
-    int w2 = textWidth("elsewhere", FONT_CAPTION);
-    text("elsewhere", rx - w2, ly, FONT_CAPTION, DARK);
-    nearDot(rx - w2 - 14, ly + lh / 2, 8);
-    int w1 = textWidth("placed", FONT_CAPTION);
-    int px = rx - w2 - 34 - w1;
-    text("placed", px, ly, FONT_CAPTION, DARK);
-    exactDot(px - 14, ly + lh / 2, 8);
+    text("Solid = placed    Hollow = elsewhere", MARGIN, ly, GAME_CAPTION, DARK);
 }
 
 void CodebreakerApp::drawInput(bool addHits) {
@@ -775,22 +787,22 @@ int CodebreakerApp::drawTelegram(int y, bool readInTime) {
     const Level& L = kLevels[m_level];
     int x = MARGIN + 18, w = W - 2 * MARGIN - 36;
     int top = y;
-    int lhc = lineHeight(FONT_CAPTION);
+    int lhc = lineHeight(GAME_CAPTION);
     y += 14;
-    text("WIRELESS INTERCEPT", x, y, FONT_CAPTION, BLACK, true);
+    text("WIRELESS INTERCEPT", x, y, GAME_CAPTION, BLACK, true);
     char serial[16];
     snprintf(serial, sizeof(serial), "No. %04d", 1000 + (m_message * 617 + m_secret[0] * 73 + m_secret[1] * 11) % 9000);
-    textRight(serial, x + w, y, FONT_CAPTION, DARK);
+    textRight(serial, x + w, y, GAME_CAPTION, DARK);
     y += lhc + 6;
-    text(ellipsize("From: " + std::string(m.from), w, FONT_CAPTION), x, y, FONT_CAPTION, DARK);
+    text(ellipsize("From: " + std::string(m.from), w, GAME_CAPTION), x, y, GAME_CAPTION, DARK);
     y += lhc + 2;
-    text(ellipsize("To: " + std::string(m.to), w, FONT_CAPTION), x, y, FONT_CAPTION, DARK);
+    text(ellipsize("To: " + std::string(m.to), w, GAME_CAPTION), x, y, GAME_CAPTION, DARK);
     y += lhc + 8;
-    y = textWrapped(cipherGroups(m.text, m_secret, L.slots, m_message), x, y, w, FONT_CAPTION, MID, 0, 4);
+    y = textWrapped(cipherGroups(m.text, m_secret, L.slots, m_message), x, y, w, GAME_CAPTION, MID, 0, 4);
     y += 6;
     hRule(y, LIGHT, x, x + w);
     y += 12;
-    text(readInTime ? "DECRYPT" : "READ TOO LATE", x, y, FONT_CAPTION, DARK, true);
+    text(readInTime ? "DECRYPT" : "READ TOO LATE", x, y, GAME_CAPTION, DARK, true);
     y += lhc + 8;
     uint8_t c = readInTime ? BLACK : DARK;
     const float fs = FONT_BODY - 3;
@@ -804,23 +816,21 @@ int CodebreakerApp::drawTelegram(int y, bool readInTime) {
 // The guesses made, compactly, in two columns of five days.
 void CodebreakerApp::drawWorking(int y, int bottom) {
     const Level& L = kLevels[m_level];
-    sectionLabel(y, "Your working");
-    y += 30;
     int rows = m_guessCount > 5 ? 5 : m_guessCount;
-    int rh = rows > 0 ? (bottom - y) / rows : 0;
-    if (rh > 34) rh = 34;
-    if (rh < 20) return;
-    int ts = rh - 8;
-    if (ts > 22) ts = 22;
-    if (ts < 16) ts = 16;
+    if (rows <= 0) return;
+    int rh = (bottom - (y + 34)) / rows;
+    if (rh < 38) return;
+    gameSectionLabel(y, "Your working");
+    y += 34;
+    int ts = 30;
     int colW = (W - 2 * MARGIN) / 2;
     for (int d = 0; d < m_guessCount; d++) {
         int x = MARGIN + (d / 5) * colW;
         int cy = y + (d % 5) * rh + rh / 2;
-        textRight(std::to_string(d + 1), x + 20, cy - lineHeight(FONT_CAPTION) / 2, FONT_CAPTION, DARK);
+        textRight(std::to_string(d + 1), x + 20, cy - lineHeight(GAME_CAPTION) / 2, GAME_CAPTION, DARK);
         int tx = x + 30;
         for (int i = 0; i < L.slots; i++)
-            tile(Rect(tx + i * (ts + 3), cy - ts / 2, ts, ts), m_guesses[d][i], TILE_NORMAL, 16, 1);
+            tile(Rect(tx + i * (ts + 3), cy - ts / 2, ts, ts), m_guesses[d][i], TILE_NORMAL, 24, 1);
         feedback(tx + L.slots * (ts + 3) + 6, cy, m_exact[d], m_near[d], L.slots, 16, 6);
     }
 }
@@ -837,21 +847,21 @@ void CodebreakerApp::drawResult() {
     if (m_won) {
         textRight("Day " + std::to_string(m_guessCount), W - MARGIN, y - 2, FONT_TITLE, BLACK, true);
         textRight(std::string("of ") + std::to_string(MAX_DAYS) + "  \xC2\xB7  " + L.name, W - MARGIN, y + 36,
-                  FONT_CAPTION, DARK);
+                  GAME_CAPTION, DARK);
     } else {
-        textRight("The key", W - MARGIN, y + 2, FONT_SMALL, DARK);
-        textRight("was never broken", W - MARGIN, y + 28, FONT_SMALL, DARK);
+        textRight("The key", W - MARGIN, y + 2, GAME_SMALL, DARK);
+        textRight("was never broken", W - MARGIN, y + 28, GAME_SMALL, DARK);
     }
     y += ts + 18;
 
     if (!m_won) {
-        y = textWrapped(kIntercepts[m_message].aftermath, MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 1, INK, 0, 6) + 8;
+        y = textWrapped(kIntercepts[m_message].aftermath, MARGIN, y, W - 2 * MARGIN, GAME_SMALL + 1, INK, 0, 6) + 8;
     }
     y = drawTelegram(y, m_won) + 16;
     if (m_won) {
         int r = 0;
         while (r < 4 && m_guessCount > L.rating[r]) r++;
-        y = textWrapped(kRatings[r], MARGIN, y, W - 2 * MARGIN, FONT_SMALL + 2, BLACK, 2, 4) + 12;
+        y = textWrapped(kRatings[r], MARGIN, y, W - 2 * MARGIN, GAME_SMALL + 2, BLACK, 2, 4) + 12;
     }
 
     int by = H - 24 - 72;
@@ -860,10 +870,10 @@ void CodebreakerApp::drawResult() {
 
     std::string rec = "Won " + std::to_string(m_wins) + " of " + std::to_string(m_played) + "  \xC2\xB7  streak " +
                       std::to_string(m_streak);
-    text(rec, MARGIN, sy, FONT_SMALL, DARK);
-    if (m_won && m_newBest) textRight("New best!", W - MARGIN, sy, FONT_SMALL, BLACK, true);
+    text(rec, MARGIN, sy, GAME_SMALL, DARK);
+    if (m_won && m_newBest) textRight("New best!", W - MARGIN, sy, GAME_SMALL, BLACK, true);
     else if (m_best[m_level] > 0)
-        textRight("Best " + plural(m_best[m_level], "day", "days"), W - MARGIN, sy, FONT_SMALL, DARK);
+        textRight("Best " + plural(m_best[m_level], "day", "days"), W - MARGIN, sy, GAME_SMALL, DARK);
 
     Rect again(MARGIN, by, (W - 2 * MARGIN - 16) * 3 / 5, 72);
     Rect done(again.x + again.w + 16, by, W - 2 * MARGIN - again.w - 16, 72);

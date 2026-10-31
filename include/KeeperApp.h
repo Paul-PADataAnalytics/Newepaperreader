@@ -44,6 +44,7 @@ private:
     // Tallies
     int m_safe = 0, m_wrecks = 0, m_lives = 0;
     int m_best = 0;
+    int m_helpPage = 0;
     bool m_takenOff = false;
 
     // Night resolution

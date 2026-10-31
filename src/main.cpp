@@ -44,6 +44,7 @@ TypographyEngine typography;
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 #include <driver/gpio.h>
 
 // BUTTON_1 debounce state (see checkButton1DebouncedPress()).
@@ -52,6 +53,7 @@ static uint32_t lastButton1UpTime = 0;
 
 static QueueHandle_t touchEventQueue = nullptr;
 static TaskHandle_t touchReaderTaskHandle = nullptr;
+static SemaphoreHandle_t touchReadMutex = nullptr;
 static volatile uint32_t s_touchWakeups = 0;
 static volatile uint32_t s_touchDowns = 0;
 
@@ -79,6 +81,7 @@ static void touchReaderTask(void *param) {
     (void)param;
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        xSemaphoreTake(touchReadMutex, portMAX_DELAY);
         s_touchWakeups++;
 
         int tx = -1, ty = -1;
@@ -91,6 +94,7 @@ static void touchReaderTask(void *param) {
         bool forward = down || lastDown;
         lastDown = down;
         if (!forward) {
+            xSemaphoreGive(touchReadMutex);
             vTaskDelay(pdMS_TO_TICKS(2));
             continue;
         }
@@ -102,6 +106,7 @@ static void touchReaderTask(void *param) {
         if (touchEventQueue) {
             xQueueSend(touchEventQueue, &ev, 0);
         }
+        xSemaphoreGive(touchReadMutex);
         vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
@@ -202,6 +207,11 @@ void setup() {
 
 #ifndef NATIVE_TESTING
     touchEventQueue = xQueueCreate(8, sizeof(TouchEvent));
+    touchReadMutex = xSemaphoreCreateMutex();
+    if (!touchEventQueue || !touchReadMutex) {
+        Serial.println("[power] touch queue/mutex allocation failed");
+        return;
+    }
     xTaskCreatePinnedToCore(touchReaderTask, "touchReader", 4096, nullptr, 24,
                             &touchReaderTaskHandle, 1);
 
@@ -209,6 +219,7 @@ void setup() {
     // reconfigure it here (see note in DisplayHAL::init()).
 
     // BUTTON_1 (GPIO21): dedicated sleep/wake button, polled from loop().
+    rtc_gpio_deinit(static_cast<gpio_num_t>(BUTTON_1));
     pinMode(BUTTON_1, INPUT_PULLUP);
     gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
     // The press that woke us may still be held when loop() starts; it must
@@ -488,8 +499,7 @@ static void enterLockMode(PowerManager::SleepReason reason) {
 
     // ext0 is level-triggered: don't arm it while the button is still held
     // or the chip would wake straight back up.
-    uint32_t waitStart = millis();
-    while (digitalRead(BUTTON_1) == LOW && millis() - waitStart < 3000) delay(10);
+    while (digitalRead(BUTTON_1) == LOW) delay(10);
     delay(30);
 
     rtc_gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
@@ -510,6 +520,48 @@ void requestSleepNow() {
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
+
+#ifndef NATIVE_TESTING
+static bool sleepUntilInput() {
+    if (!PowerManager::canLightSleep() || !touchReadMutex ||
+        xSemaphoreTake(touchReadMutex, 0) != pdTRUE) return false;
+    const gpio_num_t touchPin = static_cast<gpio_num_t>(TOUCH_INT);
+    const gpio_num_t buttonPin = static_cast<gpio_num_t>(BUTTON_1);
+    if (digitalRead(TOUCH_INT) == LOW || digitalRead(BUTTON_1) == LOW ||
+        uxQueueMessagesWaiting(touchEventQueue) > 0) {
+        xSemaphoreGive(touchReadMutex);
+        return false;
+    }
+    Serial.flush();
+    gpio_sleep_sel_dis(touchPin);
+    gpio_sleep_sel_dis(buttonPin);
+    gpio_intr_disable(touchPin);
+    esp_err_t err = gpio_wakeup_enable(touchPin, GPIO_INTR_LOW_LEVEL);
+    if (err == ESP_OK) err = gpio_wakeup_enable(buttonPin, GPIO_INTR_LOW_LEVEL);
+    if (err == ESP_OK) err = esp_sleep_enable_gpio_wakeup();
+    if (err == ESP_OK) err = esp_sleep_enable_timer_wakeup(1000000ULL);
+    if (err == ESP_OK) err = esp_light_sleep_start();
+    const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+    gpio_wakeup_disable(touchPin);
+    gpio_wakeup_disable(buttonPin);
+    gpio_set_intr_type(touchPin, GPIO_INTR_NEGEDGE);
+    gpio_intr_enable(touchPin);
+    xSemaphoreGive(touchReadMutex);
+    if (err != ESP_OK) {
+        Serial.printf("[power] light sleep failed: %s\n", esp_err_to_name(err));
+        delay(10);
+        return false;
+    }
+    if (cause == ESP_SLEEP_WAKEUP_GPIO && digitalRead(BUTTON_1) != LOW &&
+        touchReaderTaskHandle) {
+        // The sleeping CPU missed the falling edge; read the touch now.
+        xTaskNotifyGive(touchReaderTaskHandle);
+    }
+    return true;
+}
+#endif
 
 void loop() {
     // NOTE: GPIO0 is hard-wired to the EPD driver's CFG_STR line on this
@@ -629,6 +681,7 @@ void loop() {
         PowerManager::idleTick();
 #ifndef NATIVE_TESTING
         TouchEvent peek;
+        if (sleepUntilInput()) return;
         if (touchEventQueue) xQueuePeek(touchEventQueue, &peek, pdMS_TO_TICKS(30));
         else delay(30);
 #else

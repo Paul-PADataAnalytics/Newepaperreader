@@ -450,7 +450,8 @@ void EBookmarkApp::drawDetailBody(const EBookmark& book, int top) {
     for (int i = 0; i < 3; i++) {
         int x = MARGIN + i * colW;
         text(ellipsize(values[i], colW - 12, FONT_STAT, true), x, l.statsY, FONT_STAT, BLACK, true);
-        text(labels[i], x, l.statsY + lineHeight(FONT_STAT) + 4, FONT_CAPTION, DARK);
+        text(ellipsize(labels[i], colW - 8, FONT_CAPTION), x,
+             l.statsY + lineHeight(FONT_STAT) + 4, FONT_CAPTION, DARK);
     }
 
     // Recent history, newest first.

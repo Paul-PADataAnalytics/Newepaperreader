@@ -55,6 +55,7 @@ private:
 
     Screen m_screen = TITLE;
     Screen m_helpReturn = TITLE;
+    int m_helpPage = 0;
     uint32_t m_rng = 1;
 
     // Game in progress (m_level < 0 when there is none)

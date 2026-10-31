@@ -80,8 +80,12 @@ private:
     bool m_menuOpen = false;
 
     std::vector<std::string> m_chapters;
+    std::vector<std::string> m_chapterTitles;
     int m_currentChapterIndex = -1;
-    void loadChapter(int index);
+    bool loadChapter(int index);
+    bool m_chapterPopup = false;
+    int m_chapterPage = 0;
+    std::string m_chapterError;
 
     FileBrowser m_fileBrowser;
     EpubParser m_epubParser;
@@ -108,7 +112,9 @@ private:
     // it's cheap enough to call on every library redraw (sort/page change,
     // returning from reading, etc.).
     void rebuildParsedLibraryItems();
+    void sortLibraryItems();
     void drawLibrary();
+    void drawChapterPopup();
     // quick = flash-free page-turn refresh (falls back to a full refresh
     // every SystemSettings::fullRefreshEvery pages).
     void drawReading(bool quick = false);

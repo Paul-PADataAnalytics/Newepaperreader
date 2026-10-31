@@ -19,6 +19,9 @@ static TouchDrvGT911 touch;
 static int simulatedTouchX = -1;
 static int simulatedTouchY = -1;
 static bool _isPortrait = false;
+static bool s_hasShownFrame = false;
+static bool s_shownPortrait = false;
+static bool s_shownDark = false;
 
 bool DisplayHAL::s_darkMode = false;
 bool DisplayHAL::s_debugScreen = false;
@@ -603,13 +606,13 @@ void DisplayHAL::updateScreenFull() {
     if (s_debugScreen) {
         printf("[DEBUG-SCREEN] updateScreenFull() requested.\n");
         uint8_t* temp = allocateFramebuffer();
-        memset(temp, 0x00, getWidth() * getHeight() / 2); // Black flash
-        display(temp);
-        // NATIVE_SLEEP_DISABLED;
-        memset(temp, 0xFF, getWidth() * getHeight() / 2); // White flash
-        display(temp);
-        // NATIVE_SLEEP_DISABLED;
-        freeFramebuffer(temp);
+        if (temp) {
+            memset(temp, 0x00, getWidth() * getHeight() / 2);
+            display(temp);
+            memset(temp, 0xFF, getWidth() * getHeight() / 2);
+            display(temp);
+            freeFramebuffer(temp);
+        }
     }
 #endif
 
@@ -624,6 +627,9 @@ void DisplayHAL::updateScreenFull() {
     display(frontBuffer);
 #endif
     memcpy(backBuffer, frontBuffer, getWidth() * getHeight() / 2);
+    s_hasShownFrame = true;
+    s_shownPortrait = _isPortrait;
+    s_shownDark = s_darkMode;
 }
 
 // The EPD driver's partial-area path mishandles regions that start on an
@@ -642,7 +648,10 @@ static void alignPhysicalSpan(int& x, int& w) {
 
 void DisplayHAL::updateScreenPartial() {
     if (!frontBuffer || !backBuffer) return;
-    EPD_POWER_SCOPE();
+    if (!s_hasShownFrame || s_shownPortrait != _isPortrait || s_shownDark != s_darkMode) {
+        updateScreenFull();
+        return;
+    }
     int w = getWidth();
     int h = getHeight();
     
@@ -665,6 +674,7 @@ void DisplayHAL::updateScreenPartial() {
 #endif
         return; 
     }
+    EPD_POWER_SCOPE();
 
 #ifdef NATIVE_TESTING
     if (s_debugScreen) {
@@ -718,138 +728,45 @@ void DisplayHAL::updateScreenPartial() {
         .width = physical_w, 
         .height = physical_h 
     };
+    const int stride = area.width / 2;
+    uint8_t* region = static_cast<uint8_t*>(malloc(stride * area.height));
+    if (!region) {
+        Serial.println("[display] partial allocation failed; full refresh");
+        updateScreenFull();
+        return;
+    }
+    for (int py = 0; py < area.height; ++py) {
+        for (int px = 0; px < area.width; px += 2) {
+            const int ax = area.x + px;
+            const int ay = area.y + py;
+            const int lx = _isPortrait ? EPD_HEIGHT - 1 - ay : ax;
+            const int ly = _isPortrait ? ax : ay;
+            uint8_t a = getPixel(lx, ly, frontBuffer);
+            uint8_t b = getPixel(_isPortrait ? lx : ax + 1,
+                                 _isPortrait ? ax + 1 : ay, frontBuffer);
+            if (s_darkMode) {
+                a = 15 - a;
+                b = 15 - b;
+            }
+            region[py * stride + px / 2] = a | (b << 4);
+        }
+    }
     epd_clear_area(area);
+    epd_draw_grayscale_image(area, region);
+    free(region);
 #endif
 
+#ifdef NATIVE_TESTING
     display(frontBuffer);
+#endif
     
     memcpy(backBuffer, frontBuffer, w * h / 2);
 }
 
 void DisplayHAL::updateScreenFast() {
-    if (!frontBuffer || !backBuffer) return;
-    EPD_POWER_SCOPE();
-    int w = getWidth();
-    int h = getHeight();
-    
-    int minX = w, minY = h, maxX = -1, maxY = -1;
-    for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            if (getPixel(x, y, frontBuffer) != getPixel(x, y, backBuffer)) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-            }
-        }
-    }
-    if (maxX < minX || maxY < minY) return; 
-    
-    int physical_minX, physical_minY, physical_w, physical_h;
-    if (_isPortrait) {
-        physical_minX = minY;
-        physical_minY = EPD_HEIGHT - 1 - maxX;
-        physical_w = (maxY - minY + 1);
-        physical_h = (maxX - minX + 1);
-    } else {
-        physical_minX = minX;
-        physical_minY = minY;
-        physical_w = (maxX - minX + 1);
-        physical_h = (maxY - minY + 1);
-    }
-    alignPhysicalSpan(physical_minX, physical_w);
-    
-#ifndef NATIVE_TESTING
-    Rect_t area = { 
-        .x = physical_minX, 
-        .y = physical_minY, 
-        .width = physical_w, 
-        .height = physical_h 
-    };
-
-    // NOTE (2026-07-26): the previous implementation here used the driver's
-    // manual 1-bit fast-draw pipeline (epd_push_pixels + epd_draw_frame_1bit
-    // with a hand-rolled byte-swap "fix"). That pipeline has no other proven
-    // usage anywhere in this codebase and was producing corrupted full-height
-    // bars on hardware (confirmed via photo) even though the computed diff
-    // bounding box itself was small and correctly clipped. Both candidate
-    // byte-order fixes (present and removed) were tested on hardware; removing
-    // the swap made corruption measurably WORSE, so the bug is not simply a
-    // byte-order mistake in that pipeline.
-    //
-    // Instead, reuse the SAME 4bpp grayscale pipeline (epd_clear_area +
-    // epd_draw_grayscale_image / calc_epd_input_4bpp) that DisplayHAL::display()
-    // and updateScreenPartial() already use successfully for full-screen
-    // draws, just scoped to the small diff bounding box. This pipeline has its
-    // own row-skip optimization (skip_row()) for rows outside the area, so it
-    // stays fast for small updates while reusing a hardware pathway already
-    // proven correct on this exact panel. Confirmed fixed on hardware (Calculator
-    // digit entry, no more corruption bars).
-    int bufStride = (physical_w + 1) / 2;
-    uint8_t* smallBuf = (uint8_t*)malloc(bufStride * physical_h);
-    if (smallBuf) {
-        memset(smallBuf, 0xFF, bufStride * physical_h);
-        for (int py = 0; py < physical_h; py++) {
-            for (int px = 0; px < physical_w; px++) {
-                int physical_abs_x = physical_minX + px;
-                int physical_abs_y = physical_minY + py;
-
-                int lx, ly;
-                if (_isPortrait) {
-                    ly = physical_abs_x;
-                    lx = EPD_HEIGHT - 1 - physical_abs_y;
-                } else {
-                    lx = physical_abs_x;
-                    ly = physical_abs_y;
-                }
-
-                if (lx < 0 || lx >= DisplayHAL::getWidth() || ly < 0 || ly >= DisplayHAL::getHeight()) {
-                    continue;
-                }
-
-                uint8_t color = getPixel(lx, ly, frontBuffer);
-                int idx = py * bufStride + px / 2;
-                // Same convention as display()'s rotation path: hardware
-                // expects even physical-x pixels in the LOWER nibble, odd in
-                // the UPPER nibble.
-                if (px % 2) {
-                    smallBuf[idx] = (smallBuf[idx] & 0x0F) | (color << 4);
-                } else {
-                    smallBuf[idx] = (smallBuf[idx] & 0xF0) | (color & 0x0F);
-                }
-            }
-        }
-
-        // PERF (2026-07-26): epd_clear_area() defaults to 4 cycles (32 erase
-        // passes), which dominates the cost of this otherwise-small scoped
-        // update. Reduced to 1 cycle (8 passes) here using the same
-        // unmodified, proven epd_clear_area_cycles() function - no bit-packing
-        // or byte-order logic changed. If ghosting/residue reappears on
-        // hardware, bump the cycle count back up (2-4) or revert to
-        // epd_clear_area(area).
-        epd_clear_area_cycles(area, 1, 50);
-        epd_draw_grayscale_image(area, smallBuf);
-
-        free(smallBuf);
-    }
-#else
-    if (s_debugScreen) {
-        printf("[DEBUG-SCREEN] updateScreenFast() Fast Mono Bounding Box: x=%d, y=%d, w=%d, h=%d\n", 
-               minX, minY, (maxX - minX + 1), (maxY - minY + 1));
-        // Visually flash it very quickly
-        uint8_t* tempFb = allocateFramebuffer();
-        if (tempFb) {
-            memcpy(tempFb, backBuffer, w * h / 2);
-            fillRect(minX, minY, maxX - minX + 1, maxY - minY + 1, 0x00, tempFb);
-            display(tempFb);
-            // NATIVE_SLEEP_DISABLED; // 20ms
-            freeFramebuffer(tempFb);
-        }
-    }
-    display(frontBuffer);
-#endif
-
-    memcpy(backBuffer, frontBuffer, w * h / 2);
+    // UI updates need a complete region erase; the former one-cycle path
+    // left gray text and inverted toggle edges behind.
+    updateScreenPartial();
 }
 
 void DisplayHAL::injectTouch(int x, int y) {

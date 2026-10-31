@@ -3,6 +3,7 @@
 #ifdef NATIVE_TESTING
 #include <dirent.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #endif
 
 FileBrowser::FileBrowser() : currentPath("/") {
@@ -127,17 +128,24 @@ void FileBrowser::loadDirectory(const char* path) {
 
 std::vector<FileInfo> FileBrowser::scanRecursive(const char* rootPath, std::function<void()> onProgress, int maxDepth) {
     std::vector<FileInfo> out;
+    m_scanSucceeded = true;
     scanRecursiveHelper(rootPath, out, 0, maxDepth, onProgress);
     return out;
 }
 
 void FileBrowser::scanRecursiveHelper(const std::string& path, std::vector<FileInfo>& out, int depth, int maxDepth, const std::function<void()>& onProgress) {
-    if (depth > maxDepth) return;
+    if (depth > maxDepth) {
+        m_scanSucceeded = false;
+        return;
+    }
     if (onProgress) onProgress();
 
 #ifndef NATIVE_TESTING
     File dir = SD.open(path.c_str());
-    if (!dir || !dir.isDirectory()) return;
+    if (!dir || !dir.isDirectory()) {
+        m_scanSucceeded = false;
+        return;
+    }
 
     File file = dir.openNextFile();
     while (file) {
@@ -191,21 +199,14 @@ void FileBrowser::scanRecursiveHelper(const std::string& path, std::vector<FileI
             FileInfo info;
             info.name = name;
             info.path = fullPath;
-            info.isDirectory = (entry->d_type == DT_DIR);
-
-            if (info.isDirectory) {
-                info.size = 0;
-            } else {
-                std::string realFilePath = nativePath + "/" + name;
-                FILE* f = fopen(realFilePath.c_str(), "rb");
-                if (f) {
-                    fseek(f, 0, SEEK_END);
-                    info.size = ftell(f);
-                    fclose(f);
-                } else {
-                    info.size = 0;
-                }
+            struct stat st;
+            if (lstat((nativePath + "/" + name).c_str(), &st) != 0) {
+                m_scanSucceeded = false;
+                continue;
             }
+            if (S_ISLNK(st.st_mode)) continue;
+            info.isDirectory = S_ISDIR(st.st_mode);
+            info.size = info.isDirectory ? 0 : static_cast<size_t>(st.st_size);
             out.push_back(info);
 
             if (info.isDirectory) {
@@ -213,7 +214,8 @@ void FileBrowser::scanRecursiveHelper(const std::string& path, std::vector<FileI
             }
         }
         closedir(d);
+    } else {
+        m_scanSucceeded = false;
     }
 #endif
 }
-

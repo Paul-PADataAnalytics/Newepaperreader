@@ -1,12 +1,14 @@
 #include "PowerManager.h"
 #include "SystemSettings.h"
 #include "DisplayHAL.h"
+#include "AppComm.h"
 #include <cstdio>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
 #include <SPI.h>
 #include <SD.h>
+#include <WiFi.h>
 #include <HWCDC.h>
 #include <driver/gpio.h>
 #include "utilities.h"
@@ -135,6 +137,15 @@ void idleTick() {
         s_boosted = false;
     }
 #endif
+}
+
+bool canLightSleep() {
+    if (!SystemSettings::get().idleSleep || s_busy ||
+        AppComm::isInitialized() || AppComm::hasPending()) return false;
+#ifndef NATIVE_TESTING
+    if (WiFi.getMode() != WIFI_OFF) return false;
+#endif
+    return msSinceActivity() >= CPU_RELAX_AFTER_MS;
 }
 
 void prepareHardwareForDeepSleep() {

@@ -1,30 +1,32 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-
 cd "$ROOT_DIR"
 
-echo "=== Building WebAssembly Demo (docs/) ==="
+if [[ ! -f .pio/libdeps/native/ArduinoJson/src/ArduinoJson.h ]]; then
+    echo "Missing ArduinoJson. Install the native environment dependencies with:" >&2
+    echo "  pio pkg install -e native" >&2
+    exit 1
+fi
 
-mkdir -p docs
-
-# Locate source C++ and C files (excluding .orig and examples)
-CPP_FILES=$(find src -name "*.cpp" ! -name "*.orig" ! -path "*/examples/*")
-LIB_C_FILES=$(find lib -name "*.c" ! -path "*/examples/*")
-LIB_CPP_FILES=$(find lib -name "*.cpp" ! -path "*/examples/*")
-
-ALL_SOURCES="$CPP_FILES $LIB_C_FILES $LIB_CPP_FILES"
+mapfile -d '' SOURCES < <(
+    find src lib/miniz lib/tinyxml2 -type f \( -name '*.cpp' -o -name '*.c' \) \
+        ! -name '*.orig' ! -path '*/examples/*' -print0
+)
+SOURCES+=(tools/web_main.cpp)
 
 EMCC_FLAGS=(
     -D NATIVE_TESTING
     -D HAS_SDL
+    -D main=firmware_native_main
     -D MZ_MALLOC=malloc
     -D MZ_FREE=free
     -D MZ_REALLOC=realloc
     -I include
     -I src
+    -I src/mocks/web
     -I lib/miniz
     -I lib/tinyxml2
     -I .pio/libdeps/native/ArduinoJson/src
@@ -34,7 +36,6 @@ EMCC_FLAGS=(
     -I src/ui
     -I src/apps
     -I src/native
-    -s USE_SDL=2
     -s WASM=1
     -s ALLOW_MEMORY_GROWTH=1
     -s INITIAL_MEMORY=67108864
@@ -42,27 +43,50 @@ EMCC_FLAGS=(
     -o docs/index.html
 )
 
-# Asset preloading if directories exist
-if [ -d "data" ]; then
-    EMCC_FLAGS+=(--preload-file "data@/data")
-fi
-if [ -d "books" ]; then
-    EMCC_FLAGS+=(--preload-file "books@/books")
-fi
-if [ -d "images" ]; then
-    EMCC_FLAGS+=(--preload-file "images@/images")
-fi
+# Only package deliberate, checked-in demo fixtures. Local books and ignored
+# configuration files must never be embedded in a public GitHub Pages build.
+WEB_ASSETS=(
+    data/Roboto-Regular.ttf
+    data/app_icons.bin
+    data/books/test.md
+    data/books/test_document.rtf
+    data/images/fullhd.jpg
+    data/images/grayscale.jpg
+    data/images/landscape_1_1784804480098.jpg
+    data/images/landscape_2_1784804506450.jpg
+    data/images/large.jpg
+    data/images/medium.jpg
+    data/images/portrait.jpg
+    data/images/screen_exact.jpg
+    data/images/small.jpg
+    data/images/tiny.jpg
+    data/images/xlarge.jpg
+    images/screen_exact.jpg
+)
+for asset in "${WEB_ASSETS[@]}"; do
+    if [[ ! -f "$asset" ]]; then
+        echo "Missing required demo asset: $asset" >&2
+        exit 1
+    fi
+    EMCC_FLAGS+=(--preload-file "$asset@/$asset")
+done
 
-if command -v emcc &>/dev/null; then
-    echo "Running local emcc..."
-    emcc $ALL_SOURCES "${EMCC_FLAGS[@]}"
-elif command -v docker &>/dev/null; then
-    echo "Running emcc via Docker (emscripten/emsdk)..."
-    docker run --rm -v "$ROOT_DIR":/src -w /src emscripten/emsdk emcc $ALL_SOURCES "${EMCC_FLAGS[@]}"
+mkdir -p docs
+
+if command -v emcc >/dev/null 2>&1; then
+    echo "Building firmware with local Emscripten..."
+    em++ "${SOURCES[@]}" "${EMCC_FLAGS[@]}"
+elif command -v docker >/dev/null 2>&1; then
+    echo "Building firmware with emscripten/emsdk via Docker..."
+    docker run --rm \
+        -v "$ROOT_DIR:/src" \
+        -w /src \
+        emscripten/emsdk:latest \
+        em++ "${SOURCES[@]}" "${EMCC_FLAGS[@]}"
 else
-    echo "Error: Neither 'emcc' nor 'docker' were found on system."
+    echo "Error: install Emscripten or Docker with emscripten/emsdk." >&2
     exit 1
 fi
 
-echo "=== WebAssembly build complete! Static assets updated in docs/ ==="
-ls -lh docs/
+echo "WebAssembly firmware built in docs/."
+ls -lh docs/index.html docs/index.js docs/index.wasm docs/index.data

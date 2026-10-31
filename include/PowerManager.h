@@ -40,6 +40,8 @@ const char* lastSleepSummary();
 void boostCpu();
 // Drops to 80MHz once nothing has needed full speed for a little while.
 void idleTick();
+// False while a transfer or enabled radio requires the CPU to remain awake.
+bool canLightSleep();
 
 // Last step before esp_deep_sleep_start(): SD card deselected and held,
 // all peripherals owned by DisplayHAL shut down, GPIO latches enabled.

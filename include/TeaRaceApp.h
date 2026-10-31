@@ -56,6 +56,7 @@ private:
     bool m_eventDone = false;
     Rival m_rivals[3];
     int m_best = 0;
+    int m_helpPage = 0;
 
     // Text for the outcome screen
     std::string m_outTitle;

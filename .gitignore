@@ -6,3 +6,11 @@
 books/
 *.epub
 *.bmk
+
+# Private device configuration and runtime caches.
+data/settings.json
+data/config.json
+data/google_tasks.json
+data/todo_cache.json
+google_tasks.json
+client_secret*.json

@@ -47,11 +47,11 @@ constexpr int ROW_H = 96;
 constexpr int BACK_HIT_W = 110;
 
 // Type scale
-constexpr float FONT_STATUS = 19.0f;
-constexpr float FONT_TITLE = 32.0f;
-constexpr float FONT_BODY = 26.0f;
-constexpr float FONT_SMALL = 20.0f;
-constexpr float FONT_CAPTION = 18.0f;
+constexpr float FONT_STATUS = 24.0f;
+constexpr float FONT_TITLE = 34.0f;
+constexpr float FONT_BODY = 28.0f;
+constexpr float FONT_SMALL = 24.0f;
+constexpr float FONT_CAPTION = 24.0f;
 
 struct Rect {
     int x = 0, y = 0, w = 0, h = 0;
@@ -110,8 +110,8 @@ int hitFooterAction(int x, int y, int count);
 void button(const Rect& r, const std::string& label, ButtonStyle style = ButtonStyle::SECONDARY,
             float size = FONT_SMALL + 2, bool enabled = true);
 void toggle(int x, int y, bool on);
-constexpr int TOGGLE_W = 80;
-constexpr int TOGGLE_H = 42;
+constexpr int TOGGLE_W = 88;
+constexpr int TOGGLE_H = 48;
 void segmented(const Rect& r, const std::vector<std::string>& labels, int selected, float size = FONT_SMALL);
 int hitSegmented(const Rect& r, int count, int x, int y);
 void progressBar(int x, int y, int w, int h, float fraction);

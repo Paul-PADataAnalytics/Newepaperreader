@@ -4,7 +4,7 @@ Welcome to the LilyGo EPD47 E-Reader System **v3.0.0**! This is the complete cus
 
 **New in v3.0**: portrait-only redesigned UI, configurable auto-sleep (also while reading) with a much lower-power deep sleep, a "stay awake on USB" and developer "always on" option, brightened and dithered pictures, and a rebuilt companion-app link (working device library, uploads with progress, delete). See [Chapter 9](manual/09_power_and_companion.md).
 
-![Launcher v2.3](file:///home/paul/Documents/projects/newepaperreader/images/screen_exact.jpg)
+![Launcher](images/screen_exact.jpg)
 
 📖 **[Read the Complete User & Hardware Manual](manual/index.md)** (Firmware Version: v3.0.0)
 
@@ -44,7 +44,20 @@ pio run -e native
 # Build static WebAssembly site into docs/
 ./tools/build_web.sh
 
-# (the web demo in docs/ predates v3.0 and needs rebuilding)
 # Serve static site locally
 python3 -m http.server 8080 -d docs/
 ```
+
+The simulator runs the same C++ firmware as WebAssembly. See [browser build
+and GitHub Pages setup](manual/web_simulator.md). The build and deployment
+workflow follows `paul-padataanalytics-power-ui-revamp-companion-fixes`, not
+`main`; do not publish the old main-branch demo.
+
+### Refresh and battery behavior
+
+UI partial updates erase and redraw only the changed, byte-aligned physical
+region in grayscale. Opening and closing reader overlays uses a clean refresh.
+The panel stays powered only while drawing. Idle light sleep retains the
+visible screen and touch wake; enabled BLE or Wi-Fi pauses it. BLE defaults
+off for new settings files, but existing preferences are preserved. See
+[power settings and wake trade-offs](manual/09_power_and_companion.md).

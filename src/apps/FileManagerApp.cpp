@@ -13,7 +13,7 @@ using namespace UI;
 
 constexpr int CAPTION_H = 60;
 constexpr int LIST_TOP = HEADER_H + CAPTION_H;
-const Rect kCancelPick(W - MARGIN - 116, HEADER_H + 9, 116, 42);
+const Rect kCancelPick(W - MARGIN - 116, HEADER_H + 6, 116, 48);
 
 // Action sheet (bottom card over the list).
 constexpr int SHEET_H = 468;
@@ -29,7 +29,7 @@ Rect sheetButton(int i) {
 
 // Delete confirmation dialog.
 constexpr int DLG_W = W - 2 * 40;
-constexpr int DLG_H = 300;
+constexpr int DLG_H = 360;
 const Rect kDialog((W - DLG_W) / 2, (H - DLG_H) / 2, DLG_W, DLG_H);
 constexpr int DLG_BTN_W = (DLG_W - 3 * 24) / 2;
 const Rect kDlgCancel(kDialog.x + 24, kDialog.y + DLG_H - 88, DLG_BTN_W, 64);
@@ -248,8 +248,8 @@ void FileManagerApp::drawList() {
 }
 
 void FileManagerApp::drawActionSheet() {
-    fillRoundRect(0, SHEET_TOP, W, SHEET_H + 40, 28, WHITE);
-    strokeRoundRect(0, SHEET_TOP, W, SHEET_H + 40, 28, 2, BLACK);
+    fillRoundRect(0, SHEET_TOP, W, SHEET_H, 28, WHITE);
+    strokeRoundRect(0, SHEET_TOP, W, SHEET_H, 28, 2, BLACK);
     fillRoundRect(W / 2 - 30, SHEET_TOP + 12, 60, 6, 3, LIGHT);
 
     UIIconId id = fileIcon(m_selectedFile.name);

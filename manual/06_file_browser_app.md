@@ -1,4 +1,4 @@
-# Chapter 6: File Browser Application
+# Chapter 6: Files
 
 > **App Version**: v3.0.0  
 > **Firmware Version**: v3.0.0  
@@ -7,44 +7,14 @@
 ---
 
 ## Overview
-The **File Browser Application** allows full management of files and directories stored on the MicroSD card, featuring folder navigation, file operations (Move, Copy, Delete), and confirmation modals.
+**Files** manages folders and files on the SD card. The portrait list shows file type and size, uses large rows for touch, and pages long directories.
 
----
+## Browse and navigate
+- The header names the current folder. Tap a folder row to open it; use the top-left back chevron to go up.
+- Rows show a readable file name and type; files also show their size. Tap a file to open its action sheet.
+- Use the bottom pager when there are more rows than fit on screen.
 
-## Screen 1: File List View
+## File actions
+The action sheet offers **Copy to…**, **Move to…**, **Delete**, and **Cancel**. Copy and Move open a destination-folder browser; tap **Paste here** to finish or **Cancel** to return to the selected file's action sheet. Delete opens a separate confirmation dialog.
 
-Displays files and sub-directories within the current path (e.g. `/books/classic`).
-
-![File Browser List Screen](images/filebrowser-list.png)
-
-### Controls & Sidebar
-- **Directory Navigation**: Tap any directory marked `[DIR]` to open it.
-- **`Up` Button**: Navigates to parent directory.
-- **`SD Root` Button**: Instantly jumps to `/sd/` root directory.
-- **`Refresh` Button**: Re-scans current directory contents.
-- **`/\` / `\/` Buttons**: Scroll list up or down.
-
----
-
-## Screen 2: File Options Action Modal
-
-Tapping any file in the browser opens the **File Options** action modal with 4 centered, labeled action buttons:
-
-![File Options Modal](images/filebrowser-modal.png)
-
-### Action Buttons
-1. **`Move`**: Moves the selected file to a destination folder on the SD card.
-2. **`Copy`**: Duplicates the selected file on the SD card.
-3. **`Delete`**: Opens the Delete Confirmation Modal.
-4. **`Cancel`**: Dismisses the action modal and returns to the file list.
-
----
-
-## Screen 3: Delete Confirmation Modal
-
-Tapping **Delete** opens a safety confirmation modal to prevent accidental file deletion:
-
-![Delete Confirmation Modal](images/filebrowser-delete.png)
-
-- **`Delete`**: Permanently removes the file from the SD card.
-- **`Cancel`**: Cancels deletion and returns to the file list.
+The top-left back chevron closes an action sheet or confirmation dialog without changing the file. At the SD-card root, the back chevron returns to Home.

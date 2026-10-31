@@ -4,6 +4,7 @@
 #include "TypographyEngine.h"
 #include "AppComm.h"
 #include "PowerManager.h"
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 #include <cstdio>
@@ -43,8 +44,12 @@ void textRight(const std::string& s, int rightX, int y, float size, uint8_t colo
 }
 
 std::string ellipsize(const std::string& s, int maxW, float size, bool bold) {
+    if (maxW <= 0) return "";
     if (textWidth(s, size, bold) <= maxW) return s;
     std::string out = s;
+    std::string suffix = "...";
+    while (!suffix.empty() && textWidth(suffix, size, bold) > maxW) suffix.pop_back();
+    if (suffix.empty()) return "";
     while (!out.empty()) {
         // Drop a whole UTF-8 code point at a time.
         do {
@@ -52,44 +57,55 @@ std::string ellipsize(const std::string& s, int maxW, float size, bool bold) {
         } while (!out.empty() && ((unsigned char)out.back() & 0xC0) == 0x80);
         if (!out.empty() && ((unsigned char)out.back() & 0x80)) out.pop_back();
         while (!out.empty() && out.back() == ' ') out.pop_back();
-        if (textWidth(out + "...", size, bold) <= maxW) return out + "...";
+        if (textWidth(out + suffix, size, bold) <= maxW) return out + suffix;
     }
-    return "...";
+    return suffix;
 }
 
 int textWrapped(const std::string& s, int x, int y, int w, float size, uint8_t color,
                 int maxLines, int lineGap, bool centered) {
-    int lh = lineHeight(size) + lineGap;
+    if (s.empty() || w <= 0) return y;
+    const int lh = lineHeight(size) + lineGap;
     std::vector<std::string> lines;
-    std::string current;
-    size_t i = 0;
-    while (i <= s.size()) {
-        size_t sp = s.find_first_of(" \n", i);
-        if (sp == std::string::npos) sp = s.size();
-        std::string word = s.substr(i, sp - i);
-        std::string candidate = current.empty() ? word : current + " " + word;
-        if (!current.empty() && textWidth(candidate, size) > w) {
-            lines.push_back(current);
-            current = word;
-        } else {
-            current = candidate;
-        }
-        if (sp < s.size() && s[sp] == '\n') {
-            lines.push_back(current);
-            current.clear();
-        }
-        i = sp + 1;
-    }
-    if (!current.empty()) lines.push_back(current);
+    size_t paragraphStart = 0;
+    while (paragraphStart < s.size()) {
+        size_t paragraphEnd = s.find('\n', paragraphStart);
+        if (paragraphEnd == std::string::npos) paragraphEnd = s.size();
 
-    for (size_t n = 0; n < lines.size(); n++) {
+        std::string current;
+        size_t i = paragraphStart;
+        while (i < paragraphEnd) {
+            while (i < paragraphEnd && s[i] == ' ') ++i;
+            if (i == paragraphEnd) break;
+            size_t wordEnd = s.find(' ', i);
+            if (wordEnd == std::string::npos || wordEnd > paragraphEnd) wordEnd = paragraphEnd;
+            const std::string word = s.substr(i, wordEnd - i);
+            const std::string candidate = current.empty() ? word : current + " " + word;
+            if (!current.empty() && textWidth(candidate, size) > w) {
+                lines.push_back(current);
+                current = word;
+            } else {
+                current = candidate;
+            }
+            i = wordEnd;
+        }
+        lines.push_back(current);
+        if (paragraphEnd == s.size()) break;
+        paragraphStart = paragraphEnd + 1;
+    }
+
+    size_t drawCount = lines.size();
+    if (maxLines > 0 && drawCount > (size_t)maxLines) drawCount = (size_t)maxLines;
+    for (size_t n = 0; n < drawCount; n++) {
         std::string ln = lines[n];
-        bool last = maxLines > 0 && (int)n == maxLines - 1 && n + 1 < lines.size();
-        if (last) ln = ellipsize(ln + " " + lines[n + 1], w, size);
+        const bool last = n + 1 == drawCount && drawCount < lines.size();
+        if (last) {
+            if (!lines[n + 1].empty()) ln += " " + lines[n + 1];
+            ln = ellipsize(ln + " ...", w, size);
+        }
         if (centered) textCentered(ln, x + w / 2, y, size, color);
         else text(ellipsize(ln, w, size), x, y, size, color);
         y += lh;
-        if (last) break;
     }
     return y;
 }
@@ -241,19 +257,19 @@ void statusBar() {
     } else {
         snprintf(timeStr, sizeof(timeStr), "--:--");
     }
-    textCentered(timeStr, W / 2, 8, FONT_STATUS, INK, true);
+    textCentered(timeStr, W / 2, 4, FONT_STATUS, INK, true);
 
     // Battery (right)
     int pct = DisplayHAL::getBatteryPercent();
     bool charging = DisplayHAL::isCharging();
     batteryIcon(W - MARGIN - 33, 11, pct, charging, INK);
-    textRight(std::to_string(pct) + "%", W - MARGIN - 40, 8, FONT_STATUS, INK);
+    textRight(std::to_string(pct) + "%", W - MARGIN - 40, 4, FONT_STATUS, INK);
 
     // Bluetooth (left)
     if (AppComm::isInitialized()) {
         bool connected = AppComm::isConnected();
         icon(ICON_BLUETOOTH, MARGIN - 6, 5, 26, connected ? BLACK : MID);
-        if (connected) text("Connected", MARGIN + 22, 8, FONT_CAPTION, DARK);
+        if (connected) text("Connected", MARGIN + 22, 4, FONT_CAPTION, DARK);
     }
 }
 
@@ -281,7 +297,7 @@ bool hitBack(int x, int y) {
 Rect headerActionRect(const std::string& action) {
     int w = textWidth(action, FONT_SMALL) + 36;
     if (w < 90) w = 90;
-    return Rect(W - MARGIN - w, 46, w, 46);
+    return Rect(W - MARGIN - w, 42, w, 52);
 }
 
 bool hitHeaderAction(int x, int y, const std::string& action) {
@@ -338,6 +354,7 @@ int hitFooterAction(int x, int y, int count) {
 // ---------------------------------------------------------------------------
 
 void button(const Rect& r, const std::string& label, ButtonStyle style, float size, bool enabled) {
+    if (size < FONT_CAPTION) size = FONT_CAPTION;
     int radius = r.h / 2 < 14 ? r.h / 2 : 14;
     uint8_t fg = INK;
     switch (style) {
@@ -373,6 +390,7 @@ void toggle(int x, int y, bool on) {
 }
 
 void segmented(const Rect& r, const std::vector<std::string>& labels, int selected, float size) {
+    if (size < FONT_CAPTION) size = FONT_CAPTION;
     int n = (int)labels.size();
     if (n == 0) return;
     int radius = 12;
@@ -454,10 +472,13 @@ void settingLabel(int y, int h, const std::string& label, const std::string& hel
     if (helper.empty()) {
         text(ellipsize(label, maxW, FONT_BODY), MARGIN, y + (h - lineHeight(FONT_BODY)) / 2, FONT_BODY, BLACK);
     } else {
-        int lh = lineHeight(FONT_BODY) + 4 + lineHeight(FONT_CAPTION);
+        const int helperLine = lineHeight(FONT_CAPTION);
+        const int helperLines = std::max(1, (h - lineHeight(FONT_BODY) - 4) / helperLine);
+        const int helperHeight = helperLines * helperLine;
+        int lh = lineHeight(FONT_BODY) + 4 + helperHeight;
         int ty = y + (h - lh) / 2;
         text(ellipsize(label, maxW, FONT_BODY), MARGIN, ty, FONT_BODY, BLACK);
-        text(ellipsize(helper, maxW, FONT_CAPTION), MARGIN, ty + lineHeight(FONT_BODY) + 4, FONT_CAPTION, DARK);
+        textWrapped(helper, MARGIN, ty + lineHeight(FONT_BODY) + 4, maxW, FONT_CAPTION, DARK, helperLines, 0);
     }
 }
 

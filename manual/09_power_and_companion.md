@@ -7,7 +7,8 @@
 
 ## 1. Sleep & wake
 
-The device has two states: **awake** and **asleep** (ESP32-S3 deep sleep, "lock mode").
+The device has three states: **active**, **idle light sleep** (RAM and touch
+wake retained), and **deep-sleep lock mode** (button wake and reboot).
 
 - **Side button** (`BUTTON_1`, GPIO 21): sleeps immediately, and is the **only** wake source. Touch never wakes the device, so it can sit in a bag.
 - **Auto-sleep** (Settings > Power): after 1, 2, **5** (default), 10 or 30 minutes without a touch, or Never. This now applies everywhere, *including* while a book page is open - in v2.x the reading view never slept, which is what drained the battery in about a day.
@@ -34,6 +35,19 @@ LilyGo specifies ~0.4 mA for this board in deep sleep with button wake, which is
 - The CPU runs at 240 MHz while drawing and drops to 80 MHz after 1.5 s idle (the lowest clock BLE supports).
 - The main loop blocks on the touch queue instead of busy-spinning, and idle GT911 interrupt pulses (~100/s) are filtered in the touch task so they no longer wake the main loop.
 - BLE advertises every 250-500 ms instead of the library default 20-40 ms.
+- With `idleSleep: true` in `/data/settings.json` (default), the CPU enters
+  explicit light sleep after 1.5 seconds without input. Touch and the side
+  button wake it; a one-second timer services app updates and auto-lock.
+  The panel image and RAM survive, without reopening a book.
+- BLE defaults off for new settings files to allow light sleep. Existing saved
+  `bleEnabled` preferences are honored. Enable Bluetooth in Settings for
+  companion transfers and turn it off afterwards; enabled BLE (even without a
+  connected phone), active Wi-Fi, or a transfer keeps the CPU awake.
+- `idleSleep: false` disables explicit light sleep for development. Always on
+  and Stay awake on USB suppress **auto-lock**, not idle light sleep.
+- Actual current draw, touch-wake reliability and residual panel artifacts
+  must be tested on the physical board; native/browser tests cannot certify
+  battery life or e-paper waveforms.
 
 ---
 

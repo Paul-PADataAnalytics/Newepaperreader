@@ -8,6 +8,8 @@ class EpubParser {
 public:
     EpubParser();
     ~EpubParser();
+    EpubParser(const EpubParser&) = delete;
+    EpubParser& operator=(const EpubParser&) = delete;
 
     // Open and parse the EPUB file metadata
     bool open(const std::string& filepath);
@@ -18,6 +20,10 @@ public:
     // Get the list of chapters (HTML/XHTML files) in reading order (spine)
     // The paths returned are relative to the root of the EPUB archive.
     std::vector<std::string> getChapterList() const;
+    std::vector<std::string> getChapterTitles() const;
+    const std::string& getCoverPath() const { return m_coverPath; }
+    const std::string& getTitle() const { return m_title; }
+    const std::string& getAuthor() const { return m_author; }
 
     // Extract a specific file's content from the EPUB archive into memory
     char* getFileContent(const std::string& internalPath, size_t& outSize);
@@ -29,6 +35,11 @@ private:
     
     std::map<std::string, std::string> m_manifest; // id -> href
     std::vector<std::string> m_spine; // Ordered list of hrefs (resolved to root paths)
+    std::vector<std::string> m_chapterTitles;
+    std::string m_coverPath;
+    std::string m_title;
+    std::string m_author;
+    void* m_archive = nullptr;
 
     bool parseContainer();
     bool parseOpf();

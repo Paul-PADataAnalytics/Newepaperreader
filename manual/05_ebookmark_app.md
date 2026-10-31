@@ -1,4 +1,4 @@
-# Chapter 5: eBookmark Companion App
+# Chapter 5: Bookmarks
 
 > **App Version**: v3.0.0  
 > **Firmware Version**: v3.0.0  
@@ -7,26 +7,16 @@
 ---
 
 ## Overview
-The **eBookmark Companion App** provides physical reading tracking and interfaces wirelessly with external smart bookmark hardware or companion mobile apps over Bluetooth Low Energy (BLE).
+Bookmarks tracks physical books in sync with the phone companion app. The portrait screen has a sortable book list and a detail view; Bluetooth connection and transfer status live in **Settings > Bluetooth**.
 
-![eBookmark App Screen](images/ebookmark-sync.png)
+## Book list
+- Use **Author**, **Genre**, or **Progress** to change the sort order.
+- Each row shows the title, author or genre, and current page (or Finished).
+- Tap a row to open its reading progress and recent activity. Use the bottom pager when the library spans more than one page.
+- If the list is empty, add or scan books in the companion app's **My Books** tab.
 
----
-
-## Screen Features & Breakdown
-
-### 1. Active Reading Tracking
-- **Physical Book Progress**: Tracks page number, total pages, reading speed (pages/hour), and estimated time remaining.
-- **Reading Streak Analytics**: Displays current reading streak (days) and weekly goal progress.
-
-### 2. Bluetooth Low Energy (BLE) Sync Server
-- **Server Name**: Advertises as `LilyGo-eReader-BLE`.
-- **Two-Way Bookmark Sync**: Automatically synchronizes reading progress between the physical device and connected companion apps when in range.
-- **Wireless EPUB Transfer**: Allows pushing new `.epub` books wirelessly from a smartphone directly to the `/sd/books/` directory on the E-Reader.
-
----
-
-## Navigation
-
-- **Exit to Launcher**: Tap `Exit to Launcher` on the right sidebar or tap the top-left escape corner ($x \le 60, y \le 60$).
-- **Settings Access**: Tap the top-right settings gear icon ($x \ge 900, y \le 60$).
+## Book details
+- The page number, total pages, percentage and progress bar summarize reading progress.
+- Tap **−10**, **−1**, **+1**, or **+10** to correct the page. Changes appear immediately and are saved/synced after a short pause.
+- Reading days, pages per sitting and recent page-history entries appear below. The visible history is limited to the newest entries that fit the screen.
+- Use the top-left back chevron to return to the list.

@@ -17,10 +17,11 @@ Settings are saved to `/data/settings.json` and survive sleep and reboots. Four 
 | Display | Dark mode | Inverts the whole screen |
 | | Text size | Reading font size (also adjustable inside a book) |
 | | Picture brightness | Original / Light / Lighter / Lightest (Chapter 7) |
-| | Full page refresh | How often a page turn does the full black/white clean refresh: every page, 3, 6 (default) or 12. Other turns use the fast refresh (~0.8 s instead of ~1.8 s, no flash, very faint ghosting) |
+| | Full page refresh | How often a page turn does the full clean refresh: every 1, 3, 6 (default) or 12 pages. |
 | Power | Auto-sleep | 1, 2, 5 (default), 10, 30 min or Never |
 | | Stay awake on USB | No auto-sleep while plugged into a computer or charger |
 | | Always on | Developer option: never auto-sleep |
+| | Idle light sleep | Allow the low-power idle mode. BLE or Wi-Fi activity keeps the device awake; turn this off when debugging sleep behavior. |
 | | Sleep screen | Pictures from `/images` or a book & battery card |
 | | Battery | Voltage, percentage and USB state |
 | | Sleep now | Same as pressing the side button |

@@ -76,18 +76,18 @@ void drawClockBlock() {
     if (valid) {
         char date[48];
         strftime(date, sizeof(date), "%A, %d %B", t);
-        text(date, MARGIN, CLOCK_TOP + 22, FONT_SMALL + 2, DARK);
+        text(date, MARGIN, CLOCK_TOP + 8, FONT_BODY, DARK);
         int hr = t->tm_hour % 12;
         if (hr == 0) hr = 12;
         char tm[16];
         snprintf(tm, sizeof(tm), "%d:%02d", hr, t->tm_min);
         int tw = textWidth(tm, 84.0f, true);
-        text(tm, MARGIN - 4, CLOCK_TOP + 50, 84.0f, BLACK, true);
-        text(t->tm_hour < 12 ? "AM" : "PM", MARGIN + tw + 6, CLOCK_TOP + 108, FONT_BODY, DARK, true);
+        text(tm, MARGIN - 4, CLOCK_TOP + 48, 84.0f, BLACK, true);
+        text(t->tm_hour < 12 ? "AM" : "PM", MARGIN + tw + 6, CLOCK_TOP + 106, FONT_BODY, DARK, true);
     } else {
-        text("Clock not set", MARGIN, CLOCK_TOP + 22, FONT_SMALL + 2, DARK);
-        text("Hello", MARGIN - 2, CLOCK_TOP + 50, 84.0f, BLACK, true);
-        text("Connect the companion app to set the time.", MARGIN, CLOCK_TOP + 140 - 16, FONT_CAPTION, DARK);
+        text("Clock not set", MARGIN, CLOCK_TOP + 8, FONT_BODY, DARK);
+        text("Welcome", MARGIN, CLOCK_TOP + 48, FONT_TITLE, BLACK, true);
+        text("Set time with the companion app.", MARGIN, CLOCK_TOP + 92, FONT_CAPTION, DARK);
     }
 }
 } // namespace
@@ -226,14 +226,14 @@ void Launcher::drawMenu() {
         int tx = c.x + 116;
         int tw = c.x + c.w - 24 - tx;
         if (last.valid) {
-            text("CONTINUE READING", tx, c.y + 22, FONT_CAPTION, DARK, true);
-            textWrapped(last.title, tx, c.y + 50, tw, FONT_BODY, BLACK, 2, 2);
+            text("CONTINUE READING", tx, c.y + 18, FONT_CAPTION, DARK, true);
+            int titleBottom = textWrapped(last.title, tx, c.y + 48, tw, FONT_BODY, BLACK, 2, 0);
             std::string author = (last.author.empty() || last.author == "Unknown Author") ? "" : last.author;
-            if (!author.empty()) text(ellipsize(author, tw, FONT_SMALL), tx, c.y + 112, FONT_SMALL, DARK);
+            if (!author.empty()) text(ellipsize(author, tw, FONT_SMALL), tx, titleBottom + 2, FONT_SMALL, DARK);
             std::string pct = std::to_string(last.percent) + "%";
             int pw = textWidth(pct, FONT_CAPTION, true);
-            progressBar(tx, c.y + c.h - 26, tw - pw - 12, 6, last.percent / 100.0f);
-            textRight(pct, tx + tw, c.y + c.h - 36, FONT_CAPTION, INK, true);
+            progressBar(tx, c.y + c.h - 24, tw - pw - 12, 6, last.percent / 100.0f);
+            textRight(pct, tx + tw, c.y + c.h - 34, FONT_CAPTION, INK, true);
         } else {
             text("YOUR LIBRARY", tx, c.y + 30, FONT_CAPTION, DARK, true);
             text("Start reading", tx, c.y + 60, FONT_BODY + 2, BLACK, true);

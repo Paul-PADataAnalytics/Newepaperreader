@@ -52,10 +52,11 @@ Rect sleepSeg() { return Rect(MARGIN, CONTENT_Y + 76, W - 2 * MARGIN, 54); }
 constexpr int POWER_ROW2 = CONTENT_Y + 150;
 Rect usbToggle() { return Rect(W - MARGIN - TOGGLE_W, POWER_ROW2 + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
 Rect alwaysToggle() { return Rect(W - MARGIN - TOGGLE_W, POWER_ROW2 + ROW + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
-constexpr int POWER_ROW4 = POWER_ROW2 + 2 * ROW;
+Rect idleSleepToggle() { return Rect(W - MARGIN - TOGGLE_W, POWER_ROW2 + 2 * ROW + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
+constexpr int POWER_ROW4 = POWER_ROW2 + 3 * ROW;
 Rect sleepScreenSeg() { return Rect(MARGIN, POWER_ROW4 + 50, W - 2 * MARGIN, 54); }
-constexpr int POWER_BATT = POWER_ROW4 + 130;
-Rect sleepNowBtn() { return Rect(MARGIN, H - 100, W - 2 * MARGIN, 64); }
+constexpr int POWER_BATT = POWER_ROW4 + 112;
+Rect sleepNowBtn() { return Rect(MARGIN, H - 72, W - 2 * MARGIN, 56); }
 
 // Bluetooth tab
 Rect bleToggle() { return Rect(W - MARGIN - TOGGLE_W, CONTENT_Y + (ROW - TOGGLE_H) / 2, TOGGLE_W, TOGGLE_H); }
@@ -131,16 +132,16 @@ void SettingsApp::drawContent() {
         fontSizeRow(y);
         hRule(y + ROW - 1);
         y += ROW;
-        settingLabel(y, 72, "Picture brightness", "Lightens photos and sleep pictures");
+        settingLabel(y, 72, "Picture brightness", "Lightens photos and sleep images");
         segmented(brightnessSeg(), {"Original", "Light", "Lighter", "Lightest"}, s.imageBrightness, FONT_CAPTION + 1);
         hRule(REFRESH_ROW - 8);
-        settingLabel(REFRESH_ROW, 72, "Full page refresh", "Less often = faster page turns");
-        segmented(refreshSeg(), {"Every page", "Every 3", "Every 6", "Every 12"},
+        settingLabel(REFRESH_ROW, 72, "Full page refresh", "Less often speeds page turns");
+        segmented(refreshSeg(), {"1 page", "3 pages", "6 pages", "12 pages"},
                   refreshOptionIndex(s.fullRefreshEvery), FONT_CAPTION + 1);
         break;
     }
     case TAB_POWER: {
-        settingLabel(CONTENT_Y, 72, "Auto-sleep", "After this long without a touch");
+        settingLabel(CONTENT_Y, 72, "Auto-sleep", "After no touch");
         segmented(sleepSeg(), {"1m", "2m", "5m", "10m", "30m", "Never"}, sleepOptionIndex(s.sleepTimeoutMin));
         hRule(POWER_ROW2 - 1);
         settingLabel(POWER_ROW2, ROW, "Stay awake on USB", "While plugged into a computer");
@@ -150,6 +151,11 @@ void SettingsApp::drawContent() {
         settingLabel(POWER_ROW2 + ROW, ROW, "Always on", "Developer: never auto-sleep");
         Rect a = alwaysToggle();
         toggle(a.x, a.y, s.alwaysOn);
+        constexpr int idleRow = POWER_ROW2 + 2 * ROW;
+        hRule(idleRow - 1);
+        settingLabel(idleRow, ROW, "Idle light sleep", "BLE / Wi-Fi keeps device awake");
+        Rect idle = idleSleepToggle();
+        toggle(idle.x, idle.y, s.idleSleep);
         hRule(POWER_ROW4 - 1);
         text("Sleep screen", MARGIN, POWER_ROW4 + 12, FONT_BODY, BLACK);
         segmented(sleepScreenSeg(), {"Pictures", "Book & battery"}, s.sleepShowsImages ? 0 : 1);
@@ -293,8 +299,13 @@ void SettingsApp::handleTouch(int x, int y) {
             changed = true;
         }
         if (y >= POWER_ROW2 + ROW && y < POWER_ROW4 && x > W / 2) {
-            s.alwaysOn = !s.alwaysOn;
-            changed = true;
+            if (y < POWER_ROW2 + 2 * ROW) {
+                s.alwaysOn = !s.alwaysOn;
+                changed = true;
+            } else {
+                s.idleSleep = !s.idleSleep;
+                changed = true;
+            }
         }
         int ss = hitSegmented(sleepScreenSeg(), 2, x, y);
         if (ss >= 0 && (ss == 0) != s.sleepShowsImages) {

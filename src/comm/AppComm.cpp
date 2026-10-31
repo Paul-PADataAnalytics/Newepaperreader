@@ -103,6 +103,8 @@ static bool inboxPop(std::string& out) {
 static void transportRespond(const std::string& json);
 static void transportNotifyDelta(const std::string& json);
 static bool transportConnected();
+// Short connection interval while a file is being received, relaxed otherwise.
+static void transportSetFastLink(bool fast);
 #ifdef NATIVE_TESTING
 static void nativePump();
 #endif
@@ -302,6 +304,7 @@ struct UploadState {
 UploadState g_upload;
 
 void uploadReset() {
+    if (g_upload.active) transportSetFastLink(false);
     g_uploadBuf.clear();
     uploadClose();
     if (g_upload.active && !g_upload.partPath.empty() && fsExists(g_upload.partPath)) {
@@ -542,6 +545,7 @@ void handleJson(const std::string& msg) {
         g_upload.expected = size;
         g_upload.lastActivityMs = millis();
         PowerManager::setBusy(true);
+        transportSetFastLink(true);
         s_lastEvent = "Receiving " + name;
         JsonDocument r;
         r["t"] = "FILE_READY";
@@ -687,12 +691,26 @@ class CommWriteCallbacks : public BLECharacteristicCallbacks {
     }
 };
 
+static esp_bd_addr_t s_peerBda;
+static volatile bool s_havePeer = false;
+
+// Connection interval in 1.25ms units, supervision timeout in 10ms units.
+// File transfers are bounded by one write round trip per interval, so they
+// get 7.5-15ms; otherwise 30-50ms (what Android calls "balanced") keeps the
+// radio from waking every few milliseconds while the phone is just linked.
+static void requestLinkParams(bool fast) {
+    if (!pServer || !s_havePeer) return;
+    if (fast) pServer->updateConnParams(s_peerBda, 6, 12, 0, 400);
+    else pServer->updateConnParams(s_peerBda, 24, 40, 0, 500);
+}
+
 class CommServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* server, esp_ble_gatts_cb_param_t* param) override {
+        (void)server;
         Serial.println("AppComm: companion connected");
-        // Ask for a short connection interval (7.5-15ms): file transfers
-        // are bounded by one write round trip per interval.
-        server->updateConnParams(param->connect.remote_bda, 6, 12, 0, 400);
+        memcpy(s_peerBda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+        s_havePeer = true;
+        requestLinkParams(false);
         // Keep advertising so a second phone/computer can still connect
         // even if a stale connection is hanging around.
         BLEDevice::startAdvertising();
@@ -700,6 +718,7 @@ class CommServerCallbacks : public BLEServerCallbacks {
     void onDisconnect(BLEServer* server) override {
         (void)server;
         g_peerDropped = true;
+        s_havePeer = false;
         Serial.println("AppComm: companion disconnected, advertising again");
         BLEDevice::startAdvertising();
     }
@@ -719,6 +738,10 @@ static void transportNotifyDelta(const std::string& json) {
 
 static bool transportConnected() {
     return pServer && pServer->getConnectedCount() > 0;
+}
+
+static void transportSetFastLink(bool fast) {
+    if (transportConnected()) requestLinkParams(fast);
 }
 
 void AppComm::init() {
@@ -770,6 +793,7 @@ void AppComm::deinit() {
     BLEDevice::deinit(false);
     inboxClear();
     pServer = nullptr;
+    s_havePeer = false;
     pWriteChar = nullptr;
     pNotifyChar = nullptr;
     pRespChar = nullptr;
@@ -855,6 +879,8 @@ void AppComm::deinit() {
     client_socket = server_fd = -1;
     inboxClear();
 }
+
+static void transportSetFastLink(bool fast) { (void)fast; }
 
 // Runs before the common poll(): moves bytes from the socket into the inbox.
 static void nativePump() {

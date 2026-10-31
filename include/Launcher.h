@@ -52,6 +52,9 @@ public:
 
     void drawMenu();
     void handleTouch(int x, int y);
+    // When loop() next has time-based work (the active app's update(), or
+    // the home-screen clock's minute tick); see Application::msUntilUpdate().
+    uint32_t msUntilUpdate() const;
 
     bool isAppRunning() const { return m_activeApp != nullptr; }
     Application* getActiveApp() { return m_activeApp; }

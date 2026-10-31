@@ -23,6 +23,9 @@ void setBusy(bool busy);
 
 uint32_t msSinceActivity();
 bool shouldAutoSleep();
+// Time left before the inactivity timeout (0 = due now), or UINT32_MAX when
+// it can't currently fire.
+uint32_t msUntilAutoSleep();
 
 // True when on external power: a USB host is talking to us (USB
 // Serial/JTAG sees SOF packets) or the battery sits at charger voltage
@@ -40,6 +43,8 @@ const char* lastSleepSummary();
 void boostCpu();
 // Drops to 80MHz once nothing has needed full speed for a little while.
 void idleTick();
+// Drops to 80MHz now (before light sleep, so wake-ups run at the low clock).
+void relaxCpu();
 // False while a transfer or enabled radio requires the CPU to remain awake.
 bool canLightSleep();
 

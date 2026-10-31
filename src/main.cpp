@@ -3,6 +3,9 @@
 #include <SPI.h>
 #include <SD.h>
 #include <esp_sleep.h>
+#include <esp_timer.h>
+#include <soc/io_mux_reg.h>
+#include <soc/gpio_periph.h>
 #include <driver/rtc_io.h>
 #include "utilities.h"
 #else
@@ -15,6 +18,7 @@
 #include <dirent.h>
 #endif
 
+#include <algorithm>
 #include <vector>
 #include <string>
 #include <cmath>
@@ -56,6 +60,11 @@ static TaskHandle_t touchReaderTaskHandle = nullptr;
 static SemaphoreHandle_t touchReadMutex = nullptr;
 static volatile uint32_t s_touchWakeups = 0;
 static volatile uint32_t s_touchDowns = 0;
+// Light-sleep residency, reported by STATUS.
+static uint32_t s_lightSleeps = 0;
+static uint32_t s_timerWakes = 0;
+static uint64_t s_lightSleepUs = 0;
+static int64_t s_statsSinceUs = 0;
 
 enum class TouchPhase : uint8_t {
     NONE = 0,
@@ -136,6 +145,9 @@ void launchSettingsApp() {
 
 static void enterLockMode(PowerManager::SleepReason reason);
 static uint32_t s_testTimerWakeSec = 0;
+#ifndef NATIVE_TESTING
+static uint32_t s_usbSleepTestUntil = 0;
+#endif
 
 // ---------------------------------------------------------------------------
 // Serial console (development): "T x y" raw touch, "TL x y" touch in
@@ -180,6 +192,24 @@ void processSerialCommands() {
         // sleep/resume cycle can be tested without pressing the button.
         s_testTimerWakeSec = (uint32_t)cmd.substring(7).toInt();
         enterLockMode(PowerManager::SLEEP_DEV_COMMAND);
+    } else if (cmd.startsWith("USBSLEEP ")) {
+        // Development: allow idle light sleep for n seconds despite the USB
+        // host, to measure battery-like idle behaviour. The console is
+        // unreachable meanwhile and for a while after. Counters restart.
+        s_usbSleepTestUntil = (millis() + (uint32_t)cmd.substring(9).toInt() * 1000u) | 1u;
+        s_lightSleeps = s_timerWakes = 0;
+        s_lightSleepUs = 0;
+        s_statsSinceUs = esp_timer_get_time();
+        Serial.println("USBSLEEP started");
+    } else if (cmd == "EPDT") { // TEMP diagnostic
+        epd_poweron(); delay(20); uint32_t on = analogReadMilliVolts(BATT_PIN);
+        epd_poweroff(); delay(300); uint32_t off = analogReadMilliVolts(BATT_PIN);
+        epd_poweroff_all(); delay(300); uint32_t all = analogReadMilliVolts(BATT_PIN);
+        epd_poweroff(); delay(300); uint32_t off2 = analogReadMilliVolts(BATT_PIN);
+        Serial.printf("EPDT on=%u off=%u all=%u off2=%u slpsel0=%d slpsel12=%d slpsel13=%d slpsel47=%d\n",
+                      (unsigned)on, (unsigned)off, (unsigned)all, (unsigned)off2,
+                      (int)REG_GET_BIT(GPIO_PIN_MUX_REG[0], SLP_SEL), (int)REG_GET_BIT(GPIO_PIN_MUX_REG[12], SLP_SEL),
+                      (int)REG_GET_BIT(GPIO_PIN_MUX_REG[13], SLP_SEL), (int)REG_GET_BIT(GPIO_PIN_MUX_REG[47], SLP_SEL));
     } else if (cmd == "STATUS") {
         Serial.printf("STATUS lastSleep=[%s] usbHost=%d gt911=%d/%d touch=%u/%u batt=%.3fV (%d%%) usb=%d cpu=%uMHz idle=%ums heap=%u psram=%u ble=%d conn=%d app=%d\n",
                       PowerManager::lastSleepSummary(), PowerManager::isUsbHostActive() ? 1 : 0,
@@ -190,6 +220,10 @@ void processSerialCommands() {
                       (unsigned)PowerManager::msSinceActivity(), (unsigned)ESP.getFreeHeap(),
                       (unsigned)ESP.getFreePsram(), AppComm::isInitialized() ? 1 : 0,
                       AppComm::isConnected() ? 1 : 0, Launcher::getInstance().getActiveAppIndex());
+        uint64_t upUs = esp_timer_get_time() - s_statsSinceUs;
+        Serial.printf("STATUS lightSleep n=%u timerWakes=%u slept=%ums of %ums (%u%%)\n",
+                      (unsigned)s_lightSleeps, (unsigned)s_timerWakes, (unsigned)(s_lightSleepUs / 1000),
+                      (unsigned)(upUs / 1000), (unsigned)(upUs ? s_lightSleepUs * 100 / upUs : 0));
     }
 #endif
 }
@@ -522,9 +556,41 @@ void requestSleepNow() {
 // ---------------------------------------------------------------------------
 
 #ifndef NATIVE_TESTING
+// Light sleep is only worth entering for at least this long.
+static const uint32_t MIN_LIGHT_SLEEP_MS = 20;
+// Safety net for anything polled from loop() that has no wake source.
+static const uint32_t MAX_LIGHT_SLEEP_MS = 60000;
+
+// How long the device can stay in light sleep with nothing but the touch
+// panel and the side button able to wake it.
+static uint32_t lightSleepBudgetMs() {
+    uint32_t ms = MAX_LIGHT_SLEEP_MS;
+    ms = std::min(ms, Launcher::getInstance().msUntilUpdate());
+    // Wake in time to go to deep sleep when the inactivity timeout runs out.
+    uint32_t autoSleep = PowerManager::msUntilAutoSleep();
+    if (autoSleep != UINT32_MAX) ms = std::min(ms, autoSleep + 50);
+    return ms;
+}
+
+// The USB Serial/JTAG link (the development console) stops working once the
+// chip light-sleeps, and a USB host powers the device anyway.
+static bool usbConsoleNeedsAwake() {
+    if (s_usbSleepTestUntil != 0) {
+        int32_t left = (int32_t)(s_usbSleepTestUntil - millis());
+        if (left > 0) return false;
+        // After a USBSLEEP test, give the host time to bring the link back
+        // (it may no longer be sending the SOFs isUsbHostActive() looks for).
+        if (left > -600000) return true;
+        s_usbSleepTestUntil = 0;
+    }
+    return PowerManager::isUsbHostActive();
+}
+
 static bool sleepUntilInput() {
-    if (!PowerManager::canLightSleep() || !touchReadMutex ||
-        xSemaphoreTake(touchReadMutex, 0) != pdTRUE) return false;
+    if (!PowerManager::canLightSleep() || usbConsoleNeedsAwake()) return false;
+    const uint32_t budgetMs = lightSleepBudgetMs();
+    if (budgetMs < MIN_LIGHT_SLEEP_MS) return false;
+    if (!touchReadMutex || xSemaphoreTake(touchReadMutex, 0) != pdTRUE) return false;
     const gpio_num_t touchPin = static_cast<gpio_num_t>(TOUCH_INT);
     const gpio_num_t buttonPin = static_cast<gpio_num_t>(BUTTON_1);
     if (digitalRead(TOUCH_INT) == LOW || digitalRead(BUTTON_1) == LOW ||
@@ -533,15 +599,22 @@ static bool sleepUntilInput() {
         return false;
     }
     Serial.flush();
+    PowerManager::relaxCpu();
     gpio_sleep_sel_dis(touchPin);
     gpio_sleep_sel_dis(buttonPin);
     gpio_intr_disable(touchPin);
     esp_err_t err = gpio_wakeup_enable(touchPin, GPIO_INTR_LOW_LEVEL);
     if (err == ESP_OK) err = gpio_wakeup_enable(buttonPin, GPIO_INTR_LOW_LEVEL);
     if (err == ESP_OK) err = esp_sleep_enable_gpio_wakeup();
-    if (err == ESP_OK) err = esp_sleep_enable_timer_wakeup(1000000ULL);
+    if (err == ESP_OK) err = esp_sleep_enable_timer_wakeup((uint64_t)budgetMs * 1000ULL);
+    const int64_t sleepStart = esp_timer_get_time();
     if (err == ESP_OK) err = esp_light_sleep_start();
     const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    if (err == ESP_OK) {
+        s_lightSleeps++;
+        s_lightSleepUs += (uint64_t)(esp_timer_get_time() - sleepStart);
+        if (cause == ESP_SLEEP_WAKEUP_TIMER) s_timerWakes++;
+    }
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_TIMER);
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
     gpio_wakeup_disable(touchPin);

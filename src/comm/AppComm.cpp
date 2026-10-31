@@ -278,6 +278,7 @@ const std::vector<AppStorage::LibraryIndexEntry>& getLibrary() {
             AppStorage::LibraryIndexEntry e;
             e.path = f.path;
             e.size = (uint32_t)f.size;
+            e.mtime = f.mtime;
             g_library.push_back(e);
         }
         AppStorage::saveLibraryIndex("/books", g_library);

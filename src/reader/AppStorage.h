@@ -12,6 +12,9 @@ bool initialize();
 // Converts a browser path (e.g. /books/foo.epub) into a runtime path.
 std::string toRuntimePath(const std::string& browserPath);
 
+// Inverse of toRuntimePath(): back to an SD-root path such as /books/foo.epub.
+std::string toSdPath(const std::string& runtimePath);
+
 // Converts a runtime path into an absolute VFS path suitable for standard C file I/O (fopen, miniz).
 std::string toVfsPath(const std::string& runtimePath);
 
@@ -91,6 +94,7 @@ void markLibraryDirty();
 struct LibraryIndexEntry {
     std::string path;
     uint32_t size = 0;
+    uint32_t mtime = 0; // FileInfo::mtime stamp (0 in indexes from older firmware)
 };
 
 // Persists a full recursive scan of `rootPath` (e.g. "/books") so future app
@@ -107,8 +111,9 @@ struct LibraryIndex {
 // Loads a previously-saved index for `rootPath`. `valid` is false (forcing
 // the caller to do a real scan) when no index has been saved yet, when
 // markLibraryDirty() invalidated it, or when this boot is a fresh power-on
-// (see wasResumedFromSleep()) - i.e. this single call encodes the full
-// "should we rescan?" policy so apps don't have to duplicate it.
+// (see wasResumedFromSleep()) and nothing has saved a scan since boot -
+// i.e. this single call encodes the full "should we rescan?" policy so apps
+// don't have to duplicate it.
 LibraryIndex loadLibraryIndex(const std::string& rootPath);
 
 } // namespace AppStorage

@@ -5,6 +5,12 @@
 // Persistent, system-wide user preferences (stored as /data/settings.json on
 // the SD card). Load once at boot via SystemSettings::load(); mutate the
 // fields through get() and call save() after changing anything.
+enum SleepScreenMode {
+    SLEEP_SCREEN_COVER = 0,
+    SLEEP_SCREEN_PICTURES = 1,
+    SLEEP_SCREEN_SIMPLE = 2,
+};
+
 struct SystemSettingsData {
     // Auto-sleep after this many minutes without user activity. 0 = never.
     int sleepTimeoutMin = 5;
@@ -23,8 +29,10 @@ struct SystemSettingsData {
     // Page turns use the quick (flash-free) refresh; every this many turns a
     // full clean refresh removes ghosting. 1 = always full refresh.
     int fullRefreshEvery = 6;
-    // Sleep screen: true = rotate pictures from /images (*.raw), false = info card.
-    bool sleepShowsImages = true;
+    // Sleep screen: the most recently read book's cover, rotating pictures
+    // from /images (*.raw), or a simple info card. Cover and Pictures fall
+    // back to the info card when there is nothing to show.
+    int sleepScreen = SLEEP_SCREEN_COVER;
     // Local time offset from UTC in minutes (sent by the companion app).
     int tzOffsetMin = 0;
 };

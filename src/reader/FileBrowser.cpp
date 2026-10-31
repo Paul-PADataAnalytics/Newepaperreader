@@ -1,9 +1,11 @@
 #include "FileBrowser.h"
+#include "AppStorage.h"
 
-#ifdef NATIVE_TESTING
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#ifndef NATIVE_TESTING
+#include "ff.h"
 #endif
 
 FileBrowser::FileBrowser() : currentPath("/") {
@@ -51,79 +53,107 @@ std::string FileBrowser::getCurrentPath() const {
 
 void FileBrowser::loadDirectory(const char* path) {
     files.clear();
-    
-#ifndef NATIVE_TESTING
-    File dir = SD.open(path);
-    if (!dir || !dir.isDirectory()) {
+    if (!listDirectory(path, [this](const FileInfo& info) { files.push_back(info); })) {
         printf("FileBrowser::loadDirectory - Failed to open directory: %s\n", path);
-        return;
     }
-    
-    printf("FileBrowser::loadDirectory - Opened directory: %s\n", path);
-    File file = dir.openNextFile();
-    while (file) {
-        FileInfo info;
-        info.name = file.name();
-        
-        std::string fullPath = currentPath;
-        if (fullPath.back() != '/') {
-            fullPath += "/";
-        }
-        fullPath += info.name;
-        
-        info.path = fullPath;
-        info.isDirectory = file.isDirectory();
-        info.size = file.size();
-        
-        if (info.name.length() > 0 && info.name[0] != '.') {
-            files.push_back(info);
-        }
-        
-        file = dir.openNextFile();
+}
+
+namespace {
+
+std::string joinPath(const std::string& dir, const std::string& name) {
+    std::string full = dir;
+    if (full.empty() || full.back() != '/') full += "/";
+    return full + name;
+}
+
+#ifndef NATIVE_TESTING
+// The SD library keeps its FatFs drive number private; a pointer-to-member
+// taken through a derived class is the standard-conforming way to read it.
+struct SdDriveAccess : public fs::SDFS {
+    static int number() {
+        uint8_t fs::SDFS::*member = &SdDriveAccess::_pdrv;
+        const uint8_t pdrv = SD.*member;
+        return pdrv == 0xFF ? -1 : pdrv;
     }
-#else
-    // Use opendir for native testing
-    std::string nativePath = path;
-    if (nativePath.length() > 0 && nativePath[0] == '/') {
-        nativePath = nativePath.substr(1);
-    }
-    if (nativePath.empty()) {
-        nativePath = ".";
-    }
-    
-    DIR* d = opendir(nativePath.c_str());
-    if (d) {
-        struct dirent* entry;
-        while ((entry = readdir(d)) != nullptr) {
-            std::string name = entry->d_name;
-            if (name == "." || name == "..") continue;
-            if (name.length() > 0 && name[0] == '.') continue;
-            
+};
+
+// "0:/books" style FatFs path for an SD-root path, or "" if not mounted.
+std::string fatPath(const std::string& sdPath) {
+    const int drive = SdDriveAccess::number();
+    if (drive < 0) return "";
+    return std::to_string(drive) + ":" + (sdPath.empty() ? "/" : sdPath);
+}
+#endif
+
+} // namespace
+
+bool FileBrowser::listDirectory(const std::string& sdPath,
+                                const std::function<void(const FileInfo&)>& onEntry) {
+#ifndef NATIVE_TESTING
+    const std::string fat = fatPath(sdPath);
+    if (!fat.empty()) {
+        FF_DIR dir;
+        if (f_opendir(&dir, fat.c_str()) != FR_OK) return false;
+        FILINFO fno;
+        while (f_readdir(&dir, &fno) == FR_OK && fno.fname[0] != 0) {
+            if (fno.fname[0] == '.') continue;
             FileInfo info;
-            info.name = name;
-            
-            std::string fullPath = currentPath;
-            if (fullPath.back() != '/') {
-                fullPath += "/";
-            }
-            fullPath += info.name;
-            info.path = fullPath;
-            info.isDirectory = (entry->d_type == DT_DIR);
-            
-            std::string realFilePath = nativePath + "/" + name;
-            FILE* f = fopen(realFilePath.c_str(), "rb");
-            if (f) {
-                fseek(f, 0, SEEK_END);
-                info.size = ftell(f);
-                fclose(f);
-            } else {
-                info.size = 0;
-            }
-            files.push_back(info);
+            info.name = fno.fname;
+            info.path = joinPath(sdPath, info.name);
+            info.isDirectory = (fno.fattrib & AM_DIR) != 0;
+            info.size = info.isDirectory ? 0 : (size_t)fno.fsize;
+            info.mtime = ((uint32_t)fno.fdate << 16) | fno.ftime;
+            onEntry(info);
         }
-        closedir(d);
+        f_closedir(&dir);
+        return true;
+    }
+    const std::string hostPath = AppStorage::toVfsPath(sdPath.empty() ? "/" : sdPath);
+#else
+    std::string hostPath = sdPath;
+    if (!hostPath.empty() && hostPath[0] == '/') hostPath = hostPath.substr(1);
+    if (hostPath.empty()) hostPath = ".";
+#endif
+    DIR* d = opendir(hostPath.c_str());
+    if (!d) return false;
+    struct dirent* entry;
+    while ((entry = readdir(d)) != nullptr) {
+        const std::string name = entry->d_name;
+        if (name.empty() || name[0] == '.') continue;
+        struct stat st;
+#ifdef NATIVE_TESTING
+        if (lstat((hostPath + "/" + name).c_str(), &st) != 0 || S_ISLNK(st.st_mode)) continue;
+#else
+        if (stat((hostPath + "/" + name).c_str(), &st) != 0) continue;
+#endif
+        FileInfo info;
+        info.name = name;
+        info.path = joinPath(sdPath, name);
+        info.isDirectory = S_ISDIR(st.st_mode);
+        info.size = info.isDirectory ? 0 : (size_t)st.st_size;
+        info.mtime = (uint32_t)st.st_mtime;
+        onEntry(info);
+    }
+    closedir(d);
+    return true;
+}
+
+bool FileBrowser::fileStamp(const std::string& sdPath, uint32_t& size, uint32_t& mtime) {
+#ifndef NATIVE_TESTING
+    const std::string fat = fatPath(sdPath);
+    if (!fat.empty()) {
+        FILINFO fno;
+        if (f_stat(fat.c_str(), &fno) != FR_OK) return false;
+        size = (uint32_t)fno.fsize;
+        mtime = ((uint32_t)fno.fdate << 16) | fno.ftime;
+        return true;
     }
 #endif
+    struct stat st;
+    if (stat(AppStorage::toVfsPath(AppStorage::toRuntimePath(sdPath)).c_str(), &st) != 0) return false;
+    size = (uint32_t)st.st_size;
+    mtime = (uint32_t)st.st_mtime;
+    return true;
 }
 
 std::vector<FileInfo> FileBrowser::scanRecursive(const char* rootPath, std::function<void()> onProgress, int maxDepth) {
@@ -140,82 +170,19 @@ void FileBrowser::scanRecursiveHelper(const std::string& path, std::vector<FileI
     }
     if (onProgress) onProgress();
 
-#ifndef NATIVE_TESTING
-    File dir = SD.open(path.c_str());
-    if (!dir || !dir.isDirectory()) {
+    std::vector<std::string> subdirectories;
+    const bool listed = listDirectory(path, [&](const FileInfo& info) {
+        if (onProgress) onProgress();
+        out.push_back(info);
+        if (info.isDirectory) subdirectories.push_back(info.path);
+    });
+    if (!listed) {
         m_scanSucceeded = false;
         return;
     }
-
-    File file = dir.openNextFile();
-    while (file) {
-        if (onProgress) onProgress();
-        std::string rawName = file.name();
-        // Arduino's SD library can return either a bare filename or a path;
-        // defensively extract just the basename.
-        size_t slashPos = rawName.find_last_of('/');
-        std::string baseName = (slashPos == std::string::npos) ? rawName : rawName.substr(slashPos + 1);
-
-        if (!baseName.empty() && baseName[0] != '.') {
-            std::string fullPath = path;
-            if (fullPath.empty() || fullPath.back() != '/') fullPath += "/";
-            fullPath += baseName;
-
-            FileInfo info;
-            info.name = baseName;
-            info.path = fullPath;
-            info.isDirectory = file.isDirectory();
-            info.size = file.size();
-            out.push_back(info);
-
-            if (info.isDirectory) {
-                scanRecursiveHelper(fullPath, out, depth + 1, maxDepth, onProgress);
-            }
-        }
-        file = dir.openNextFile();
+    // Descend after the listing is closed: keeps a single directory handle
+    // open at a time however deep the tree is.
+    for (const std::string& subdirectory : subdirectories) {
+        scanRecursiveHelper(subdirectory, out, depth + 1, maxDepth, onProgress);
     }
-#else
-    std::string nativePath = path;
-    if (nativePath.length() > 0 && nativePath[0] == '/') {
-        nativePath = nativePath.substr(1);
-    }
-    if (nativePath.empty()) {
-        nativePath = ".";
-    }
-
-    DIR* d = opendir(nativePath.c_str());
-    if (d) {
-        struct dirent* entry;
-        while ((entry = readdir(d)) != nullptr) {
-            if (onProgress) onProgress();
-            std::string name = entry->d_name;
-            if (name == "." || name == "..") continue;
-            if (name.length() > 0 && name[0] == '.') continue;
-
-            std::string fullPath = path;
-            if (fullPath.empty() || fullPath.back() != '/') fullPath += "/";
-            fullPath += name;
-
-            FileInfo info;
-            info.name = name;
-            info.path = fullPath;
-            struct stat st;
-            if (lstat((nativePath + "/" + name).c_str(), &st) != 0) {
-                m_scanSucceeded = false;
-                continue;
-            }
-            if (S_ISLNK(st.st_mode)) continue;
-            info.isDirectory = S_ISDIR(st.st_mode);
-            info.size = info.isDirectory ? 0 : static_cast<size_t>(st.st_size);
-            out.push_back(info);
-
-            if (info.isDirectory) {
-                scanRecursiveHelper(fullPath, out, depth + 1, maxDepth, onProgress);
-            }
-        }
-        closedir(d);
-    } else {
-        m_scanSucceeded = false;
-    }
-#endif
 }

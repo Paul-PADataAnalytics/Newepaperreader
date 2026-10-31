@@ -126,6 +126,72 @@ std::string basename(const std::string& path) {
     return dot == std::string::npos ? name : name.substr(0, dot);
 }
 
+std::string lowercase(std::string text) {
+    for (char& c : text) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    return text;
+}
+
+bool endsWith(const std::string& text, const char* suffix) {
+    const size_t length = strlen(suffix);
+    return text.size() >= length && text.compare(text.size() - length, length, suffix) == 0;
+}
+
+// Cover images we can decode (stb_image/TJpgDec are built for JPEG and PNG).
+bool isDecodableImage(const std::string& path, const char* mediaType) {
+    const std::string type = lowercase(mediaType ? mediaType : "");
+    if (type == "image/jpeg" || type == "image/jpg" || type == "image/png") return true;
+    if (!type.empty() && type != "application/octet-stream") return false;
+    const std::string lower = lowercase(path);
+    return endsWith(lower, ".jpg") || endsWith(lower, ".jpeg") || endsWith(lower, ".png");
+}
+
+bool isPage(const std::string& path, const char* mediaType) {
+    const std::string type = lowercase(mediaType ? mediaType : "");
+    if (type == "application/xhtml+xml" || type == "text/html") return true;
+    const std::string lower = lowercase(path);
+    return endsWith(lower, ".xhtml") || endsWith(lower, ".html") || endsWith(lower, ".htm");
+}
+
+// First src/href attribute value of the first <img> or SVG <image> tag.
+// Deliberately not an XML parse: cover pages are often sloppy XHTML.
+std::string firstImageReference(const std::string& html) {
+    const std::string lower = lowercase(html);
+    size_t position = 0;
+    while ((position = lower.find('<', position)) != std::string::npos) {
+        ++position;
+        size_t nameStart = position;
+        const size_t colon = lower.find_first_of(": \t\r\n/>", nameStart);
+        if (colon != std::string::npos && lower[colon] == ':') nameStart = colon + 1; // svg:image
+        const bool isImg = lower.compare(nameStart, 3, "img") == 0 &&
+                           !isalnum(static_cast<unsigned char>(lower[nameStart + 3]));
+        const bool isImage = lower.compare(nameStart, 5, "image") == 0 &&
+                             !isalnum(static_cast<unsigned char>(lower[nameStart + 5]));
+        if (!isImg && !isImage) continue;
+        const size_t end = lower.find('>', nameStart);
+        if (end == std::string::npos) break;
+        for (const char* attribute : {"src", "href"}) {
+            size_t at = nameStart;
+            while ((at = lower.find(attribute, at)) != std::string::npos && at < end) {
+                const char before = lower[at - 1];
+                size_t equals = at + strlen(attribute);
+                at = equals;
+                if (!(isspace(static_cast<unsigned char>(before)) || before == ':')) continue;
+                while (equals < end && isspace(static_cast<unsigned char>(lower[equals]))) ++equals;
+                if (equals >= end || lower[equals] != '=') continue;
+                ++equals;
+                while (equals < end && isspace(static_cast<unsigned char>(lower[equals]))) ++equals;
+                const char quote = lower[equals];
+                if (quote != '"' && quote != '\'') continue;
+                const size_t close = html.find(quote, equals + 1);
+                if (close == std::string::npos || close > end) continue;
+                return html.substr(equals + 1, close - equals - 1);
+            }
+        }
+        position = end;
+    }
+    return "";
+}
+
 } // namespace
 
 EpubParser::EpubParser() = default;
@@ -134,7 +200,7 @@ EpubParser::~EpubParser() {
     close();
 }
 
-bool EpubParser::open(const std::string& filepath) {
+bool EpubParser::open(const std::string& filepath, bool readNavigation) {
     close();
     m_filepath = AppStorage::toVfsPath(filepath);
     mz_zip_archive* archive = new mz_zip_archive{};
@@ -144,7 +210,7 @@ bool EpubParser::open(const std::string& filepath) {
         return false;
     }
     m_archive = archive;
-    if (!parseContainer() || !parseOpf()) {
+    if (!parseContainer() || !parseOpf(readNavigation)) {
         close();
         return false;
     }
@@ -164,6 +230,7 @@ void EpubParser::close() {
     m_opfPath.clear();
     m_opfDir.clear();
     m_coverPath.clear();
+    m_coverPagePath.clear();
     m_title.clear();
     m_author.clear();
 }
@@ -245,7 +312,7 @@ bool EpubParser::parseContainer() {
     return false;
 }
 
-bool EpubParser::parseOpf() {
+bool EpubParser::parseOpf(bool includeNavigation) {
     if (m_opfPath.empty()) return false;
 
     size_t size = 0;
@@ -276,6 +343,9 @@ bool EpubParser::parseOpf() {
 
     XMLElement* manifest = child(package, "manifest");
     if (!manifest) return false;
+    std::map<std::string, std::string> mediaTypes; // resolved path -> media-type
+    std::string namedCoverImage;
+    std::string namedCoverPage;
     for (XMLElement* item = child(manifest, "item"); item;
          item = item->NextSiblingElement()) {
         const char* id = item->Attribute("id");
@@ -283,12 +353,55 @@ bool EpubParser::parseOpf() {
         if (!id || !href) continue;
 
         const std::string resolved = resolvePath(m_opfDir, href);
+        const char* mediaType = item->Attribute("media-type");
         m_manifest[id] = resolved;
-        if (hasToken(item->Attribute("properties"), "cover-image")) m_coverPath = resolved;
+        mediaTypes[resolved] = mediaType ? mediaType : "";
+        if (m_coverPath.empty() && hasToken(item->Attribute("properties"), "cover-image") &&
+            isDecodableImage(resolved, mediaType)) {
+            m_coverPath = resolved;
+        }
         if (hasToken(item->Attribute("properties"), "nav")) navPath = resolved;
         if (item->Attribute("media-type", "application/x-dtbncx+xml")) ncxPath = resolved;
+
+        const std::string lowerId = lowercase(id);
+        const std::string lowerName = lowercase(resolved.substr(resolved.find_last_of('/') + 1));
+        const bool namedCover = lowerId.find("cover") != std::string::npos ||
+                                lowerName.find("cover") != std::string::npos;
+        if (namedCover && namedCoverImage.empty() && isDecodableImage(resolved, mediaType)) {
+            namedCoverImage = resolved;
+        }
+        if (namedCover && namedCoverPage.empty() && isPage(resolved, mediaType)) {
+            namedCoverPage = resolved;
+        }
     }
-    if (m_coverPath.empty() && m_manifest.count(coverId)) m_coverPath = m_manifest[coverId];
+
+    // EPUB2 <meta name="cover" content="id">: usually an image id, but some
+    // books name the cover page, or put the href itself in `content`.
+    if (!coverId.empty()) {
+        std::string target;
+        const auto byId = m_manifest.find(coverId);
+        if (byId != m_manifest.end()) target = byId->second;
+        else if (mediaTypes.count(resolvePath(m_opfDir, coverId))) target = resolvePath(m_opfDir, coverId);
+        if (!target.empty()) {
+            const char* type = mediaTypes[target].c_str();
+            if (m_coverPath.empty() && isDecodableImage(target, type)) m_coverPath = target;
+            else if (isPage(target, type)) m_coverPagePath = target;
+        }
+    }
+    if (m_coverPagePath.empty()) {
+        XMLElement* guide = child(package, "guide");
+        for (XMLElement* reference = child(guide, "reference"); reference;
+             reference = reference->NextSiblingElement()) {
+            const char* type = reference->Attribute("type");
+            const char* href = reference->Attribute("href");
+            if (type && href && lowercase(type) == "cover") {
+                m_coverPagePath = resolvePath(m_opfDir, href);
+                break;
+            }
+        }
+    }
+    if (m_coverPath.empty()) m_coverPath = namedCoverImage;
+    if (m_coverPagePath.empty()) m_coverPagePath = namedCoverPage;
 
     XMLElement* spine = child(package, "spine");
     if (!spine) return false;
@@ -299,19 +412,18 @@ bool EpubParser::parseOpf() {
         const auto item = m_manifest.find(idref);
         if (item != m_manifest.end()) m_spine.push_back(item->second);
     }
-
-    if (m_coverPath.empty()) {
-        for (const auto& item : m_manifest) {
-            std::string lower = item.second;
-            for (char& c : lower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
-            if (lower.find("cover") != std::string::npos &&
-                (lower.find(".jpg") != std::string::npos ||
-                 lower.find(".jpeg") != std::string::npos ||
-                 lower.find(".png") != std::string::npos)) {
-                m_coverPath = item.second;
-                break;
-            }
+    if (m_coverPagePath.empty() && !m_spine.empty()) {
+        // Calibre and many publishers open the book with an unnamed-but-
+        // obvious cover/title page.
+        const std::string first = lowercase(m_spine.front());
+        if (first.find("cover") != std::string::npos || first.find("titlepage") != std::string::npos) {
+            m_coverPagePath = m_spine.front();
         }
+    }
+
+    if (!includeNavigation) {
+        for (const auto& chapter : m_spine) m_chapterTitles.push_back(basename(chapter));
+        return !m_spine.empty();
     }
 
     std::map<std::string, std::string> labels;
@@ -364,6 +476,44 @@ bool EpubParser::parseOpf() {
         m_chapterTitles.push_back(title == labels.end() ? basename(chapter) : title->second);
     }
     return !m_spine.empty();
+}
+
+std::string EpubParser::findCoverImage() {
+    if (!m_coverPath.empty() || m_coverPagePath.empty()) return m_coverPath;
+    size_t length = 0;
+    char* page = getFileContent(m_coverPagePath, length);
+    if (!page) return "";
+    const std::string reference = firstImageReference(std::string(page, length));
+    free(page);
+    if (reference.empty() || reference.compare(0, 5, "data:") == 0) return "";
+    const std::string image = resolvePath(dirname(m_coverPagePath), reference);
+    if (!isDecodableImage(image, nullptr)) return "";
+    m_coverPath = image;
+    return m_coverPath;
+}
+
+void* EpubParser::openStream(const std::string& internalPath, size_t& uncompressedSize) {
+    uncompressedSize = 0;
+    if (!m_archive) return nullptr;
+    mz_zip_archive* archive = static_cast<mz_zip_archive*>(m_archive);
+    const int located = mz_zip_reader_locate_file(archive, internalPath.c_str(), nullptr, 0);
+    if (located < 0) return nullptr;
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(archive, static_cast<mz_uint>(located), &stat)) return nullptr;
+    mz_zip_reader_extract_iter_state* state =
+        mz_zip_reader_extract_iter_new(archive, static_cast<mz_uint>(located), 0);
+    if (state) uncompressedSize = static_cast<size_t>(stat.m_uncomp_size);
+    return state;
+}
+
+size_t EpubParser::readStream(void* stream, void* buffer, size_t size) {
+    if (!stream) return 0;
+    return mz_zip_reader_extract_iter_read(
+        static_cast<mz_zip_reader_extract_iter_state*>(stream), buffer, size);
+}
+
+void EpubParser::closeStream(void* stream) {
+    if (stream) mz_zip_reader_extract_iter_free(static_cast<mz_zip_reader_extract_iter_state*>(stream));
 }
 
 std::string EpubParser::resolvePath(const std::string& basePath, const std::string& relPath) {

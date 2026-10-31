@@ -12,7 +12,7 @@ if [[ ! -f .pio/libdeps/native/ArduinoJson/src/ArduinoJson.h ]]; then
 fi
 
 mapfile -d '' SOURCES < <(
-    find src lib/miniz lib/tinyxml2 -type f \( -name '*.cpp' -o -name '*.c' \) \
+    find src lib/miniz lib/tinyxml2 lib/tjpgd -type f \( -name '*.cpp' -o -name '*.c' \) \
         ! -name '*.orig' ! -path '*/examples/*' -print0
 )
 SOURCES+=(tools/web_main.cpp)
@@ -29,6 +29,7 @@ EMCC_FLAGS=(
     -I src/mocks/web
     -I lib/miniz
     -I lib/tinyxml2
+    -I lib/tjpgd
     -I .pio/libdeps/native/ArduinoJson/src
     -I src/mocks
     -I src/comm

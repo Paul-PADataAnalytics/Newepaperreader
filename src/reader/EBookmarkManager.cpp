@@ -2,6 +2,7 @@
 #include "AppStorage.h"
 #include "AppComm.h"
 #include <ArduinoJson.h>
+#include <cstdio>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
@@ -24,13 +25,16 @@ std::string readFileToString(const std::string& path) {
     }
     fclose(f);
 #else
-    if (!SD.exists(path.c_str())) return "";
-    File f = SD.open(path.c_str(), FILE_READ);
+    // Bulk reads (a byte at a time took a VFS call per character), and no
+    // exists() probe: the library loads this file on every open.
+    FILE* f = fopen(AppStorage::toVfsPath(path).c_str(), "r");
     if (!f) return "";
-    while (f.available()) {
-        content += (char)f.read();
+    char buf[1024];
+    size_t got;
+    while ((got = fread(buf, 1, sizeof(buf), f)) > 0) {
+        content.append(buf, got);
     }
-    f.close();
+    fclose(f);
 #endif
     return content;
 }

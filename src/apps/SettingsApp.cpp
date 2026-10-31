@@ -158,7 +158,7 @@ void SettingsApp::drawContent() {
         toggle(idle.x, idle.y, s.idleSleep);
         hRule(POWER_ROW4 - 1);
         text("Sleep screen", MARGIN, POWER_ROW4 + 12, FONT_BODY, BLACK);
-        segmented(sleepScreenSeg(), {"Pictures", "Book & battery"}, s.sleepShowsImages ? 0 : 1);
+        segmented(sleepScreenSeg(), {"Book cover", "Pictures", "Simple"}, s.sleepScreen);
 
         char batt[64];
         snprintf(batt, sizeof(batt), "%.2f V%s", DisplayHAL::getBatteryVoltage(),
@@ -307,9 +307,9 @@ void SettingsApp::handleTouch(int x, int y) {
                 changed = true;
             }
         }
-        int ss = hitSegmented(sleepScreenSeg(), 2, x, y);
-        if (ss >= 0 && (ss == 0) != s.sleepShowsImages) {
-            s.sleepShowsImages = (ss == 0);
+        int ss = hitSegmented(sleepScreenSeg(), 3, x, y);
+        if (ss >= 0 && ss != s.sleepScreen) {
+            s.sleepScreen = ss;
             changed = true;
         }
         if (sleepNowBtn().contains(x, y)) {

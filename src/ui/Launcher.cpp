@@ -9,6 +9,10 @@
 #include "KeeperApp.h"
 #include "GamesApp.h"
 #include "CodebreakerApp.h"
+#include "WordSearchApp.h"
+#include "NumberPlaceApp.h"
+#include "CrevasseApp.h"
+#include "KlondikeApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
@@ -39,6 +43,10 @@ static Application* createTeaRace() { return new TeaRaceApp(); }
 static Application* createKeeper() { return new KeeperApp(); }
 static Application* createGames() { return new GamesApp(); }
 static Application* createCodebreaker() { return new CodebreakerApp(); }
+static Application* createWordSearch() { return new WordSearchApp(); }
+static Application* createNumberPlace() { return new NumberPlaceApp(); }
+static Application* createCrevasse() { return new CrevasseApp(); }
+static Application* createKlondike() { return new KlondikeApp(); }
 
 // ---- Home screen layout ----------------------------------------------------
 namespace {
@@ -113,6 +121,10 @@ void Launcher::init() {
     m_apps[APP_KEEPER]     = {"The Keeper", "Twenty-one nights on a lighthouse", createKeeper, ICON_LIGHTHOUSE};
     m_apps[APP_GAMES]      = {"Games",      "Short games", createGames, ICON_GAMES};
     m_apps[APP_CODEBREAKER] = {"Codebreaker", "Break the enemy cipher, 1917", createCodebreaker, ICON_KEY};
+    m_apps[APP_WORDSEARCH] = {"Word Search", "Ring the hidden words", createWordSearch, ICON_GAMES};
+    m_apps[APP_NUMBERPLACE] = {"Number Place", "Sudoku, as it began in 1979", createNumberPlace, ICON_GAMES};
+    m_apps[APP_CREVASSE]   = {"Crevasse 1911", "Cross the Antarctic ice", createCrevasse, ICON_GAMES};
+    m_apps[APP_KLONDIKE]   = {"Klondike 1897", "Patience in a gold-rush cabin", createKlondike, ICON_GAMES};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }

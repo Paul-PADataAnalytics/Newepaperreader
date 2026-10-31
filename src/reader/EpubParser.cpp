@@ -119,11 +119,30 @@ std::string dirname(const std::string& path) {
     return slash == std::string::npos ? "" : path.substr(0, slash + 1);
 }
 
-std::string basename(const std::string& path) {
-    const size_t slash = path.find_last_of('/');
-    const std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
-    const size_t dot = name.find_last_of('.');
-    return dot == std::string::npos ? name : name.substr(0, dot);
+// Collapses runs of whitespace (TOC labels often span several source lines).
+std::string collapseSpaces(const std::string& in) {
+    std::string out;
+    out.reserve(in.size());
+    for (char c : in) {
+        if (isspace(static_cast<unsigned char>(c))) {
+            if (!out.empty() && out.back() != ' ') out.push_back(' ');
+        } else {
+            out.push_back(c);
+        }
+    }
+    if (!out.empty() && out.back() == ' ') out.pop_back();
+    return out;
+}
+
+XMLElement* findTocNav(XMLElement* element) {
+    for (XMLElement* el = element; el; el = el->NextSiblingElement()) {
+        if (localName(el->Name()) == "nav" &&
+            (hasToken(el->Attribute("epub:type"), "toc") || hasToken(el->Attribute("role"), "doc-toc"))) {
+            return el;
+        }
+        if (XMLElement* found = findTocNav(el->FirstChildElement())) return found;
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -160,7 +179,8 @@ void EpubParser::close() {
     m_filepath.clear();
     m_manifest.clear();
     m_spine.clear();
-    m_chapterTitles.clear();
+    m_navPath.clear();
+    m_ncxPath.clear();
     m_opfPath.clear();
     m_opfDir.clear();
     m_coverPath.clear();
@@ -170,10 +190,6 @@ void EpubParser::close() {
 
 std::vector<std::string> EpubParser::getChapterList() const {
     return m_spine;
-}
-
-std::vector<std::string> EpubParser::getChapterTitles() const {
-    return m_chapterTitles;
 }
 
 char* EpubParser::getFileContent(const std::string& internalPath, size_t& outSize) {
@@ -261,8 +277,6 @@ bool EpubParser::parseOpf() {
     if (!package) return false;
 
     std::string coverId;
-    std::string navPath;
-    std::string ncxPath;
     XMLElement* metadata = child(package, "metadata");
     for (XMLElement* el = metadata ? metadata->FirstChildElement() : nullptr;
          el; el = el->NextSiblingElement()) {
@@ -285,8 +299,8 @@ bool EpubParser::parseOpf() {
         const std::string resolved = resolvePath(m_opfDir, href);
         m_manifest[id] = resolved;
         if (hasToken(item->Attribute("properties"), "cover-image")) m_coverPath = resolved;
-        if (hasToken(item->Attribute("properties"), "nav")) navPath = resolved;
-        if (item->Attribute("media-type", "application/x-dtbncx+xml")) ncxPath = resolved;
+        if (hasToken(item->Attribute("properties"), "nav")) m_navPath = resolved;
+        if (item->Attribute("media-type", "application/x-dtbncx+xml")) m_ncxPath = resolved;
     }
     if (m_coverPath.empty() && m_manifest.count(coverId)) m_coverPath = m_manifest[coverId];
 
@@ -314,58 +328,79 @@ bool EpubParser::parseOpf() {
         }
     }
 
-    std::map<std::string, std::string> labels;
-    auto readNavigation = [this, &labels](const std::string& path, bool ncx) {
-        if (path.empty()) return;
-        size_t length = 0;
-        char* contents = getFileContent(path, length);
-        if (!contents) return;
-
-        XMLDocument nav;
-        const XMLError parsed = nav.Parse(contents, length);
-        free(contents);
-        if (parsed != XML_SUCCESS) return;
-
-        std::function<void(XMLElement*, bool)> walk =
-            [&](XMLElement* element, bool inToc) {
-                for (XMLElement* el = element; el; el = el->NextSiblingElement()) {
-                    bool toc = inToc;
-                    if (localName(el->Name()) == "nav") {
-                        toc = hasToken(el->Attribute("epub:type"), "toc") ||
-                              hasToken(el->Attribute("role"), "doc-toc");
-                    }
-
-                    const char* href = nullptr;
-                    std::string label;
-                    if (!ncx && toc && localName(el->Name()) == "a") {
-                        href = el->Attribute("href");
-                        label = elementText(el);
-                    } else if (ncx && localName(el->Name()) == "navPoint") {
-                        XMLElement* content = child(el, "content");
-                        XMLElement* labelElement = child(child(el, "navLabel"), "text");
-                        href = content ? content->Attribute("src") : nullptr;
-                        label = elementText(labelElement);
-                    }
-                    if (href && !label.empty()) {
-                        labels[resolvePath(dirname(path), href)] = label;
-                    }
-                    walk(el->FirstChildElement(), toc);
-                }
-            };
-        walk(nav.RootElement(), false);
-    };
-
-    readNavigation(navPath, false);
-    if (labels.empty()) readNavigation(ncxPath, true);
-
-    m_chapterTitles.reserve(m_spine.size());
-    for (const auto& chapter : m_spine) {
-        const auto title = labels.find(chapter);
-        m_chapterTitles.push_back(title == labels.end() ? basename(chapter) : title->second);
-    }
     return !m_spine.empty();
 }
 
 std::string EpubParser::resolvePath(const std::string& basePath, const std::string& relPath) {
     return normalizePath(basePath, relPath);
+}
+
+std::vector<EpubParser::TocEntry> EpubParser::readToc() {
+    // Keeps a pathological TOC from eating the heap.
+    const size_t kMaxEntries = 1500;
+    std::vector<TocEntry> toc;
+    std::map<std::string, int> spineIndex;
+    for (size_t i = 0; i < m_spine.size(); ++i) spineIndex.insert(std::make_pair(m_spine[i], (int)i));
+
+    auto addEntry = [&](const std::string& baseDir, const char* href, const std::string& label, int depth) {
+        if (!href || label.empty() || toc.size() >= kMaxEntries) return;
+        const auto spine = spineIndex.find(resolvePath(baseDir, href));
+        if (spine == spineIndex.end()) return;
+        TocEntry entry;
+        entry.title = collapseSpaces(label);
+        const char* hash = strchr(href, '#');
+        if (hash && hash[1]) entry.fragment = hash + 1;
+        entry.spineIndex = spine->second;
+        entry.depth = depth;
+        toc.push_back(entry);
+    };
+
+    auto parse = [&](const std::string& path, XMLDocument& doc) {
+        if (path.empty()) return false;
+        size_t length = 0;
+        char* contents = getFileContent(path, length);
+        if (!contents) return false;
+        const XMLError parsed = doc.Parse(contents, length);
+        free(contents);
+        return parsed == XML_SUCCESS;
+    };
+
+    // EPUB3: <nav epub:type="toc"><ol><li><a href>..</a><ol>..</ol></li></ol>
+    {
+        XMLDocument nav;
+        if (parse(m_navPath, nav)) {
+            const std::string baseDir = dirname(m_navPath);
+            std::function<void(XMLElement*, int)> walkList = [&](XMLElement* list, int depth) {
+                for (XMLElement* li = child(list, "li"); li; li = li->NextSiblingElement()) {
+                    if (localName(li->Name()) != "li") continue;
+                    XMLElement* link = child(li, "a");
+                    if (link) addEntry(baseDir, link->Attribute("href"), elementText(link), depth);
+                    walkList(child(li, "ol"), depth + 1);
+                }
+            };
+            XMLElement* tocNav = findTocNav(nav.RootElement());
+            walkList(child(tocNav, "ol"), 0);
+        }
+    }
+
+    // EPUB2: <navMap><navPoint><navLabel><text>..</text></navLabel><content src/>..
+    if (toc.empty()) {
+        XMLDocument ncx;
+        if (parse(m_ncxPath, ncx)) {
+            const std::string baseDir = dirname(m_ncxPath);
+            std::function<void(XMLElement*, int)> walkPoints = [&](XMLElement* parent, int depth) {
+                for (XMLElement* point = child(parent, "navPoint"); point; point = point->NextSiblingElement()) {
+                    if (localName(point->Name()) != "navPoint") continue;
+                    XMLElement* content = child(point, "content");
+                    addEntry(baseDir, content ? content->Attribute("src") : nullptr,
+                             elementText(child(child(point, "navLabel"), "text")), depth);
+                    walkPoints(point, depth + 1);
+                }
+            };
+            walkPoints(child(ncx.RootElement(), "navMap"), 0);
+        }
+    }
+
+    toc.shrink_to_fit();
+    return toc;
 }

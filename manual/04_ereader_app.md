@@ -55,6 +55,20 @@ Pressing **User Button 1** (`GPIO 21`) at any time immediately locks the device:
 
 **Fast page turns**: page turns erase the old page with a few white pulses and draw the new one (~0.8 s, no black flash). Every 6th turn (Settings > Display > Full page refresh) does a full clean refresh to remove the faint ghosting this leaves. The running header shows the book title and the time.
 
-**Reading menu**: tap the top of a page to show the header (back to the library) and a panel with text size (A- / A+) and your position in the book. Tap the page to hide it. Tap the left third of the page for the previous page and anywhere else for the next.
+**Reading menu**: tap the top of a page to show the header (back to the library) and a panel with text size (A- / A+), the current chapter with **Previous** / **Contents** / **Next** chapter buttons, and your position in the book. Tap the page to hide it. Tap the left third of the page for the previous page and anywhere else for the next.
+
+---
+
+## Contents & Chapter Navigation
+
+The running footer names the chapter you are reading. To jump somewhere else, tap **Contents** at the top right of any page (or in the reading menu):
+
+- **EPUB books** list their real table of contents - the EPUB 3 navigation document, or the EPUB 2 `toc.ncx` if there is none. Sub-chapters are indented. Entries that point into the middle of a file (e.g. Project Gutenberg books with several chapters per file) open at that heading. A book without any table of contents lists its sections by their first heading (or "Chapter N").
+- **Markdown books** list their `#` headings (and `===` / `---` underlined headings); **TXT and RTF books** list lines such as "Chapter 7", "CHAPTER IV", "Chapter" + "ONE" on the next line, "Part Two" or "Prologue". The file is scanned the first time you open Contents or use Previous/Next (a "Finding chapters..." note shows while it does).
+- **TXT, Markdown and RTF books** also get a **Go to position** control above the list: tap the bar or use -10 / -1 / +1 / +10, then **Go** to jump to that percentage of the book.
+
+The chapter you are in is highlighted ("Reading now") and the list opens on its page; use **Prev** / **Next** at the bottom to page through, each row shows roughly where the chapter starts (%). Tap a chapter to jump to its start - the page is redrawn with a full clean refresh and the position is saved straight away, so resuming, the home screen's "continue reading" and the library's completion % all follow the jump. The back arrow returns to the page you were reading without moving.
+
+In the reading menu, **Next** jumps to the next chapter; **Previous** first returns to the start of the current chapter, and from there to the one before it.
 
 > Non-reading apps (e.g. eBookmark, File Browser) only resume to their default view after waking, not a specific sub-screen - only the E-Reader app restores an exact in-book position.

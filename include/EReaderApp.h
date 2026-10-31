@@ -7,6 +7,7 @@
 #include "ui/AppScreens.h"
 #include <vector>
 #include <string>
+#include <cstdint>
 
 class EReaderApp : public Application {
 public:
@@ -80,12 +81,57 @@ private:
     bool m_menuOpen = false;
 
     std::vector<std::string> m_chapters;
-    std::vector<std::string> m_chapterTitles;
     int m_currentChapterIndex = -1;
     bool loadChapter(int index);
-    bool m_chapterPopup = false;
+    bool m_chapterPopup = false; // the Contents screen is showing
     int m_chapterPage = 0;
     std::string m_chapterError;
+
+    // Table of contents of the open book, built on first use and cached
+    // until another book is opened (see EReaderContents.cpp). EPUB entries
+    // point at a spine item plus an offset into its stripped text; text-book
+    // entries point at a byte offset in the file (chapter is always 0).
+    struct ContentsEntry {
+        std::string title;
+        std::string fragment; // EPUB anchor still to be resolved to an offset
+        int chapter = 0;
+        int offset = 0;       // -1 = EPUB anchor not resolved yet
+        int depth = 0;
+    };
+    std::vector<ContentsEntry> m_contents;
+    bool m_contentsLoaded = false;
+    // EPUB with no usable TOC: one entry per spine item, titled lazily.
+    bool m_contentsFromSpine = false;
+    int m_gotoPercent = 0;
+
+    void ensureContents();
+    void buildTextContents();
+    const std::string& contentsTitle(int index);
+    std::string epubHeadingTitle(int chapter);
+    void resolveContentsAnchors(int chapter, const char* html, size_t htmlLen,
+                                const char* text, size_t textLen);
+    void resolveCurrentChapterAnchors();
+    uint64_t contentsKey(int index) const;
+    uint64_t currentPositionKey() const;
+    // Entry containing the current page (-1 if before the first entry).
+    int currentContentsEntry();
+    // Previous/next chapter target from the current page, or -1. Text
+    // books whose headings haven't been scanned yet report -2 (unknown).
+    int adjacentContentsEntry(bool forward);
+    bool goToAdjacentChapter(bool forward);
+    bool jumpToContentsEntry(int index);
+    bool jumpToTextPosition(size_t pos);
+    bool jumpToPercent(int percent);
+    void finishJump();
+    void loadTextChunk();
+    std::string currentChapterLabel();
+    void openContents();
+    void drawContents();
+    void drawGotoPanel();
+    void handleContentsTouch(int x, int y);
+    int contentsListTop() const;
+    int contentsRowsPerPage() const;
+    static std::string htmlToText(const char* html, size_t len);
 
     FileBrowser m_fileBrowser;
     EpubParser m_epubParser;
@@ -114,7 +160,6 @@ private:
     void rebuildParsedLibraryItems();
     void sortLibraryItems();
     void drawLibrary();
-    void drawChapterPopup();
     // quick = flash-free page-turn refresh (falls back to a full refresh
     // every SystemSettings::fullRefreshEvery pages).
     void drawReading(bool quick = false);

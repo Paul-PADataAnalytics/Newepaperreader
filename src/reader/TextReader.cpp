@@ -104,12 +104,14 @@ void TextReader::nextPage() {
 }
 
 void TextReader::prevPage() {
-    if (!file || pageHistory.size() <= 1) return;
+    if (!file || currentPosition == 0) return;
 
-    // Pop current page
-    pageHistory.pop_back();
-    // Get start position of the new current page
-    currentPosition = pageHistory.back();
+    // Step back one chunk arithmetically rather than via pageHistory: after
+    // setPosition() (resume, chapter/percentage jump) the history only holds
+    // {0, pos}, so popping it would leap back to the start of the book.
+    const size_t chunk = sizeof(pageBuffer) - 1;
+    currentPosition = currentPosition > chunk ? currentPosition - chunk : 0;
+    if (pageHistory.size() > 1) pageHistory.pop_back();
 }
 
 float TextReader::getProgress() const {

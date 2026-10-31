@@ -76,6 +76,45 @@
             color: #cbd5e1;
             text-align: center;
         }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            justify-content: center;
+        }
+
+        .controls button,
+        .controls label {
+            padding: 0.55rem 1rem;
+            border: 1px solid #64748b;
+            border-radius: 8px;
+            background: #1f2937;
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+        }
+
+        .controls button:hover,
+        .controls label:hover,
+        .controls label:focus-within {
+            background: #334155;
+        }
+
+        .controls input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+        }
+
+        .hint {
+            max-width: 588px;
+            margin: 0;
+            color: #94a3b8;
+            font-size: 0.9rem;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -89,7 +128,19 @@
                     aria-label="Interactive e-reader firmware display"></canvas>
         </div>
         <p id="status" role="status" aria-live="polite">Loading firmware…</p>
+        <div class="controls">
+            <label>
+                Add books…
+                <input id="book-upload" type="file" multiple accept=".epub,.txt,.md,.rtf">
+            </label>
+            <button id="reset-storage" type="button">Reset simulator</button>
+        </div>
     </main>
+    <p class="hint">
+        Click or tap the screen to use it. Books you add, settings and reading
+        positions are kept in this browser only. The side button is not
+        simulated; use <em>Sleep</em> on the home screen instead.
+    </p>
     <script>
         const statusElement = document.getElementById("status");
         const canvas = document.getElementById("canvas");
@@ -99,8 +150,64 @@
             Module.setStatus("Graphics context lost. Reload the page to restart.");
         });
 
+        const SD_ROOT = "/sdcard";
+        const uploadInput = document.getElementById("book-upload");
+        const resetButton = document.getElementById("reset-storage");
+        let syncing = false;
+        let storageReady = false;
+
+        // Flush the simulated SD card to IndexedDB.
+        function syncStorage() {
+            if (!storageReady || syncing) return;
+            syncing = true;
+            Module.FS.syncfs(false, (err) => {
+                syncing = false;
+                if (err) console.error("Saving simulator storage failed", err);
+            });
+        }
+
+        function mountStorage() {
+            const FS = Module.FS;
+            FS.mkdir(SD_ROOT);
+            FS.mount(Module.IDBFS, {}, SD_ROOT);
+            Module.addRunDependency("sdcard");
+            FS.syncfs(true, (err) => {
+                if (err) console.error("Loading simulator storage failed", err);
+                storageReady = true;
+                Module.removeRunDependency("sdcard");
+            });
+            setInterval(syncStorage, 5000);
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === "hidden") syncStorage();
+            });
+            window.addEventListener("pagehide", syncStorage);
+        }
+
+        uploadInput.addEventListener("change", async () => {
+            const files = [...uploadInput.files];
+            uploadInput.value = "";
+            if (!files.length || !storageReady) return;
+            const FS = Module.FS;
+            try { FS.mkdir(`${SD_ROOT}/books`); } catch (e) { /* already exists */ }
+            for (const file of files) {
+                const name = file.name.replace(/[\\/]/g, "_");
+                FS.writeFile(`${SD_ROOT}/books/${name}`, new Uint8Array(await file.arrayBuffer()));
+            }
+            Module.ccall("web_library_changed", null, [], []);
+            syncStorage();
+            Module.setStatus(`Added ${files.length} book${files.length === 1 ? "" : "s"}. ` +
+                             "Open the Library to see them.");
+        });
+
+        resetButton.addEventListener("click", () => {
+            if (!confirm("Remove added books, settings and reading positions from this browser?")) return;
+            storageReady = false;
+            const request = indexedDB.deleteDatabase(SD_ROOT);
+            request.onsuccess = request.onerror = request.onblocked = () => location.reload();
+        });
+
         var Module = {
-            preRun: [],
+            preRun: [mountStorage],
             postRun: [],
             print: (...args) => console.log(...args),
             printErr: (...args) => console.error(...args),

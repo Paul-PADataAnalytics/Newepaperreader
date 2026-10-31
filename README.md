@@ -48,10 +48,11 @@ pio run -e native
 python3 -m http.server 8080 -d docs/
 ```
 
-The simulator runs the same C++ firmware as WebAssembly. See [browser build
-and GitHub Pages setup](manual/web_simulator.md). The build and deployment
-workflow follows `paul-padataanalytics-power-ui-revamp-companion-fixes`, not
-`main`; do not publish the old main-branch demo.
+The simulator runs the same C++ firmware as WebAssembly, with three
+public-domain demo books, an **Add books** button and storage that persists in
+the browser. See [browser build and GitHub Pages setup](manual/web_simulator.md).
+The `Deploy web simulator to GitHub Pages` workflow builds and publishes it on
+pushes to `main` or `paul-padataanalytics-power-ui-revamp-companion-fixes`.
 
 ### Refresh and battery behavior
 

@@ -14,3 +14,6 @@ data/google_tasks.json
 data/todo_cache.json
 google_tasks.json
 client_secret*.json
+
+# Public-domain demo books bundled into the web simulator.
+!tools/web_demo/library/*.epub

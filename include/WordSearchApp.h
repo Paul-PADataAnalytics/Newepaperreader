@@ -71,6 +71,8 @@ private:
     void drawCapsule(int r0, int c0, int dr, int dc, int len, bool outline);
     void refreshGrid();
     void refreshStatus();
+    void refreshWordList();
+    int wordListTop() const;
     void addButton(const UI::Rect& r, int action);
 
     // Persistence

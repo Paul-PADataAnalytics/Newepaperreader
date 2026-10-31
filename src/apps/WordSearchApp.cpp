@@ -196,7 +196,9 @@ void WordSearchApp::tapGrid(int x, int y) {
             return;
         }
         save();
-        render();
+        refreshGrid();
+        refreshStatus();
+        refreshWordList();
         return;
     }
     if (already) m_message = "Already found";
@@ -531,9 +533,10 @@ void WordSearchApp::drawCapsule(int r0, int c0, int dr, int dc, int len, bool ou
     int cs = cellSize();
     int x0 = g.x + c0 * cs + cs / 2, y0 = g.y + r0 * cs + cs / 2;
     int x1 = x0 + dc * (len - 1) * cs, y1 = y0 + dr * (len - 1) * cs;
-    int t = (int)(cs * 0.74f);
-    if (outline) line(x0, y0, x1, y1, t + 4, MID);
-    else line(x0, y0, x1, y1, t, LIGHT);
+    int t = (int)(cs * 0.78f);
+    // Pure black/white so it survives the fast partial refresh.
+    if (outline) line(x0, y0, x1, y1, t + 6, BLACK);
+    else line(x0, y0, x1, y1, t, WHITE);
 }
 
 void WordSearchApp::drawGrid() {
@@ -552,8 +555,11 @@ void WordSearchApp::drawGrid() {
         int cx = g.x + (i % p.side) * cs + cs / 2;
         int cy = g.y + (i / p.side) * cs + cs / 2;
         bool sel = i == m_first;
-        if (sel) fillCircle(cx, cy, cs * 46 / 100, BLACK);
-        textCentered(std::string(1, p.cells[i]), cx, cy - lh / 2, fs, sel ? WHITE : BLACK, true);
+        if (sel) {
+            fillCircle(cx, cy, cs * 47 / 100, BLACK);
+            fillCircle(cx, cy, cs * 47 / 100 - 5, WHITE);
+        }
+        textCentered(std::string(1, p.cells[i]), cx, cy - lh / 2, fs, BLACK, true);
     }
 }
 
@@ -644,16 +650,38 @@ void WordSearchApp::drawBoard() {
     drawGrid();
     Rect g = gridRect();
     strokeRoundRect(g.x - 8, g.y - 6, g.w + 16, g.h + 12, 12, 2, BLACK);
-    int top = g.y + g.h + 18;
+    int top = wordListTop();
     if (m_screen == DONE) drawDonePanel(top);
     else drawWordList(top);
 }
 
+int WordSearchApp::wordListTop() const {
+    Rect g = gridRect();
+    return g.y + g.h + 18;
+}
+
+// Each partial refresh clears its area first: drawing over the old frame
+// would leave the previous selection ring behind.
 void WordSearchApp::refreshGrid() {
     Rect g = gridRect();
-    UIFramework::performFastPartialUpdate(framebuffer, g.x - 4, g.y - 2, g.w + 8, g.h + 4, [this]() { drawGrid(); });
+    int x = g.x - 4, y = g.y - 2, w = g.w + 8, h = g.h + 4;
+    UIFramework::performFastPartialUpdate(framebuffer, x, y, w, h, [=]() {
+        fillRect(x, y, w, h, WHITE);
+        drawGrid();
+    });
 }
 
 void WordSearchApp::refreshStatus() {
-    UIFramework::performFastPartialUpdate(framebuffer, 0, LINE_Y, W, LINE_H, [this]() { drawStatus(); });
+    UIFramework::performFastPartialUpdate(framebuffer, 0, LINE_Y, W, LINE_H, [this]() {
+        fillRect(0, LINE_Y, W, LINE_H, WHITE);
+        drawStatus();
+    });
+}
+
+void WordSearchApp::refreshWordList() {
+    int top = wordListTop();
+    UIFramework::performFastPartialUpdate(framebuffer, 0, top - 2, W, H - top + 2, [=]() {
+        fillRect(0, top - 2, W, H - top + 2, WHITE);
+        drawWordList(top);
+    });
 }

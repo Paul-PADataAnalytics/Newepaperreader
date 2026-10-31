@@ -20,7 +20,18 @@ public:
     // Get the list of chapters (HTML/XHTML files) in reading order (spine)
     // The paths returned are relative to the root of the EPUB archive.
     std::vector<std::string> getChapterList() const;
-    std::vector<std::string> getChapterTitles() const;
+
+    struct TocEntry {
+        std::string title;
+        std::string fragment; // anchor within the spine item, "" = its start
+        int spineIndex = 0;
+        int depth = 0;        // 0 = top level
+    };
+    // Reads the table of contents - the EPUB3 nav document, else the EPUB2
+    // NCX - with every entry mapped onto its spine index. Parsed on demand
+    // (not by open(), so cover/metadata-only users don't pay for it) and not
+    // cached here: callers keep the result. Empty if there is no usable TOC.
+    std::vector<TocEntry> readToc();
     const std::string& getCoverPath() const { return m_coverPath; }
     const std::string& getTitle() const { return m_title; }
     const std::string& getAuthor() const { return m_author; }
@@ -35,7 +46,8 @@ private:
     
     std::map<std::string, std::string> m_manifest; // id -> href
     std::vector<std::string> m_spine; // Ordered list of hrefs (resolved to root paths)
-    std::vector<std::string> m_chapterTitles;
+    std::string m_navPath;
+    std::string m_ncxPath;
     std::string m_coverPath;
     std::string m_title;
     std::string m_author;

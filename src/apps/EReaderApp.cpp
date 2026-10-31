@@ -168,6 +168,14 @@ static char* stripHTML(const char* html, size_t len, size_t& outLen) {
     return out;
 }
 
+std::string EReaderApp::htmlToText(const char* html, size_t len) {
+    size_t outLen = 0;
+    char* text = stripHTML(html, len, outLen);
+    std::string result(text ? text : "", outLen);
+    free(text);
+    return result;
+}
+
 static size_t countReadableChars(const char* text, size_t len) {
     size_t count = 0;
     for (size_t i = 0; i < len; i++) {
@@ -210,13 +218,20 @@ using namespace UI;
 constexpr int READ_MARGIN_X = 36;
 constexpr int READ_TOP = 124;
 constexpr int READ_BOTTOM = 108;
-constexpr int MENU_PANEL_H = 230;
+constexpr int MENU_PANEL_H = 330;
 const Rect kSortRect(MARGIN, HEADER_H + 16, W - 2 * MARGIN, 50);
 constexpr int LIST_TOP = HEADER_H + 82;
 const char* kSortLabels[] = {"Progress", "Title", "Author"};
 
 Rect fontMinusRect() { return Rect(W - MARGIN - 250, H - MENU_PANEL_H + 22, 84, 58); }
 Rect fontPlusRect() { return Rect(W - MARGIN - 84, H - MENU_PANEL_H + 22, 84, 58); }
+// Reading menu chapter row: 0 = previous, 1 = contents, 2 = next.
+Rect menuChapterRect(int i) {
+    const int gap = 12;
+    const int w = (W - 2 * MARGIN - 2 * gap) / 3;
+    return Rect(MARGIN + i * (w + gap), H - MENU_PANEL_H + 150, w, 58);
+}
+const Rect kContentsButton(W - MARGIN - 132, 44, 132, 52);
 } // namespace
 
 // App Lifecycles
@@ -583,7 +598,9 @@ void EReaderApp::drawReading(bool quick) {
         quick = false;
         m_turnsSinceFullRefresh = 0;
     }
-    auto render = [this]() {
+    // May read the TOC/chapter file once, so do it before drawing starts.
+    const std::string chapterLabel = currentChapterLabel();
+    auto render = [this, chapterLabel]() {
         prepareTypographyForReading();
 
         if (m_currentBookText) {
@@ -606,22 +623,16 @@ void EReaderApp::drawReading(bool quick) {
         // and gives chapter selection a large, explicit touch target.
         statusBar();
         chevronLeft(MARGIN + 10, 70, 30);
-        const int chapterButtonW = 132;
-        const int chapterButtonX = W - MARGIN - chapterButtonW;
-        text(ellipsize(m_currentBookTitle, chapterButtonX - MARGIN - 56, FONT_TITLE, true),
+        text(ellipsize(m_currentBookTitle, kContentsButton.x - MARGIN - 56, FONT_TITLE, true),
              MARGIN + 40, 50, FONT_TITLE, BLACK, true);
-        if (!m_chapters.empty()) {
-            button(Rect(chapterButtonX, 44, chapterButtonW, 52), "Chapters",
-                   ButtonStyle::SECONDARY, FONT_SMALL + 4);
+        if (m_currentBookText) {
+            button(kContentsButton, "Contents", ButtonStyle::SECONDARY, FONT_SMALL + 4);
         }
         fillRect(0, HEADER_H - 2, W, 2, BLACK);
 
         float progress = currentProgress();
         int pct = (int)(progress * 100.0f + 0.5f);
-        if (!m_chapters.empty() && m_currentChapterIndex >= 0) {
-            const std::string chapterLabel = m_currentChapterIndex < (int)m_chapterTitles.size()
-                ? m_chapterTitles[m_currentChapterIndex]
-                : "Chapter " + std::to_string(m_currentChapterIndex + 1);
+        if (!chapterLabel.empty()) {
             text(ellipsize(chapterLabel, W - 2 * READ_MARGIN_X - 100, FONT_SMALL + 4),
                  READ_MARGIN_X, H - 74, FONT_SMALL + 4, DARK);
         }
@@ -652,48 +663,24 @@ void EReaderApp::drawReadingMenu() {
     button(plus, "A+", ButtonStyle::SECONDARY, FONT_BODY, size < 48.0f);
     textCentered(std::to_string((int)size), (minus.x + minus.w + plus.x) / 2, top + 38, FONT_BODY, BLACK, true);
 
-    float progress = currentProgress();
-    std::string where = std::to_string((int)(progress * 100.0f + 0.5f)) + "% read";
-    if (!m_chapters.empty() && m_currentChapterIndex >= 0) {
-        where = "Chapter " + std::to_string(m_currentChapterIndex + 1) + " of " +
-                std::to_string(m_chapters.size()) + "  \xC2\xB7  " + where;
+    hRule(top + 98, LIGHT);
+    text("Chapter", MARGIN, top + 108, FONT_BODY, BLACK, true);
+    const std::string chapter = currentChapterLabel();
+    const int chapterX = MARGIN + textWidth("Chapter", FONT_BODY, true) + 20;
+    if (!chapter.empty()) {
+        textRight(ellipsize(chapter, W - MARGIN - chapterX, FONT_SMALL + 4), W - MARGIN, top + 110,
+                  FONT_SMALL + 4, DARK);
     }
-    text(where, MARGIN, top + 112, FONT_SMALL + 4, INK);
-    progressBar(MARGIN, top + 150, W - 2 * MARGIN, 8, progress);
-    textCentered("Tap the page to keep reading", W / 2, top + 182, FONT_SMALL + 4, MID);
-}
+    const int prev = adjacentContentsEntry(false);
+    const int next = adjacentContentsEntry(true);
+    button(menuChapterRect(0), "Previous", ButtonStyle::SECONDARY, FONT_SMALL + 4, prev != -1);
+    button(menuChapterRect(1), "Contents", ButtonStyle::SECONDARY, FONT_SMALL + 4);
+    button(menuChapterRect(2), "Next", ButtonStyle::SECONDARY, FONT_SMALL + 4, next != -1);
 
-void EReaderApp::drawChapterPopup() {
-    const int listTop = HEADER_H + 40;
-    const int rowsPerPage = (H - FOOTER_H - listTop) / ROW_H;
-    const int pageCount = std::max(1, ((int)m_chapters.size() + rowsPerPage - 1) / rowsPerPage);
-    if (m_chapterPage >= pageCount) m_chapterPage = pageCount - 1;
-
-    UIFramework::performFullScreenDraw(framebuffer, [this, listTop, rowsPerPage, pageCount]() {
-        header("Choose a chapter", true);
-        if (!m_chapterError.empty()) {
-            text(ellipsize(m_chapterError, W - MARGIN * 2, FONT_SMALL + 4),
-                 MARGIN, HEADER_H + 8, FONT_SMALL + 4, DARK);
-        }
-
-        const int start = m_chapterPage * rowsPerPage;
-        for (int row = 0; row < rowsPerPage && start + row < (int)m_chapters.size(); ++row) {
-            const int index = start + row;
-            const int y = listTop + row * ROW_H;
-            const bool selected = index == m_currentChapterIndex;
-            if (selected) fillRoundRect(MARGIN, y + 6, W - 2 * MARGIN, ROW_H - 12, 12, PALE);
-            const std::string title = index < (int)m_chapterTitles.size() && !m_chapterTitles[index].empty()
-                ? m_chapterTitles[index]
-                : "Chapter " + std::to_string(index + 1);
-            text(ellipsize(title, W - 2 * MARGIN - 24, FONT_BODY, true),
-                 MARGIN + 12, y + 12, FONT_BODY, BLACK, true);
-            text("Chapter " + std::to_string(index + 1) + " of " +
-                 std::to_string(m_chapters.size()), MARGIN + 12, y + 52,
-                 FONT_SMALL + 4, DARK);
-            hRule(y + ROW_H - 1, LIGHT, MARGIN, W - MARGIN);
-        }
-        pager(m_chapterPage, pageCount);
-    });
+    float progress = currentProgress();
+    text(std::to_string((int)(progress * 100.0f + 0.5f)) + "% read", MARGIN, top + 230, FONT_SMALL + 4, INK);
+    progressBar(MARGIN, top + 268, W - 2 * MARGIN, 8, progress);
+    textCentered("Tap the page to keep reading", W / 2, top + 290, FONT_SMALL + 4, MID);
 }
 
 void EReaderApp::leaveReading() {
@@ -793,6 +780,7 @@ bool EReaderApp::loadChapter(int index) {
     
     size_t strippedLen = 0;
     char* stripped = stripHTML(html, size, strippedLen);
+    if (stripped) resolveContentsAnchors(index, html, size, stripped, strippedLen);
     free(html);
     if (!stripped) return false;
     
@@ -877,10 +865,13 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
     m_textReader.closeFile();
     m_epubParser.close();
     m_chapters.clear();
-    m_chapterTitles.clear();
     m_currentChapterIndex = -1;
     m_chapterError.clear();
     m_chapterPage = 0;
+    m_chapterPopup = false;
+    m_contents.clear();
+    m_contentsLoaded = false;
+    m_contentsFromSpine = false;
 
     bool isText = false;
     if (path.length() >= 4 && (path.substr(path.length() - 4) == ".txt" || path.substr(path.length() - 4) == ".rtf" || path.substr(path.length() - 4) == ".RTF")) isText = true;
@@ -915,7 +906,10 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
         }
     } else if (m_epubParser.open(path)) {
         m_chapters = m_epubParser.getChapterList();
-        m_chapterTitles = m_epubParser.getChapterTitles();
+        // The running footer names the current chapter, so the TOC is
+        // needed for the first page anyway; reading it before any chapter
+        // loads also lets loadChapter() resolve TOC anchors in passing.
+        ensureContents();
         if (!m_epubParser.getTitle().empty()) m_currentBookTitle = m_epubParser.getTitle();
         if (!m_epubParser.getAuthor().empty()) m_currentBookAuthor = m_epubParser.getAuthor();
         m_currentChapterIndex = m_chapters.empty() ? -1 : 0;
@@ -1036,37 +1030,7 @@ void EReaderApp::handleTouch(int x, int y) {
 
     // Reading
     if (m_chapterPopup) {
-        if (hitBack(x, y)) {
-            m_chapterPopup = false;
-            m_chapterError.clear();
-            drawReading();
-            return;
-        }
-        const int listTop = HEADER_H + 40;
-        const int rowsPerPage = (H - FOOTER_H - listTop) / ROW_H;
-        const int pageCount = std::max(1, ((int)m_chapters.size() + rowsPerPage - 1) / rowsPerPage);
-        const int dir = hitPager(x, y, m_chapterPage, pageCount);
-        if (dir != 0) {
-            m_chapterPage += dir;
-            drawChapterPopup();
-            return;
-        }
-        if (y >= listTop && y < listTop + rowsPerPage * ROW_H) {
-            const int index = m_chapterPage * rowsPerPage + (y - listTop) / ROW_H;
-            if (index >= 0 && index < (int)m_chapters.size()) {
-                if (loadChapter(index)) {
-                    m_currentReadingOffset = 0;
-                    m_chapterPopup = false;
-                    m_chapterError.clear();
-                    saveCurrentPosition();
-                    rememberLastBook();
-                    drawReading();
-                } else {
-                    m_chapterError = "This chapter could not be opened.";
-                    drawChapterPopup();
-                }
-            }
-        }
+        handleContentsTouch(x, y);
         return;
     }
 
@@ -1086,7 +1050,14 @@ void EReaderApp::handleTouch(int x, int y) {
                 SystemSettings::save();
                 m_pageHistory.clear();
                 drawReading();
+                return;
             }
+            if (menuChapterRect(1).contains(x, y)) {
+                openContents();
+                return;
+            }
+            if (menuChapterRect(0).contains(x, y)) goToAdjacentChapter(false);
+            if (menuChapterRect(2).contains(x, y)) goToAdjacentChapter(true);
             return;
         }
         if (y < HEADER_H) return;
@@ -1100,13 +1071,8 @@ void EReaderApp::handleTouch(int x, int y) {
             leaveReading();
             return;
         }
-        const int chapterButtonX = W - MARGIN - 132;
-        if (!m_chapters.empty() && x >= chapterButtonX && y >= 44 && y < 96) {
-            m_chapterPopup = true;
-            m_chapterPage = std::max(0, m_currentChapterIndex) /
-                ((H - FOOTER_H - (HEADER_H + 40)) / ROW_H);
-            m_chapterError.clear();
-            drawChapterPopup();
+        if (m_currentBookText && x >= kContentsButton.x && y >= STATUS_H) {
+            openContents();
             return;
         }
         m_menuOpen = true;

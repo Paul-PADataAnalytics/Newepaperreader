@@ -20,6 +20,7 @@
 #include "ui/UIKit.h"
 #include "reader/AppStorage.h"
 #include <time.h>
+#include <sys/time.h>
 #include <cstring>
 #include <cstdio>
 
@@ -149,6 +150,16 @@ void Launcher::loop() {
         lastMin = currentMin;
         drawClock();
     }
+}
+
+uint32_t Launcher::msUntilUpdate() const {
+    if (m_activeApp) return m_activeApp->msUntilUpdate();
+    if (m_pendingExit || m_pendingLaunch >= 0 || !m_pendingBook.empty()) return 0;
+    struct timeval tv;
+    gettimeofday(&tv, nullptr);
+    uint32_t intoMinute = (uint32_t)(tv.tv_sec % 60) * 1000u + (uint32_t)(tv.tv_usec / 1000);
+    // A little past the boundary, so loop() sees the new minute.
+    return 60000u - intoMinute + 50u;
 }
 
 void Launcher::drawClock() {

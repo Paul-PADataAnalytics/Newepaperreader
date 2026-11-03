@@ -132,8 +132,7 @@ bool DisplayHAL::getTouch(int &x, int &y) {
 
 #ifndef NATIVE_TESTING
 
-// The panel's high-voltage rails (and the battery sense divider, which sits
-// behind the same POWER_EN switch) are only switched on while the panel is
+// The panel's high-voltage rails are only switched on while the panel is
 // actually being driven. They used to stay on for the whole time the device
 // was awake, which kept the boost converters running for no reason.
 static int s_epdPowerDepth = 0;
@@ -141,7 +140,9 @@ static float s_battVoltage = -1.0f;
 static uint32_t s_battSampleMs = 0;
 static const uint32_t BATTERY_SAMPLE_INTERVAL_MS = 60000;
 
-static void sampleBatteryWhilePowered() {
+// The battery divider is not behind the panel's POWER_EN switch (it reads
+// the same with the rails off), so sampling doesn't need the panel powered.
+static void sampleBattery() {
     uint32_t mv = analogReadMilliVolts(BATT_PIN);
     s_battVoltage = (mv * 2) / 1000.0f; // 1:2 divider
     s_battSampleMs = millis();
@@ -156,12 +157,7 @@ struct EpdPowerScope {
         }
     }
     ~EpdPowerScope() {
-        if (--s_epdPowerDepth == 0) {
-            if (s_battSampleMs == 0 || millis() - s_battSampleMs > BATTERY_SAMPLE_INTERVAL_MS) {
-                sampleBatteryWhilePowered();
-            }
-            epd_poweroff();
-        }
+        if (--s_epdPowerDepth == 0) epd_poweroff();
     }
 };
 #define EPD_POWER_SCOPE() EpdPowerScope _epdPowerScope
@@ -249,11 +245,7 @@ void DisplayHAL::dumpVisible(const char* filepath) {
 }
 
 float DisplayHAL::getBatteryVoltage() {
-    if (s_battSampleMs == 0 || millis() - s_battSampleMs > BATTERY_SAMPLE_INTERVAL_MS * 5) {
-        EPD_POWER_SCOPE();
-        delay(10); // let the divider settle after POWER_EN switches on
-        sampleBatteryWhilePowered();
-    }
+    if (s_battSampleMs == 0 || millis() - s_battSampleMs > BATTERY_SAMPLE_INTERVAL_MS) sampleBattery();
     return s_battVoltage;
 }
 

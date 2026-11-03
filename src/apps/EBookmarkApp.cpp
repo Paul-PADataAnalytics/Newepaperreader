@@ -218,6 +218,13 @@ void EBookmarkApp::update() {
     }
 }
 
+uint32_t EBookmarkApp::msUntilUpdate() const {
+    // Phone changes arrive over BLE, which keeps the device awake anyway.
+    if (m_pendingPage < 0) return UINT32_MAX;
+    uint32_t waited = nowMs() - m_pendingSinceMs;
+    return waited >= COMMIT_DELAY_MS ? 0 : COMMIT_DELAY_MS - waited;
+}
+
 bool EBookmarkApp::onBack() {
     commitPendingPage();
     if (m_state == STATE_DETAIL) {

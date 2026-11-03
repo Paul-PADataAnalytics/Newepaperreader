@@ -22,6 +22,7 @@ public:
     virtual void draw() override;
     virtual void handleTouch(int x, int y) override;
     virtual void update() override;
+    virtual uint32_t msUntilUpdate() const override { return m_state == STATE_CONVERTING ? 0 : UINT32_MAX; }
 
     // The full-screen viewer handles every tap itself while its overlay is
     // hidden; the overlay's back chevron goes through the system back.

@@ -19,6 +19,7 @@ public:
     virtual void draw() override;
     virtual void handleTouch(int x, int y) override;
     virtual void update() override;
+    virtual uint32_t msUntilUpdate() const override;
     virtual bool onBack() override;
 
 private:

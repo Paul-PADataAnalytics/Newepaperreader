@@ -36,6 +36,10 @@ public:
     virtual void draw() = 0;
     virtual void handleTouch(int x, int y) = 0;
     virtual void update() {}
+    // How long the device may sleep before update() needs to run again:
+    // 0 keeps the main loop running (background work in progress),
+    // UINT32_MAX means update() has nothing time-based to do.
+    virtual uint32_t msUntilUpdate() const { return UINT32_MAX; }
 
     // System back button (the chevron in UI::header, top-left). The Launcher
     // intercepts taps there while wantsSystemBack() is true and calls

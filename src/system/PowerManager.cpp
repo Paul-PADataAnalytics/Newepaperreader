@@ -42,7 +42,11 @@ uint32_t s_lastActivity = 0;
 uint32_t s_lastBoost = 0;
 bool s_busy = false;
 bool s_boosted = true; // Arduino boots at 240MHz
-const uint32_t CPU_RELAX_AFTER_MS = 1500;
+// Full speed lingers briefly after drawing or a touch, so a quick run of
+// taps doesn't bounce the clock up and down.
+const uint32_t CPU_RELAX_AFTER_MS = 500;
+// Light sleep waits only for the tail of a touch (the release report).
+const uint32_t LIGHT_SLEEP_SETTLE_MS = 250;
 }
 
 namespace PowerManager {
@@ -118,6 +122,15 @@ bool shouldAutoSleep() {
     return msSinceActivity() >= (uint32_t)s.sleepTimeoutMin * 60000u;
 }
 
+uint32_t msUntilAutoSleep() {
+    const SystemSettingsData& s = SystemSettings::get();
+    if (s.alwaysOn || s_busy || s.sleepTimeoutMin <= 0) return UINT32_MAX;
+    if (s.stayAwakeOnUsb && isUsbConnected()) return UINT32_MAX;
+    uint32_t timeout = (uint32_t)s.sleepTimeoutMin * 60000u;
+    uint32_t idle = msSinceActivity();
+    return idle >= timeout ? 0 : timeout - idle;
+}
+
 void boostCpu() {
     s_lastBoost = millis();
 #ifndef NATIVE_TESTING
@@ -128,15 +141,19 @@ void boostCpu() {
 #endif
 }
 
-void idleTick() {
+void relaxCpu() {
 #ifndef NATIVE_TESTING
     // 80MHz is the lowest clock the BLE controller supports; at idle the
     // main loop just waits on the touch queue, so it loses nothing.
-    if (s_boosted && millis() - s_lastBoost > CPU_RELAX_AFTER_MS) {
+    if (s_boosted) {
         setCpuFrequencyMhz(80);
         s_boosted = false;
     }
 #endif
+}
+
+void idleTick() {
+    if (millis() - s_lastBoost > CPU_RELAX_AFTER_MS) relaxCpu();
 }
 
 bool canLightSleep() {
@@ -145,7 +162,7 @@ bool canLightSleep() {
 #ifndef NATIVE_TESTING
     if (WiFi.getMode() != WIFI_OFF) return false;
 #endif
-    return msSinceActivity() >= CPU_RELAX_AFTER_MS;
+    return msSinceActivity() >= LIGHT_SLEEP_SETTLE_MS;
 }
 
 void prepareHardwareForDeepSleep() {

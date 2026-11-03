@@ -178,23 +178,30 @@ void NumberPlaceApp::place(int cell, int d) {
 
 void NumberPlaceApp::tapCell(int cell) {
     m_clock.tick();
+    int oldSel = m_sel;
     m_sel = cell == m_sel ? -1 : cell;
     bool hadMessage = !m_message.empty();
     m_message.clear();
-    refreshGrid();
-    if (hadMessage) refreshControls();
+    uint8_t oldVal = oldSel >= 0 ? m_values[oldSel] : 0;
+    uint8_t newVal = m_sel >= 0 ? m_values[m_sel] : 0;
+    uint16_t oldMarks = (m_pencil && oldSel >= 0 && !oldVal) ? m_marks[oldSel] : 0;
+    uint16_t newMarks = (m_pencil && m_sel >= 0 && !newVal) ? m_marks[m_sel] : 0;
+    bool oldErase = oldSel >= 0 && !m_givens[oldSel] && (m_values[oldSel] || m_marks[oldSel]);
+    bool newErase = m_sel >= 0 && !m_givens[m_sel] && (m_values[m_sel] || m_marks[m_sel]);
+    bool controlsChanged = hadMessage || oldVal != newVal || oldMarks != newMarks || oldErase != newErase;
+    refreshBoard(true, controlsChanged);
 }
 
 void NumberPlaceApp::tapDigit(int d) {
     m_clock.tick();
     if (m_sel < 0) {
         m_message = "Tap a square first";
-        refreshControls();
+        refreshBoard(false, true);
         return;
     }
     if (m_givens[m_sel]) {
         m_message = "That number was printed";
-        refreshControls();
+        refreshBoard(false, true);
         return;
     }
     m_message.clear();
@@ -203,7 +210,7 @@ void NumberPlaceApp::tapDigit(int d) {
         if (m_values[m_sel]) {
             m_undo.pop_back();
             m_message = "Erase the number first";
-            refreshControls();
+            refreshBoard(false, true);
             return;
         }
         m_marks[m_sel] ^= (uint16_t)(1 << d);
@@ -227,7 +234,7 @@ void NumberPlaceApp::undo() {
     m_clock.tick();
     if (m_undo.empty()) {
         m_message = "Nothing to undo";
-        refreshControls();
+        refreshBoard(false, true);
         return;
     }
     const Snapshot& s = m_undo.back();
@@ -287,9 +294,8 @@ void NumberPlaceApp::afterChange(bool gridChanged) {
         }
         m_message = "Full, but some numbers clash";
     }
+    refreshBoard(gridChanged, true);
     save();
-    if (gridChanged) refreshGrid();
-    refreshControls();
 }
 
 void NumberPlaceApp::finish() {
@@ -391,7 +397,9 @@ void NumberPlaceApp::handleTouch(int x, int y) {
         int step = GameKit::hitPageFooter(x, y, m_helpPage, 3);
         if (step) {
             m_helpPage += step;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
         }
         return;
     }
@@ -440,7 +448,7 @@ void NumberPlaceApp::handleTouch(int x, int y) {
             if (m_pencil != (action == A_PENCIL)) {
                 m_pencil = action == A_PENCIL;
                 m_message.clear();
-                refreshControls();
+                refreshBoard(false, true);
             }
             break;
         case A_ERASE:
@@ -478,8 +486,7 @@ void NumberPlaceApp::render() {
             case RESULT: drawResult(); break;
         }
     };
-    if (m_screen != m_lastDrawn) UIFramework::performFullScreenDraw(framebuffer, content);
-    else UIFramework::performQuickFullScreenDraw(framebuffer, content);
+    UIFramework::performFullScreenDraw(framebuffer, content);
     m_lastDrawn = m_screen;
 }
 
@@ -676,13 +683,16 @@ void NumberPlaceApp::drawBoard() {
     drawControls(true);
 }
 
-void NumberPlaceApp::refreshGrid() {
-    UIFramework::performFastPartialUpdate(framebuffer, GX - 2, GY - 2, GRID + 5, GRID + 5, [this]() { drawGrid(); });
-}
-
-void NumberPlaceApp::refreshControls() {
-    UIFramework::performFastPartialUpdate(framebuffer, 0, CONTROLS_TOP, W, H - CONTROLS_TOP,
-                                          [this]() { drawControls(false); });
+void NumberPlaceApp::refreshBoard(bool grid, bool controls) {
+    if (grid) {
+        fillRect(GX - 2, GY - 2, GRID + 5, GRID + 5, WHITE);
+        drawGrid();
+    }
+    if (controls) {
+        fillRect(0, CONTROLS_TOP, W, H - CONTROLS_TOP, WHITE);
+        drawControls(false);
+    }
+    DisplayHAL::updateScreenFast();
 }
 
 void NumberPlaceApp::drawMiniGrid(int x, int y, int cs) {

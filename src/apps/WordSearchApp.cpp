@@ -142,13 +142,12 @@ void WordSearchApp::tapGrid(int x, int y) {
         m_first = cell;
         bool hadMessage = !m_message.empty();
         m_message.clear();
-        refreshGrid();
-        if (hadMessage) refreshStatus();
+        refreshBoard(true, hadMessage, false);
         return;
     }
     if (cell == m_first) {
         m_first = -1;
-        refreshGrid();
+        refreshBoard(true, false, false);
         return;
     }
 
@@ -195,17 +194,17 @@ void WordSearchApp::tapGrid(int x, int y) {
             finish();
             return;
         }
+        refreshBoard(true, true, true);
         save();
-        refreshGrid();
-        refreshStatus();
-        refreshWordList();
         return;
     }
-    if (already) m_message = "Already found";
-    else if (!straight) m_message = "Those two don't line up";
-    else m_message = std::string("No word from ") + a + " to " + b;
-    refreshGrid();
-    refreshStatus();
+    // Keep the top status bar unchanged on a miss so only the deselected cell
+    // needs a partial refresh instead of a bounding box spanning the whole board.
+    (void)already;
+    (void)straight;
+    (void)a;
+    (void)b;
+    refreshBoard(true, false, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +291,9 @@ void WordSearchApp::handleTouch(int x, int y) {
         int step = GameKit::hitPageFooter(x, y, m_helpPage, 3);
         if (step) {
             m_helpPage += step;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
         }
         return;
     }
@@ -401,15 +402,9 @@ void WordSearchApp::render() {
             case DONE: drawBoard(); break;
         }
     };
-    // A clean full refresh on every change of screen and every few finds;
-    // otherwise a flash-free redraw.
-    if (m_screen != m_lastDrawn || m_quickDraws >= 4) {
-        m_quickDraws = 0;
-        UIFramework::performFullScreenDraw(framebuffer, content);
-    } else {
-        m_quickDraws++;
-        UIFramework::performQuickFullScreenDraw(framebuffer, content);
-    }
+    // Clean full refresh on screen changes (Title <-> Board <-> Done); in-game
+    // moves use localized fast partial updates via refreshBoard().
+    UIFramework::performFullScreenDraw(framebuffer, content);
     m_lastDrawn = m_screen;
 }
 
@@ -660,28 +655,23 @@ int WordSearchApp::wordListTop() const {
     return g.y + g.h + 18;
 }
 
-// Each partial refresh clears its area first: drawing over the old frame
-// would leave the previous selection ring behind.
-void WordSearchApp::refreshGrid() {
-    Rect g = gridRect();
-    int x = g.x - 4, y = g.y - 2, w = g.w + 8, h = g.h + 4;
-    UIFramework::performFastPartialUpdate(framebuffer, x, y, w, h, [=]() {
-        fillRect(x, y, w, h, WHITE);
+// Combine changed board sub-regions into a single fast partial update so a
+// tap never triggers multiple sequential EPD refresh cycles.
+void WordSearchApp::refreshBoard(bool grid, bool status, bool words) {
+    if (grid) {
+        Rect g = gridRect();
+        fillRect(g.x - 4, g.y - 2, g.w + 8, g.h + 4, WHITE);
         drawGrid();
-    });
-}
-
-void WordSearchApp::refreshStatus() {
-    UIFramework::performFastPartialUpdate(framebuffer, 0, LINE_Y, W, LINE_H, [this]() {
+        strokeRoundRect(g.x - 8, g.y - 6, g.w + 16, g.h + 12, 12, 2, BLACK);
+    }
+    if (status) {
         fillRect(0, LINE_Y, W, LINE_H, WHITE);
         drawStatus();
-    });
-}
-
-void WordSearchApp::refreshWordList() {
-    int top = wordListTop();
-    UIFramework::performFastPartialUpdate(framebuffer, 0, top - 2, W, H - top + 2, [=]() {
+    }
+    if (words) {
+        int top = wordListTop();
         fillRect(0, top - 2, W, H - top + 2, WHITE);
         drawWordList(top);
-    });
+    }
+    DisplayHAL::updateScreenFast();
 }

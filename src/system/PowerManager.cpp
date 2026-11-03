@@ -42,11 +42,11 @@ uint32_t s_lastActivity = 0;
 uint32_t s_lastBoost = 0;
 bool s_busy = false;
 bool s_boosted = true; // Arduino boots at 240MHz
-// Full speed lingers briefly after drawing or a touch, so a quick run of
-// taps doesn't bounce the clock up and down.
-const uint32_t CPU_RELAX_AFTER_MS = 500;
-// Light sleep waits only for the tail of a touch (the release report).
-const uint32_t LIGHT_SLEEP_SETTLE_MS = 250;
+// Full speed lingers after drawing or a touch so interactive UI and games
+// stay at 240MHz without clock-scaling lag between taps.
+const uint32_t CPU_RELAX_AFTER_MS = 15000;
+// Wait until a burst of interaction has settled before entering light sleep.
+const uint32_t LIGHT_SLEEP_SETTLE_MS = 10000;
 }
 
 namespace PowerManager {

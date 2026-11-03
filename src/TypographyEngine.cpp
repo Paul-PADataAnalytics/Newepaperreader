@@ -20,6 +20,65 @@ static uint8_t getPixel(int x, int y, uint8_t* framebuffer) {
     return DisplayHAL::getPixel(x, y, framebuffer);
 }
 
+namespace {
+struct CachedGlyph {
+    uint32_t cp = 0;
+    int sizeKey = 0;
+    int adv = 0;
+    int x1 = 0, y1 = 0, w = 0, h = 0;
+    uint32_t stamp = 0;
+    uint8_t* bmp = nullptr;
+    bool valid = false;
+};
+
+constexpr int GLYPH_SETS = 32;
+constexpr int GLYPH_WAYS = 4;
+static CachedGlyph s_glyphCache[GLYPH_SETS][GLYPH_WAYS];
+static uint32_t s_glyphStamp = 0;
+
+static const CachedGlyph& getCachedGlyph(stbtt_fontinfo* info, float fontSize, float scale, uint32_t cp) {
+    int sizeKey = (int)(fontSize * 10.0f + 0.5f);
+    uint32_t setIdx = ((cp * 2654435761u) ^ (uint32_t)sizeKey) & (GLYPH_SETS - 1);
+    CachedGlyph* set = s_glyphCache[setIdx];
+
+    int victim = 0;
+    uint32_t oldest = UINT32_MAX;
+    for (int w = 0; w < GLYPH_WAYS; ++w) {
+        if (set[w].valid && set[w].cp == cp && set[w].sizeKey == sizeKey) {
+            set[w].stamp = ++s_glyphStamp;
+            return set[w];
+        }
+        if (!set[w].valid) {
+            victim = w;
+            oldest = 0;
+        } else if (set[w].stamp < oldest) {
+            oldest = set[w].stamp;
+            victim = w;
+        }
+    }
+
+    CachedGlyph& g = set[victim];
+    if (g.bmp) {
+        stbtt_FreeBitmap(g.bmp, nullptr);
+        g.bmp = nullptr;
+    }
+    int lsb = 0;
+    stbtt_GetCodepointHMetrics(info, cp, &g.adv, &lsb);
+    int x2 = 0, y2 = 0;
+    stbtt_GetCodepointBitmapBox(info, cp, scale, scale, &g.x1, &g.y1, &x2, &y2);
+    g.w = x2 - g.x1;
+    g.h = y2 - g.y1;
+    if (g.w > 0 && g.h > 0 && cp != ' ') {
+        g.bmp = stbtt_GetCodepointBitmap(info, 0, scale, cp, &g.w, &g.h, 0, 0);
+    }
+    g.cp = cp;
+    g.sizeKey = sizeKey;
+    g.stamp = ++s_glyphStamp;
+    g.valid = true;
+    return g;
+}
+} // namespace
+
 TypographyEngine::TypographyEngine() : fontBuffer(nullptr), isEmbeddedFont(false), fontSize(16.0f), fontInfo(nullptr) {
     fontInfo = malloc(sizeof(stbtt_fontinfo));
 }
@@ -178,31 +237,28 @@ int TypographyEngine::renderLine(const char* text, size_t len, int x, int y, uin
     while (i < len) {
         uint32_t cp = decodeUTF8(text, len, i);
         if (cp == '\n' || cp == 0) break;
-        int adv, lsb;
-        stbtt_GetCodepointHMetrics(info, cp, &adv, &lsb);
+        const CachedGlyph& g = getCachedGlyph(info, fontSize, scale, cp);
         if (x >= screenW) break;
-        int x1, y1, x2, y2;
-        stbtt_GetCodepointBitmapBox(info, cp, scale, scale, &x1, &y1, &x2, &y2);
-        int w = x2 - x1, h = y2 - y1;
-        if (w > 0 && h > 0 && cp != ' ') {
-            uint8_t* bmp = stbtt_GetCodepointBitmap(info, 0, scale, cp, &w, &h, 0, 0);
-            if (bmp) {
-                for (int r = 0; r < h; ++r) {
-                    int py = baseline + y1 + r;
-                    if (py < 0 || py >= screenH) continue;
-                    for (int c = 0; c < w; ++c) {
-                        uint8_t alpha = bmp[r * w + c];
-                        if (!alpha) continue;
-                        int px = x + x1 + c;
-                        if (px < 0 || px >= screenW) continue;
+        if (g.w > 0 && g.h > 0 && g.bmp) {
+            for (int r = 0; r < g.h; ++r) {
+                int py = baseline + g.y1 + r;
+                if (py < 0 || py >= screenH) continue;
+                const uint8_t* rowBmp = g.bmp + r * g.w;
+                for (int c = 0; c < g.w; ++c) {
+                    uint8_t alpha = rowBmp[c];
+                    if (!alpha) continue;
+                    int px = x + g.x1 + c;
+                    if (px < 0 || px >= screenW) continue;
+                    if (alpha == 255) {
+                        drawPixel(px, py, textColor, framebuffer);
+                    } else {
                         uint8_t bg = getPixel(px, py, framebuffer);
                         drawPixel(px, py, (uint8_t)((textColor * alpha + bg * (255 - alpha)) / 255), framebuffer);
                     }
                 }
-                stbtt_FreeBitmap(bmp, nullptr);
             }
         }
-        x += (int)(adv * scale);
+        x += (int)(g.adv * scale);
     }
     return x - startX;
 }
@@ -483,9 +539,8 @@ int TypographyEngine::measureText(const char* text, size_t len) {
     for (size_t i = 0; i < len; ) {
         uint32_t codepoint = decodeUTF8(text, len, i);
         if (codepoint == '\n') continue;
-        int advanceWidth, leftSideBearing;
-        stbtt_GetCodepointHMetrics(info, codepoint, &advanceWidth, &leftSideBearing);
-        width += (int)(advanceWidth * scale);
+        const CachedGlyph& g = getCachedGlyph(info, fontSize, scale, codepoint);
+        width += (int)(g.adv * scale);
     }
     return width;
 }

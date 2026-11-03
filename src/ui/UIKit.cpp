@@ -8,6 +8,7 @@
 #include <cmath>
 #include <ctime>
 #include <cstdio>
+#include <cstring>
 
 extern uint8_t* framebuffer;
 extern TypographyEngine typography;
@@ -117,7 +118,26 @@ int textWrapped(const std::string& s, int x, int y, int w, float size, uint8_t c
 static inline void px(int x, int y, uint8_t c) { DisplayHAL::setPixel(x, y, c, framebuffer); }
 
 static inline void span(int x0, int x1, int y, uint8_t c) {
-    for (int x = x0; x < x1; x++) px(x, y, c);
+    if (!framebuffer || y < 0 || y >= H) return;
+    if (x0 < 0) x0 = 0;
+    if (x1 > W) x1 = W;
+    if (x0 >= x1) return;
+    if (x1 - x0 < 4) {
+        for (int x = x0; x < x1; x++) px(x, y, c);
+        return;
+    }
+    if (x0 & 1) {
+        px(x0, y, c);
+        x0++;
+    }
+    int xEnd = x1 & ~1;
+    if (xEnd > x0) {
+        uint8_t packed = (uint8_t)((c & 0x0F) | ((c & 0x0F) << 4));
+        memset(framebuffer + (y * W + x0) / 2, packed, (xEnd - x0) / 2);
+    }
+    if (x1 & 1) {
+        px(x1 - 1, y, c);
+    }
 }
 
 void fillRect(int x, int y, int w, int h, uint8_t color) {
@@ -163,8 +183,17 @@ void strokeRoundRect(int x, int y, int w, int h, int r, int t, uint8_t color) {
 }
 
 void fillCircle(int cx, int cy, int r, uint8_t color) {
-    for (int dy = -r; dy <= r; dy++) {
-        int dx = (int)std::sqrt((float)(r * r - dy * dy));
+    if (r <= 0) {
+        px(cx, cy, color);
+        return;
+    }
+    int r2 = r * r;
+    int dx = r;
+    span(cx - r, cx + r + 1, cy, color);
+    for (int dy = 1; dy <= r; dy++) {
+        int dy2 = dy * dy;
+        while (dx > 0 && dx * dx + dy2 > r2) dx--;
+        span(cx - dx, cx + dx + 1, cy - dy, color);
         span(cx - dx, cx + dx + 1, cy + dy, color);
     }
 }
@@ -303,8 +332,8 @@ Rect headerActionRect(const std::string& action) {
 bool hitHeaderAction(int x, int y, const std::string& action) {
     if (action.empty()) return false;
     Rect r = headerActionRect(action);
-    // Generous vertical hit area across the whole title row.
-    return x >= r.x - 10 && y >= STATUS_H && y < HEADER_H;
+    // Generous vertical hit area across the title row below the top-right status strip.
+    return x >= r.x - 10 && y >= r.y && y < HEADER_H;
 }
 
 void pager(int page, int pageCount) {

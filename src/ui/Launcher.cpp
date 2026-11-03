@@ -295,6 +295,12 @@ void Launcher::drawMenu() {
 }
 
 void Launcher::handleTouch(int x, int y) {
+    // Global top-right corner shortcut (status bar battery area): push a full
+    // hardware screen reset/redraw of the current framebuffer to clear ghosting.
+    if (x >= W - 110 && y < 42) {
+        DisplayHAL::updateScreenFull();
+        return;
+    }
     if (m_activeApp) {
         if (m_activeApp->wantsSystemBack() && hitBack(x, y)) {
             if (!m_activeApp->onBack()) requestExit();

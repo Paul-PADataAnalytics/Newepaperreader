@@ -79,8 +79,7 @@ private:
     void drawControls(bool addHits);
     void drawResult();
     void drawMiniGrid(int x, int y, int cs);
-    void refreshGrid();
-    void refreshControls();
+    void refreshBoard(bool grid, bool controls);
     void addButton(const UI::Rect& r, int action);
 
     // Persistence

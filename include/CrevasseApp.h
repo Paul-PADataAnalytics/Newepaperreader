@@ -68,8 +68,7 @@ private:
     void drawResult();
     void drawCell(const UI::Rect& r, int cell, bool reveal);
     void drawMap(int x, int y, int cs);
-    void refreshField();
-    void refreshStatus();
+    void refreshBoard(bool field, bool status);
     void addButton(const UI::Rect& r, int action);
 
     // Persistence

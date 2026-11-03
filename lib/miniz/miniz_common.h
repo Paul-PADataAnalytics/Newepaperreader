@@ -67,6 +67,16 @@ typedef struct mz_dummy_time_t_tag
 #ifndef MZ_REALLOC
 #define MZ_REALLOC(p, x) NULL
 #endif
+#elif defined(ARDUINO)
+#ifndef MZ_MALLOC
+#define MZ_MALLOC(x) ps_malloc(x)
+#endif
+#ifndef MZ_FREE
+#define MZ_FREE(x) free(x)
+#endif
+#ifndef MZ_REALLOC
+#define MZ_REALLOC(p, x) ps_realloc(p, x)
+#endif
 #else
 #ifndef MZ_MALLOC
 #define MZ_MALLOC(x) malloc(x)

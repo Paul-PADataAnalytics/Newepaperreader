@@ -39,6 +39,11 @@ public:
     // entering deep-sleep lock mode.
     const std::string& getCurrentBookPath() const { return m_currentBookPath; }
     const std::string& getCurrentBookTitle() const { return m_currentBookTitle; }
+    const std::string& getCurrentBookAuthor() const { return m_currentBookAuthor; }
+
+    // Formats "current page of pages total (percent) - Chapter XX" for the
+    // sleep screen header when entering sleep while reading.
+    std::string getReadingStatusLine();
 
     // Jumps directly into reading the book at the given runtime path,
     // skipping the library view - used to resume reading after a
@@ -55,8 +60,9 @@ public:
     // reading a book.
     void saveCurrentPosition();
 
-    // Persists the position and the home screen's "continue reading" info.
-    void prepareForSleep() { saveCurrentPosition(); rememberLastBook(); }
+    // Persists the position, updates the home screen's "continue reading"
+    // info, and ensures the open book's cover is extracted for the sleep screen.
+    void prepareForSleep();
 
 private:
     enum ReaderState {

@@ -79,7 +79,7 @@ void drawEmblem(const GameEntry& g, int x, int y) {
 } // namespace
 
 void GamesApp::draw() {
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
+    UIFramework::performQuickFullScreenDraw(framebuffer, [this]() {
         header("Games", true);
         for (int i = 0; i < kGameCount; ++i) {
             int y = kRowY + i * kRowH;

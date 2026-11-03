@@ -134,16 +134,20 @@ void CrevasseApp::tapCell(int cell) {
     std::string before = m_message;
     int flagsBefore = f.flags();
     m_message.clear();
+    bool laidBefore = f.laid;
     int result = 0;
+    bool fieldChanged = false;
     if (!f.laid) {
         if (m_flagMode) {
             m_message = "Probe first: the first step is safe";
         } else {
             f.lay(cell, GameKit::randomSeed(), true);
             result = f.probe(cell);
+            fieldChanged = true;
         }
     } else if (f.state[cell] == Games::Minefield::OPEN) {
         result = f.chord(cell);
+        fieldChanged = (result != 0);
         if (result == 0 && f.adj[cell] > 0) {
             int nb[8], n = f.neighbours(cell, nb), hidden = 0;
             for (int i = 0; i < n; i++) hidden += f.state[nb[i]] == Games::Minefield::HIDDEN ? 1 : 0;
@@ -151,10 +155,12 @@ void CrevasseApp::tapCell(int cell) {
         }
     } else if (m_flagMode) {
         f.toggleFlag(cell);
+        fieldChanged = (f.flags() != flagsBefore);
     } else if (f.state[cell] == Games::Minefield::FLAGGED) {
         m_message = "Flagged. Use Flag to lift it";
     } else {
         result = f.probe(cell);
+        fieldChanged = (result != 0);
     }
     if (result < 0) {
         finish(false);
@@ -164,9 +170,9 @@ void CrevasseApp::tapCell(int cell) {
         finish(true);
         return;
     }
+    bool statusChanged = (m_message != before || f.flags() != flagsBefore || f.laid != laidBefore);
+    refreshBoard(fieldChanged, statusChanged);
     save();
-    refreshField();
-    if (m_message != before || f.flags() != flagsBefore) refreshStatus();
 }
 
 void CrevasseApp::finish(bool won) {
@@ -287,7 +293,9 @@ void CrevasseApp::handleTouch(int x, int y) {
         int step = GameKit::hitPageFooter(x, y, m_helpPage, 3);
         if (step) {
             m_helpPage += step;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
         }
         return;
     }
@@ -364,8 +372,7 @@ void CrevasseApp::render() {
             case RESULT: drawResult(); break;
         }
     };
-    if (m_screen != m_lastDrawn) UIFramework::performFullScreenDraw(framebuffer, content);
-    else UIFramework::performQuickFullScreenDraw(framebuffer, content);
+    UIFramework::performFullScreenDraw(framebuffer, content);
     m_lastDrawn = m_screen;
 }
 
@@ -566,13 +573,18 @@ void CrevasseApp::drawBoard() {
     drawTools(true);
 }
 
-void CrevasseApp::refreshField() {
-    Rect g = gridRect();
-    UIFramework::performFastPartialUpdate(framebuffer, g.x, g.y, g.w, g.h, [this]() { drawField(); });
-}
-
-void CrevasseApp::refreshStatus() {
-    UIFramework::performFastPartialUpdate(framebuffer, 0, LINE_Y, W, LINE_H, [this]() { drawStatus(); });
+void CrevasseApp::refreshBoard(bool field, bool status) {
+    if (!field && !status) return;
+    if (field) {
+        Rect g = gridRect();
+        fillRect(g.x, g.y, g.w, g.h, WHITE);
+        drawField();
+    }
+    if (status) {
+        fillRect(0, LINE_Y, W, LINE_H, WHITE);
+        drawStatus();
+    }
+    DisplayHAL::updateScreenFast();
 }
 
 void CrevasseApp::drawMap(int x, int y, int cs) {

@@ -39,6 +39,9 @@ bool drawThumbnail(const std::string& id, uint8_t* framebuffer, int x, int y, in
 bool drawLarge(const std::string& id, uint8_t* framebuffer, int x, int y, int w, int h,
                int* drawnW = nullptr, int* drawnH = nullptr);
 bool hasLarge(const std::string& id);
+// Ensures the large cached cover exists on disk, waiting for an in-flight
+// background decode of the same book or generating it synchronously if needed.
+bool ensureLarge(const std::string& sdPath, const std::string& id);
 
 // Decodes the book's cover and writes both cached images. Slow (reads and
 // decodes the whole image) - prefer request().

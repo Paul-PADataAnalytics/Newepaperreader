@@ -430,23 +430,25 @@ RTC_DATA_ATTR static uint32_t s_sleepImageIdx = 0;
 static uint32_t s_sleepImageIdx = 0;
 #endif
 
-static void drawSleepScreen(const std::string& bookTitle) {
+static void drawSleepScreen(const std::string& bookTitle, const std::string& bookAuthor = "",
+                            const std::string& bookPath = "", const std::string& readingStatus = "") {
     DisplayHAL::setPortrait(true);
     const int mode = SystemSettings::get().sleepScreen;
 
-    // Book cover mode: the most recently read book (saved whenever a book is
-    // opened or left, so it's known even when sleeping from another app),
-    // drawn from the pre-rendered cover cached when it was opened.
-    AppStorage::LastBook lastBook;
+    // Show the open book's cover ONLY when entering sleep while actively
+    // reading a book; extract/cache its cover on demand if not yet cached.
     std::string coverId;
-    if (mode == SLEEP_SCREEN_COVER) {
-        lastBook = AppStorage::loadLastBook();
-        if (lastBook.valid) coverId = BookCover::cacheIdForFile(AppStorage::toSdPath(lastBook.path));
+    if (!bookPath.empty()) {
+        const std::string sdPath = AppStorage::toSdPath(bookPath);
+        coverId = BookCover::cacheIdForFile(sdPath);
+        if (!coverId.empty() && !BookCover::hasLarge(coverId) && BookCover::isEpub(sdPath)) {
+            BookCover::ensureLarge(sdPath, coverId);
+        }
         if (!BookCover::hasLarge(coverId)) coverId.clear();
     }
 
     std::vector<std::string> images;
-    if (mode == SLEEP_SCREEN_PICTURES) images = listSleepImages();
+    if (bookPath.empty() && mode == SLEEP_SCREEN_PICTURES) images = listSleepImages();
 
     uint8_t* raw = nullptr;
     if (!images.empty()) {
@@ -491,20 +493,33 @@ static void drawSleepScreen(const std::string& bookTitle) {
             textCentered("Press the side button to wake  \xC2\xB7  " + std::to_string(battery) + "%",
                          W / 2, by + 52, FONT_CAPTION, DARK);
         } else if (!coverId.empty()) {
-            const int top = 40;
+            int top = 40;
+            int maxCoverH = BookCover::LARGE_H;
+            if (!readingStatus.empty()) {
+                textCentered(ellipsize(readingStatus, W - 2 * MARGIN, FONT_SMALL + 2, true),
+                             W / 2, 14, FONT_SMALL + 2, BLACK, true);
+                hRule(48, LIGHT, MARGIN, W - MARGIN, 1);
+                top = 60;
+                maxCoverH = BookCover::LARGE_H - 20;
+            }
             int coverW = 0, coverH = 0;
-            BookCover::drawLarge(coverId, framebuffer, MARGIN, top, W - 2 * MARGIN, BookCover::LARGE_H, &coverW, &coverH);
+            BookCover::drawLarge(coverId, framebuffer, MARGIN, top, W - 2 * MARGIN, maxCoverH, &coverW, &coverH);
             strokeRoundRect((W - coverW) / 2 - 2, top - 2, coverW + 4, coverH + 4, 0, 2, BLACK);
-            int y = textWrapped(lastBook.title, MARGIN * 2, top + coverH + 26, W - MARGIN * 4,
+            int y = textWrapped(bookTitle, MARGIN * 2, top + coverH + 26, W - MARGIN * 4,
                                 FONT_BODY + 2, BLACK, 2, 4, true);
-            if (!lastBook.author.empty() && lastBook.author != "Unknown Author") {
-                textCentered(ellipsize(lastBook.author, W - MARGIN * 4, FONT_SMALL), W / 2, y + 4, FONT_SMALL, DARK);
+            if (!bookAuthor.empty() && bookAuthor != "Unknown Author") {
+                textCentered(ellipsize(bookAuthor, W - MARGIN * 4, FONT_SMALL), W / 2, y + 4, FONT_SMALL, DARK);
             }
             hRule(H - 136, LIGHT, MARGIN * 3, W - MARGIN * 3, 2);
             textCentered("Sleeping", W / 2, H - 118, FONT_BODY, BLACK, true);
             textCentered("Press the side button to wake  \xC2\xB7  " + std::to_string(battery) + "%",
                          W / 2, H - 76, FONT_CAPTION, DARK);
         } else {
+            if (!readingStatus.empty()) {
+                textCentered(ellipsize(readingStatus, W - 2 * MARGIN, FONT_SMALL + 2, true),
+                             W / 2, 14, FONT_SMALL + 2, BLACK, true);
+                hRule(48, LIGHT, MARGIN, W - MARGIN, 1);
+            }
             icon(ICON_BOOK, (W - 160) / 2, 230, 160);
             textCentered("Sleeping", W / 2, 420, 52.0f, BLACK, true);
             if (!bookTitle.empty()) {
@@ -542,16 +557,22 @@ static void enterLockMode(PowerManager::SleepReason reason) {
     state.path = "";
 
     std::string bookTitle;
+    std::string bookAuthor;
+    std::string bookPath;
+    std::string readingStatus;
     EReaderApp* reader = activeReader();
     if (reader && reader->isReadingBook()) {
+        readingStatus = reader->getReadingStatusLine();
         reader->prepareForSleep();
         state.internalState = 1; // EReaderApp::STATE_READ
         state.path = reader->getCurrentBookPath();
+        bookPath = reader->getCurrentBookPath();
         bookTitle = reader->getCurrentBookTitle();
+        bookAuthor = reader->getCurrentBookAuthor();
     }
     AppStorage::saveSystemState(state);
 
-    drawSleepScreen(bookTitle);
+    drawSleepScreen(bookTitle, bookAuthor, bookPath, readingStatus);
 
 #ifndef NATIVE_TESTING
     Serial.println("Entering deep sleep (BUTTON_1 wakes)");
@@ -682,10 +703,12 @@ void loop() {
     static bool touchDownWaiting = false;
     static bool touchFired = false;
     static uint32_t lastUpTime = 0;
-    const uint32_t TAP_DEBOUNCE_MS = 50;
+    const uint32_t TAP_DEBOUNCE_MS = 20;
 
     int tx = -1, ty = -1;
     bool gotTouchEvent = false;
+    bool pendingTap = false;
+    int tapX = -1, tapY = -1;
 
 #ifndef NATIVE_TESTING
     TouchEvent ev{};
@@ -695,13 +718,22 @@ void loop() {
             touchDownWaiting = true;
             tx = ev.x;
             ty = ev.y;
+            if (!touchFired && !pendingTap &&
+                static_cast<int32_t>(now - lastUpTime) >= (int32_t)TAP_DEBOUNCE_MS) {
+                pendingTap = true;
+                tapX = ev.x;
+                tapY = ev.y;
+                touchFired = true;
+            }
         } else {
             // GT911 also pulses INT for noise/heartbeats; only the release of
             // a press we actually saw counts as activity.
-            if (touchDownWaiting) gotTouchEvent = true;
+            if (touchDownWaiting) {
+                gotTouchEvent = true;
+                lastUpTime = now;
+            }
             touchDownWaiting = false;
             touchFired = false;
-            lastUpTime = now;
         }
     }
 #else
@@ -749,11 +781,16 @@ void loop() {
     Launcher::getInstance().loop();
 
 #ifndef NATIVE_TESTING
-    bool touched = touchDownWaiting && (static_cast<int32_t>(now - lastUpTime) >= (int32_t)TAP_DEBOUNCE_MS);
-    if (touched && !touchFired) {
+    if (!pendingTap && touchDownWaiting && !touchFired &&
+        static_cast<int32_t>(now - lastUpTime) >= (int32_t)TAP_DEBOUNCE_MS) {
+        pendingTap = true;
+        tapX = tx;
+        tapY = ty;
         touchFired = true;
-        Serial.printf("Handling touch at %d, %d\n", tx, ty);
-        Launcher::getInstance().handleTouch(tx, ty);
+    }
+    if (pendingTap) {
+        Serial.printf("Handling touch at %d, %d\n", tapX, tapY);
+        Launcher::getInstance().handleTouch(tapX, tapY);
     }
 #else
     if (gotTouchEvent && !touchFired) {
@@ -783,8 +820,8 @@ void loop() {
 #ifndef NATIVE_TESTING
         TouchEvent peek;
         if (sleepUntilInput()) return;
-        if (touchEventQueue) xQueuePeek(touchEventQueue, &peek, pdMS_TO_TICKS(30));
-        else delay(30);
+        if (touchEventQueue) xQueuePeek(touchEventQueue, &peek, pdMS_TO_TICKS(10));
+        else delay(10);
 #else
         usleep(10000);
 #endif

@@ -603,13 +603,17 @@ void TeaRaceApp::handleTouch(int x, int y) {
         if (x >= UI::MARGIN && x < UI::MARGIN + 118 && y >= UI::H - UI::FOOTER_H + 12 &&
             y < UI::H - 12 && m_helpPage > 0) {
             --m_helpPage;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
             return;
         }
         if (x >= UI::W - UI::MARGIN - 118 && x < UI::W - UI::MARGIN &&
             y >= UI::H - UI::FOOTER_H + 12 && y < UI::H - 12 && m_helpPage < 2) {
             ++m_helpPage;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
             return;
         }
     }
@@ -667,12 +671,9 @@ void TeaRaceApp::render() {
             case RESULT: drawResult(); break;
         }
     };
-    // Flash-free refreshes between turns, with a clean one now and then.
-    if (m_screen == TITLE || m_screen == RESULT || m_quickDraws >= 5) {
-        m_quickDraws = 0;
-        UIFramework::performFullScreenDraw(framebuffer, content);
+    if (m_screen == CARGO || m_screen == LEG || m_screen == OUTCOME || m_screen == EVENT || m_screen == PORT) {
+        UIFramework::performFastPartialUpdate(framebuffer, 0, 0, W, H, content);
     } else {
-        m_quickDraws++;
         UIFramework::performQuickFullScreenDraw(framebuffer, content);
     }
 }

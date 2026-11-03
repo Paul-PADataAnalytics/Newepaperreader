@@ -709,17 +709,84 @@ static void pushPhysicalArea(const Rect_t& area, int time, bool white) {
     epd_end_frame();
 }
 
-// Same black/white cycling as the driver's epd_clear_area().
-static void clearPhysicalArea(const Rect_t& area) {
-    const int cycles = 4, time = 50;
+// Same black/white cycling as the driver's epd_clear_area(), with configurable
+// cycle count so fast partial updates can use a single 16-aligned erase pass.
+static void clearPhysicalArea(const Rect_t& area, int cycles) {
+    const int time = 50;
     for (int c = 0; c < cycles; c++) {
         for (int i = 0; i < 4; i++) pushPhysicalArea(area, time, false);
         for (int i = 0; i < 4; i++) pushPhysicalArea(area, time, true);
     }
 }
+
+static void clearPhysicalAreaFast(const Rect_t& area) {
+    const int time = 50;
+    for (int i = 0; i < 3; i++) pushPhysicalArea(area, time, false);
+    for (int i = 0; i < 3; i++) pushPhysicalArea(area, time, true);
+}
+
+// Fast 8-frame grayscale waveform driven directly on the calling core without
+// the 160ms of vTaskDelay() sleeps or 30 FreeRTOS task creations in
+// epd_draw_grayscale_image().
+static void drawPhysicalAreaFast(const Rect_t& area, const uint8_t* region) {
+    static const uint8_t kMaxShade[8] = {14, 12, 10, 8, 6, 4, 2, 0};
+    static const int kFrameDus[8] = {50, 50, 60, 70, 90, 100, 200, 400};
+    const int stride = area.width / 2;
+    const int outStart = area.x >> 2;
+    const int outBytes = area.width >> 2;
+    const int end = area.y + area.height;
+    uint8_t pairLut[256];
+
+    clearLineBuffer();
+    for (int f = 0; f < 8; f++) {
+        const uint8_t maxShade = kMaxShade[f];
+        const int frameDus = kFrameDus[f];
+        for (int b = 0; b < 256; b++) {
+            pairLut[b] = ((b & 0x0F) <= maxShade ? 0x01 : 0x00) |
+                         (((b >> 4) & 0x0F) <= maxShade ? 0x04 : 0x00);
+        }
+
+        epd_start_frame();
+        int skipped = 0;
+        bool driven = false;
+        for (int i = 0; i < EPD_HEIGHT; i++) {
+            if (i >= area.y && i < end) {
+                const uint8_t* src = region + (i - area.y) * stride;
+                while (i2s_is_busy()) {}
+                uint8_t* dst = (uint8_t*)epd_get_current_buffer() + outStart;
+                for (int j = 0; j < outBytes; j++) {
+                    dst[j] = pairLut[src[2 * j]] | (uint8_t)(pairLut[src[2 * j + 1]] << 4);
+                }
+                epd_output_row(frameDus);
+                driven = true;
+                skipped = 0;
+            } else if (skipped == 0) {
+                clearLineBuffer();
+                epd_output_row(driven ? frameDus : 10);
+                skipped++;
+            } else if (skipped == 1) {
+                epd_output_row(10);
+                skipped++;
+            } else {
+                epd_skip();
+            }
+        }
+        if (skipped == 0) {
+            clearLineBuffer();
+            epd_output_row(frameDus);
+            epd_output_row(10);
+        } else if (skipped == 1) {
+            epd_output_row(10);
+        }
+        epd_end_frame();
+    }
+}
 #endif
 
+static bool s_fastPartialMode = false;
+
 void DisplayHAL::updateScreenPartial() {
+    const bool fastMode = s_fastPartialMode;
     if (!frontBuffer || !backBuffer) return;
     if (!s_hasShownFrame || s_shownPortrait != _isPortrait || s_shownDark != s_darkMode) {
         updateScreenFull();
@@ -729,11 +796,22 @@ void DisplayHAL::updateScreenPartial() {
     int h = getHeight();
     
     int minX = w, minY = h, maxX = -1, maxY = -1;
+    const int rowBytes = w / 2;
     for (int y = 0; y < h; y++) {
-        for (int x = 0; x < w; x++) {
-            if (getPixel(x, y, frontBuffer) != getPixel(x, y, backBuffer)) {
-                if (x < minX) minX = x;
-                if (x > maxX) maxX = x;
+        const uint8_t* fRow = frontBuffer + y * rowBytes;
+        const uint8_t* bRow = backBuffer + y * rowBytes;
+        for (int bx = 0; bx < rowBytes; bx++) {
+            if (fRow[bx] != bRow[bx]) {
+                int x0 = bx * 2;
+                if (getPixel(x0, y, frontBuffer) != getPixel(x0, y, backBuffer)) {
+                    if (x0 < minX) minX = x0;
+                    if (x0 > maxX) maxX = x0;
+                }
+                int x1 = x0 + 1;
+                if (getPixel(x1, y, frontBuffer) != getPixel(x1, y, backBuffer)) {
+                    if (x1 < minX) minX = x1;
+                    if (x1 > maxX) maxX = x1;
+                }
                 if (y < minY) minY = y;
                 if (y > maxY) maxY = y;
             }
@@ -750,6 +828,7 @@ void DisplayHAL::updateScreenPartial() {
     EPD_POWER_SCOPE();
 
 #ifdef NATIVE_TESTING
+    (void)fastMode;
     if (s_debugScreen) {
         printf("[DEBUG-SCREEN] updateScreenPartial() Diff Bounds: x=%d, y=%d, w=%d, h=%d\n", 
                minX, minY, (maxX - minX + 1), (maxY - minY + 1));
@@ -833,11 +912,21 @@ void DisplayHAL::updateScreenPartial() {
     }
     if (padRow) memset(region + stride * area.height, 0xFF, stride);
     uint32_t t0 = millis();
-    clearPhysicalArea(area);
+    if (fastMode) {
+        clearPhysicalAreaFast(area);
+    } else {
+        clearPhysicalArea(area, 4);
+    }
     uint32_t t1 = millis();
-    epd_draw_grayscale_image(drawArea, region);
+    if (fastMode) {
+        drawPhysicalAreaFast(area, region);
+    } else {
+        epd_draw_grayscale_image(drawArea, region);
+    }
     free(region);
-    Serial.printf("EPD partial %dx%d@%d,%d: clear %ums draw %ums\n", area.width, area.height, area.x, area.y,
+    Serial.printf("EPD partial (%s) %dx%d@%d,%d: clear %ums draw %ums\n",
+                  fastMode ? "fast" : "4c",
+                  area.width, area.height, area.x, area.y,
                   (unsigned)(t1 - t0), (unsigned)(millis() - t1));
 #endif
 
@@ -849,9 +938,11 @@ void DisplayHAL::updateScreenPartial() {
 }
 
 void DisplayHAL::updateScreenFast() {
-    // UI updates need a complete region erase; the former one-cycle path
-    // left gray text and inverted toggle edges behind.
+    // Fast 16-aligned erase + 5-frame direct grayscale waveform for low-latency
+    // interactive and game updates.
+    s_fastPartialMode = true;
     updateScreenPartial();
+    s_fastPartialMode = false;
 }
 
 void DisplayHAL::injectTouch(int x, int y) {

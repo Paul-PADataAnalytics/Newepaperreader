@@ -2,4 +2,25 @@
 #define MINIZ_EXPORT_H
 #define MINIZ_EXPORT
 #define MINIZ_NO_EXPORT
+
+/* Keep our copy's symbols distinct from the older miniz 1.x build in the
+ * ESP32 ROM (whose tinfl_decompressor struct is 3.2 KB larger and whose
+ * mz_free is compiled with MINIZ_NO_MALLOC as a no-op). */
+#define mz_adler32 epaper_mz_adler32
+#define mz_crc32 epaper_mz_crc32
+#define mz_free epaper_mz_free
+#define tinfl_decompress epaper_tinfl_decompress
+#define tinfl_decompress_mem_to_callback epaper_tinfl_decompress_mem_to_callback
+#define tinfl_decompress_mem_to_heap epaper_tinfl_decompress_mem_to_heap
+#define tinfl_decompress_mem_to_mem epaper_tinfl_decompress_mem_to_mem
+#define tdefl_compress epaper_tdefl_compress
+#define tdefl_compress_buffer epaper_tdefl_compress_buffer
+#define tdefl_compress_mem_to_heap epaper_tdefl_compress_mem_to_heap
+#define tdefl_compress_mem_to_mem epaper_tdefl_compress_mem_to_mem
+#define tdefl_compress_mem_to_output epaper_tdefl_compress_mem_to_output
+#define tdefl_get_adler32 epaper_tdefl_get_adler32
+#define tdefl_get_prev_return_status epaper_tdefl_get_prev_return_status
+#define tdefl_init epaper_tdefl_init
+#define tdefl_write_image_to_png_file_in_memory epaper_tdefl_write_image_to_png_file_in_memory
+#define tdefl_write_image_to_png_file_in_memory_ex epaper_tdefl_write_image_to_png_file_in_memory_ex
 #endif

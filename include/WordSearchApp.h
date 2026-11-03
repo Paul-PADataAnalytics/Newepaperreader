@@ -69,9 +69,7 @@ private:
     void drawWordList(int top);
     void drawDonePanel(int top);
     void drawCapsule(int r0, int c0, int dr, int dc, int len, bool outline);
-    void refreshGrid();
-    void refreshStatus();
-    void refreshWordList();
+    void refreshBoard(bool grid, bool status, bool words);
     int wordListTop() const;
     void addButton(const UI::Rect& r, int action);
 

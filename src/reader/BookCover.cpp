@@ -3,6 +3,7 @@
 #include "FileBrowser.h"
 #include "EpubParser.h"
 #include "DisplayHAL.h"
+#include "PowerManager.h"
 #include "SystemSettings.h"
 #include <tjpgd.h>
 #include <algorithm>
@@ -86,14 +87,11 @@ uint32_t nowMs() {
 #endif
 }
 
-void cooperativeYield() {
-#ifndef NATIVE_TESTING
-    // The worker shares core 0 with the radio stacks and the idle task
-    // (which feeds the task watchdog); give them a tick now and then.
-    static uint32_t calls = 0;
-    if ((++calls & 7) == 0) vTaskDelay(1);
-#endif
-}
+volatile bool s_abortCurrent = false;
+
+void forceYield() {}
+
+void cooperativeYield() {}
 
 // ---------------------------------------------------------------------------
 // Decoding
@@ -101,9 +99,9 @@ void cooperativeYield() {
 
 // Fitted size of a w x h image inside a box, aspect ratio preserved.
 void fitInBox(int w, int h, int boxW, int boxH, int& outW, int& outH) {
-    const double scale = std::min((double)boxW / w, (double)boxH / h);
-    outW = std::max(1, (int)std::lround(w * scale));
-    outH = std::max(1, (int)std::lround(h * scale));
+    const float scale = std::min((float)boxW / (float)w, (float)boxH / (float)h);
+    outW = std::max(1, (int)(w * scale + 0.5f));
+    outH = std::max(1, (int)(h * scale + 0.5f));
 }
 
 struct JpegContext {
@@ -113,6 +111,7 @@ struct JpegContext {
 };
 
 int jpegOutput(JDEC* decoder, void* bitmap, JRECT* rect) {
+    if (s_abortCurrent) return 0;
     JpegContext* context = static_cast<JpegContext*>(decoder->device);
     Grey& image = *context->image;
     const uint8_t* source = static_cast<const uint8_t*>(bitmap);
@@ -128,6 +127,7 @@ int jpegOutput(JDEC* decoder, void* bitmap, JRECT* rect) {
 }
 
 size_t jpegInput(JDEC* decoder, uint8_t* buffer, size_t length) {
+    if (s_abortCurrent) return 0;
     JpegContext* context = static_cast<JpegContext*>(decoder->device);
     cooperativeYield();
     if (buffer) return context->epub->readStream(context->stream, buffer, length);
@@ -135,6 +135,7 @@ size_t jpegInput(JDEC* decoder, uint8_t* buffer, size_t length) {
     uint8_t scratch[256];
     size_t skipped = 0;
     while (skipped < length) {
+        if (s_abortCurrent) break;
         const size_t chunk = std::min(sizeof(scratch), length - skipped);
         const size_t got = context->epub->readStream(context->stream, scratch, chunk);
         if (got == 0) break;
@@ -153,7 +154,13 @@ DecodeResult decodeJpegStream(EpubParser& epub, const std::string& entry, int bo
     if (!stream) return DecodeResult::FAILED;
 
     constexpr size_t kPoolSize = 32 * 1024;
-    std::unique_ptr<uint8_t, void (*)(void*)> pool(static_cast<uint8_t*>(malloc(kPoolSize)), free);
+#ifndef NATIVE_TESTING
+    uint8_t* poolBuf = static_cast<uint8_t*>(ps_malloc(kPoolSize));
+    if (!poolBuf) poolBuf = static_cast<uint8_t*>(malloc(kPoolSize));
+#else
+    uint8_t* poolBuf = static_cast<uint8_t*>(malloc(kPoolSize));
+#endif
+    std::unique_ptr<uint8_t, void (*)(void*)> pool(poolBuf, free);
     JpegContext context{&epub, stream, &image};
     JDEC decoder;
     DecodeResult result = DecodeResult::FAILED;
@@ -300,10 +307,16 @@ bool decodeProgressiveDc(const uint8_t* data, size_t length, Grey& image) {
     struct Component {
         int id = 0, h = 1, v = 1, q = 0, dcTable = 0, predictor = 0;
     };
+    struct Tables {
+        uint16_t quant[4][64] = {};
+        HuffTable dcTables[4];
+        HuffTable ignored;
+    };
+    std::unique_ptr<Tables> tables(new Tables());
     Component components[4];
     int componentCount = 0, width = 0, height = 0, maxH = 1, maxV = 1, restartInterval = 0;
-    uint16_t quant[4][64] = {};
-    HuffTable dcTables[4];
+    auto& quant = tables->quant;
+    auto& dcTables = tables->dcTables;
     std::vector<int> luma; // DC of each luma block, MCU-padded
     int lumaStride = 0, mcusX = 0, mcusY = 0;
     bool frame = false;
@@ -335,8 +348,7 @@ bool decodeProgressiveDc(const uint8_t* data, size_t length, Grey& image) {
                 int total = 0;
                 for (int k = 0; k < 16; ++k) total += s[1 + k];
                 if (s + 17 + total > next) return false;
-                HuffTable ignored;
-                if (!buildHuffTable(s + 1, s + 17, total, tableClass == 0 ? dcTables[index] : ignored)) return false;
+                if (!buildHuffTable(s + 1, s + 17, total, tableClass == 0 ? dcTables[index] : tables->ignored)) return false;
                 s += 17 + total;
             }
         } else if (marker == 0xDD) {
@@ -394,6 +406,7 @@ bool decodeProgressiveDc(const uint8_t* data, size_t length, Grey& image) {
                 const int unitsY = single ? (compH + 7) / 8 : mcusY;
                 int sinceRestart = 0;
                 for (int uy = 0; uy < unitsY; ++uy) {
+                    if (s_abortCurrent) return false;
                     for (int ux = 0; ux < unitsX; ++ux) {
                         if (restartInterval && sinceRestart == restartInterval) {
                             bits.restart();
@@ -472,16 +485,30 @@ bool enoughMemory(uint64_t bytes) {
 // progressive and unusual JPEGs): stb_image when the image fits in memory,
 // else the DC-only fallback for progressive JPEGs.
 bool decodeInMemory(EpubParser& epub, const std::string& entry, Grey& image, const char*& method) {
+    if (s_abortCurrent) return false;
+    forceYield();
     size_t length = 0;
     char* bytes = epub.getFileContent(entry, length);
+    forceYield();
     if (!bytes) return false;
+    if (s_abortCurrent) {
+        free(bytes);
+        return false;
+    }
     const stbi_uc* data = reinterpret_cast<const stbi_uc*>(bytes);
     const bool progressive = isProgressiveJpeg(data, length);
     int w = 0, h = 0, components = 0;
     bool ok = false;
-    if (stbi_info_from_memory(data, (int)length, &w, &h, &components) && w > 0 && h > 0 &&
+    if (progressive) {
+        ok = decodeProgressiveDc(data, length, image);
+        method = "progressive DC";
+    }
+    if (!ok && !s_abortCurrent &&
+        stbi_info_from_memory(data, (int)length, &w, &h, &components) && w > 0 && h > 0 &&
         enoughMemory(stbBudget(w, h, components, progressive) + length)) {
+        forceYield();
         stbi_uc* grey = stbi_load_from_memory(data, (int)length, &w, &h, &components, 1);
+        forceYield();
         if (grey) {
             image.w = w;
             image.h = h;
@@ -491,12 +518,8 @@ bool decodeInMemory(EpubParser& epub, const std::string& entry, Grey& image, con
             ok = true;
         }
     }
-    if (!ok && progressive) {
-        ok = decodeProgressiveDc(data, length, image);
-        method = "progressive DC";
-    }
     free(bytes);
-    return ok;
+    return ok && !s_abortCurrent;
 }
 
 // ---------------------------------------------------------------------------
@@ -517,32 +540,33 @@ Taps buildTaps(int source, int target) {
     taps.start.resize(target);
     taps.count.resize(target);
     taps.offset.resize(target);
-    const double ratio = (double)source / target;
+    const float ratio = (float)source / (float)target;
+    std::vector<float> weights;
     for (int d = 0; d < target; ++d) {
         taps.offset[d] = (int)taps.weight.size();
-        std::vector<double> weights;
+        weights.clear();
         int first = 0;
-        if (ratio >= 1.0) {
-            const double a = d * ratio;
-            const double b = std::min((double)source, (d + 1) * ratio);
+        if (ratio >= 1.0f) {
+            const float a = d * ratio;
+            const float b = std::min((float)source, (d + 1) * ratio);
             first = (int)std::floor(a);
             const int last = std::min(source, (int)std::ceil(b));
             for (int i = first; i < last; ++i) {
-                weights.push_back(std::min(b, (double)i + 1) - std::max(a, (double)i));
+                weights.push_back(std::min(b, (float)(i + 1)) - std::max(a, (float)i));
             }
         } else {
-            const double center = (d + 0.5) * ratio - 0.5;
+            const float center = (d + 0.5f) * ratio - 0.5f;
             first = std::max(0, std::min(source - 1, (int)std::floor(center)));
             const int second = std::min(source - 1, first + 1);
-            const double t = std::max(0.0, std::min(1.0, center - first));
-            weights.push_back(1.0 - t);
+            const float t = std::max(0.0f, std::min(1.0f, center - first));
+            weights.push_back(1.0f - t);
             if (second != first) weights.push_back(t);
         }
-        double total = 0;
-        for (double w : weights) total += w;
+        float total = 0.0f;
+        for (float w : weights) total += w;
         int assigned = 0;
         for (size_t i = 0; i < weights.size(); ++i) {
-            int w = (i + 1 == weights.size()) ? 256 - assigned : (int)std::lround(weights[i] / total * 256.0);
+            int w = (i + 1 == weights.size()) ? 256 - assigned : (int)(weights[i] / total * 256.0f + 0.5f);
             w = std::max(0, w);
             assigned += w;
             taps.weight.push_back((uint16_t)w);
@@ -554,11 +578,13 @@ Taps buildTaps(int source, int target) {
 }
 
 Grey resize(const Grey& source, int targetW, int targetH) {
+    if (s_abortCurrent) return Grey();
     const Taps horizontal = buildTaps(source.w, targetW);
     const Taps vertical = buildTaps(source.h, targetH);
     // Horizontal pass into 8.8 fixed point rows, then vertical.
     std::vector<uint16_t> rows((size_t)source.h * targetW);
     for (int y = 0; y < source.h; ++y) {
+        if (s_abortCurrent) return Grey();
         const uint8_t* in = &source.px[(size_t)y * source.w];
         uint16_t* out = &rows[(size_t)y * targetW];
         for (int x = 0; x < targetW; ++x) {
@@ -575,6 +601,7 @@ Grey resize(const Grey& source, int targetW, int targetH) {
     result.h = targetH;
     result.px.resize((size_t)targetW * targetH);
     for (int y = 0; y < targetH; ++y) {
+        if (s_abortCurrent) return Grey();
         const uint16_t* w = &vertical.weight[vertical.offset[y]];
         for (int x = 0; x < targetW; ++x) {
             uint32_t sum = 0;
@@ -589,12 +616,14 @@ Grey resize(const Grey& source, int targetW, int targetH) {
 
 // Floyd-Steinberg (serpentine) down to the panel's 16 grey levels.
 Packed dither(const Grey& image) {
+    if (s_abortCurrent || image.w <= 0 || image.h <= 0) return Packed();
     Packed packed;
     packed.w = image.w;
     packed.h = image.h;
     packed.data.assign((size_t)packed.stride() * packed.h, 0xFF);
     std::vector<int> current(image.w + 2, 0), next(image.w + 2, 0);
     for (int y = 0; y < image.h; ++y) {
+        if (s_abortCurrent) return Packed();
         std::fill(next.begin(), next.end(), 0);
         const bool reverse = (y & 1) != 0;
         for (int i = 0; i < image.w; ++i) {
@@ -716,6 +745,8 @@ std::string s_currentId; // job being decoded right now
 #ifndef NATIVE_TESTING
 SemaphoreHandle_t s_mutex = nullptr;
 TaskHandle_t s_worker = nullptr;
+StaticTask_t s_workerTcb;
+StackType_t s_workerStack[16384];
 struct Lock {
     Lock() { xSemaphoreTake(s_mutex, portMAX_DELAY); }
     ~Lock() { xSemaphoreGive(s_mutex); }
@@ -730,16 +761,20 @@ bool runOneJob() {
         Lock lock;
         if (s_jobs.empty()) {
             s_working = false;
+            s_abortCurrent = false;
             return false;
         }
         job = s_jobs.front();
         s_jobs.pop_front();
         s_working = true;
+        s_abortCurrent = false;
         s_currentId = job.id;
     }
     const BookCover::State state = BookCover::generate(job.path, job.id);
     Lock lock;
-    s_results.emplace_back(job.id, state);
+    if (!s_abortCurrent) {
+        s_results.emplace_back(job.id, state);
+    }
     s_currentId.clear();
     return true;
 }
@@ -852,30 +887,51 @@ bool drawLarge(const std::string& id, uint8_t* framebuffer, int x, int y, int w,
 }
 
 State generate(const std::string& sdPath, const std::string& id) {
-    if (!isEpub(sdPath) || id.empty()) return STATE_NONE;
+    if (!isEpub(sdPath) || id.empty() || s_abortCurrent) return STATE_NONE;
+    struct stat stThm, stBig;
+    if (stat(coverFile(id, "thm").c_str(), &stThm) == 0 && stThm.st_size > 8 &&
+        stat(coverFile(id, "big").c_str(), &stBig) == 0 && stBig.st_size > 8) {
+        return STATE_READY;
+    }
     const uint32_t started = nowMs();
     EpubParser epub;
-    if (!epub.open(AppStorage::toRuntimePath(sdPath), false)) return STATE_NONE;
+    if (!epub.open(AppStorage::toRuntimePath(sdPath), false) || s_abortCurrent) return STATE_NONE;
     const std::string entry = epub.findCoverImage();
-    if (entry.empty()) return STATE_NONE;
+    if (entry.empty() || s_abortCurrent) return STATE_NONE;
 
     Grey decoded;
     const char* method = "streamed";
     if (decodeJpegStream(epub, entry, LARGE_W, LARGE_H, decoded) != DecodeResult::OK &&
         !decodeInMemory(epub, entry, decoded, method)) {
-        printf("[Cover] no decodable cover in %s (%s)\n", sdPath.c_str(), entry.c_str());
+        if (!s_abortCurrent) {
+#ifndef NATIVE_TESTING
+            Serial.printf("[Cover] no decodable cover in %s (%s)\n", sdPath.c_str(), entry.c_str());
+#else
+            printf("[Cover] no decodable cover in %s (%s)\n", sdPath.c_str(), entry.c_str());
+#endif
+        }
         return STATE_NONE;
     }
     epub.close();
+    if (s_abortCurrent) return STATE_NONE;
 
     ensureCoverDir();
     int w = 0, h = 0;
     fitInBox(decoded.w, decoded.h, LARGE_W, LARGE_H, w, h);
-    const bool large = writePacked(coverFile(id, "big"), dither(resize(decoded, w, h)));
-    fitInBox(decoded.w, decoded.h, THUMB_W, THUMB_H, w, h);
-    const bool small = writePacked(coverFile(id, "thm"), dither(resize(decoded, w, h)));
-    printf("[Cover] %s: %dx%d (%s) -> %s in %ums\n", sdPath.c_str(), decoded.w, decoded.h,
+    Grey largeGrey = resize(decoded, w, h);
+    decoded = Grey(); // free intermediate full-res buffer before dithering/saving
+    if (s_abortCurrent) return STATE_NONE;
+    const bool large = writePacked(coverFile(id, "big"), dither(largeGrey));
+    if (s_abortCurrent) return STATE_NONE;
+    fitInBox(largeGrey.w, largeGrey.h, THUMB_W, THUMB_H, w, h);
+    const bool small = writePacked(coverFile(id, "thm"), dither(resize(largeGrey, w, h)));
+#ifndef NATIVE_TESTING
+    Serial.printf("[Cover] %s: %dx%d (%s) -> %s in %ums\n", sdPath.c_str(), largeGrey.w, largeGrey.h,
+                  method, id.c_str(), (unsigned)(nowMs() - started));
+#else
+    printf("[Cover] %s: %dx%d (%s) -> %s in %ums\n", sdPath.c_str(), largeGrey.w, largeGrey.h,
            method, id.c_str(), (unsigned)(nowMs() - started));
+#endif
     return (large && small) ? STATE_READY : STATE_NONE;
 }
 
@@ -908,9 +964,14 @@ void request(const std::string& sdPath, const std::string& id) {
     }
 #ifndef NATIVE_TESTING
     if (!s_worker) {
-        // Core 0 at the lowest priority: the UI loop on core 1 stays
-        // responsive while a cover decodes.
-        xTaskCreatePinnedToCore(workerTask, "covers", 16384, nullptr, 1, &s_worker, 0);
+        // Core 0 at tskIDLE_PRIORITY (0): FreeRTOS preemptively time-slices it
+        // with IDLE0 on every tick so the task watchdog is always fed even
+        // during multi-second stb_image/miniz calls, and the UI loop on core 1
+        // stays responsive. Static stack in BSS guarantees creation even when
+        // internal SRAM is fragmented by BLE.
+        s_worker = xTaskCreateStaticPinnedToCore(
+            workerTask, "covers", sizeof(s_workerStack) / sizeof(StackType_t),
+            nullptr, tskIDLE_PRIORITY, s_workerStack, &s_workerTcb, 0);
     }
     if (s_worker) xTaskNotifyGive(s_worker);
 #endif
@@ -920,8 +981,57 @@ void cancelPending() {
 #ifndef NATIVE_TESTING
     if (!s_mutex) return;
 #endif
-    Lock lock;
-    s_jobs.clear();
+    {
+        Lock lock;
+        s_jobs.clear();
+        if (s_working) s_abortCurrent = true;
+    }
+#ifndef NATIVE_TESTING
+    // Wait for any in-flight job on Core 0 to abort or finish so Core 1 can
+    // safely use the SD card without concurrent SPI access.
+    if (busy()) {
+        PowerManager::boostCpu();
+        uint32_t waited = 0;
+        while (busy() && waited < 15000) {
+            vTaskDelay(pdMS_TO_TICKS(2));
+            waited += 2;
+        }
+    }
+#endif
+    {
+        Lock lock;
+        if (!s_working) s_abortCurrent = false;
+    }
+}
+
+bool ensureLarge(const std::string& sdPath, const std::string& id) {
+    if (!isEpub(sdPath) || id.empty()) return false;
+    if (hasLarge(id)) return true;
+#ifndef NATIVE_TESTING
+    if (s_mutex) {
+        bool inFlightSame = false;
+        {
+            Lock lock;
+            if (s_working && s_currentId == id) {
+                s_jobs.clear();
+                s_abortCurrent = false;
+                inFlightSame = true;
+            }
+        }
+        if (inFlightSame) {
+            uint32_t waited = 0;
+            while (busy() && waited < 15000) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+                waited += 10;
+            }
+            if (hasLarge(id)) return true;
+        }
+    }
+#endif
+    cancelPending();
+    s_abortCurrent = false;
+    generate(sdPath, id);
+    return hasLarge(id);
 }
 
 void pump() {

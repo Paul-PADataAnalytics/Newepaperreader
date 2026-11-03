@@ -201,11 +201,17 @@ void KeeperApp::doTask(int task) {
                 m_dayLog.push_back("Rowed to the harbour: oil +15, food +6, fuel +5, a rocket, and news from the village. Spirit +10.");
             }
             m_blocks = 0;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H + 156, W, H - (HEADER_H + 156), [this]() {
+                m_buttons.clear();
+                drawDay();
+            });
             return;
     }
     m_blocks--;
-    render();
+    UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H + 156, W, H - (HEADER_H + 156), [this]() {
+        m_buttons.clear();
+        drawDay();
+    });
 }
 
 void KeeperApp::resolveNight(bool watch) {
@@ -357,13 +363,17 @@ void KeeperApp::handleTouch(int x, int y) {
         if (x >= UI::MARGIN && x < UI::MARGIN + 118 && y >= UI::H - UI::FOOTER_H + 12 &&
             y < UI::H - 12 && m_helpPage > 0) {
             --m_helpPage;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
             return;
         }
         if (x >= UI::W - UI::MARGIN - 118 && x < UI::W - UI::MARGIN &&
             y >= UI::H - UI::FOOTER_H + 12 && y < UI::H - 12 && m_helpPage < 1) {
             ++m_helpPage;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
             return;
         }
     }
@@ -418,11 +428,9 @@ void KeeperApp::render() {
             case END: drawEnd(); break;
         }
     };
-    if (m_screen == TITLE || m_screen == END || m_quickDraws >= 5) {
-        m_quickDraws = 0;
-        UIFramework::performFullScreenDraw(framebuffer, content);
+    if (m_screen == DAY || m_screen == NIGHT || m_screen == DISTRESS || m_screen == REPORT) {
+        UIFramework::performFastPartialUpdate(framebuffer, 0, 0, W, H, content);
     } else {
-        m_quickDraws++;
         UIFramework::performQuickFullScreenDraw(framebuffer, content);
     }
 }

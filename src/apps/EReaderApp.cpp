@@ -262,10 +262,8 @@ void EReaderApp::onDestroy() {
         m_currentBookText = nullptr;
         m_currentBookTextLen = 0;
     }
-    // Library covers are only wanted while the list is on screen; the open
-    // book's own cover (for the sleep screen) may still finish.
+    // Stop any background library cover decodes before closing.
     BookCover::cancelPending();
-    requestCurrentBookCover();
     m_textReader.closeFile();
     m_epubParser.close();
     restoreTypographyDefaults();
@@ -445,8 +443,14 @@ void EReaderApp::buildLibraryItems() {
             if (!b.author.empty()) item.author = b.author;
         }
 
-        item.coverState = isEpub ? record.cover : (uint8_t)BookCover::STATE_NONE;
         item.coverId = isEpub ? record.coverId() : "";
+        if (!isEpub) {
+            item.coverState = (uint8_t)BookCover::STATE_NONE;
+        } else if (BookCover::hasLarge(item.coverId)) {
+            item.coverState = (uint8_t)BookCover::STATE_READY;
+        } else {
+            item.coverState = (uint8_t)BookCover::STATE_UNKNOWN;
+        }
 
         const AppStorage::BookmarkInfo& bmark = record.bookmark;
         item.completionPercent = 0;
@@ -588,6 +592,10 @@ uint32_t EReaderApp::msUntilUpdate() const {
 }
 
 void EReaderApp::drawLibrary() {
+    // Stop background cover decoding before touching the SD card for cached
+    // thumbnails on the new page/sort.
+    BookCover::cancelPending();
+
     // Sorting is in-memory. Bookmark metadata is rebuilt only after the scan
     // and when returning from a book, not on every redraw/page tap.
     sortLibraryItems();
@@ -718,6 +726,64 @@ void EReaderApp::rememberLastBook() {
     last.percent = (int)(currentProgress() * 100.0f + 0.5f);
     last.valid = true;
     AppStorage::saveLastBook(last);
+}
+
+std::string EReaderApp::getReadingStatusLine() {
+    if (m_state != STATE_READ) return "";
+
+    ensureContents();
+    std::string chapter = currentChapterLabel();
+    if (chapter.empty() && m_currentChapterIndex >= 0 && !m_chapters.empty()) {
+        chapter = "Chapter " + std::to_string(m_currentChapterIndex + 1);
+    } else if (!chapter.empty() && isdigit((unsigned char)chapter[0])) {
+        chapter = "Chapter " + chapter;
+    }
+
+    int currentPage = 1;
+    int totalPages = 0;
+    if (m_currentBookText && m_currentBookTextLen > 0) {
+        prepareTypographyForReading();
+        size_t pos = 0;
+        while (pos < m_currentBookTextLen && totalPages < 5000) {
+            totalPages++;
+            if (pos <= (size_t)m_currentReadingOffset) {
+                currentPage = totalPages;
+            }
+            size_t next = typography.findNextPageStart(m_currentBookText, m_currentBookTextLen, pos);
+            if (next <= pos) break;
+            pos = next;
+        }
+        restoreTypographyDefaults();
+    }
+    if (totalPages < 1) totalPages = 1;
+    if (currentPage < 1) currentPage = 1;
+    if (currentPage > totalPages) currentPage = totalPages;
+
+    int pct = (int)(currentProgress() * 100.0f + 0.5f);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+
+    std::string status = std::to_string(currentPage) + " of " + std::to_string(totalPages) +
+                         " (" + std::to_string(pct) + "%)";
+    if (!chapter.empty()) {
+        status += " - " + chapter;
+    }
+    return status;
+}
+
+void EReaderApp::prepareForSleep() {
+    saveCurrentPosition();
+    rememberLastBook();
+    if (!m_currentBookPath.empty() && BookCover::isEpub(m_currentBookPath)) {
+        const std::string sdPath = AppStorage::toSdPath(m_currentBookPath);
+        const std::string id = BookCover::cacheIdForFile(sdPath);
+        if (!id.empty()) {
+            PowerManager::boostCpu();
+            BookCover::ensureLarge(sdPath, id);
+        }
+    } else {
+        BookCover::cancelPending();
+    }
 }
 
 void EReaderApp::drawReading(bool quick) {
@@ -991,6 +1057,7 @@ void EReaderApp::saveCurrentPosition() {
 }
 
 void EReaderApp::openBookAtRuntimePath(const std::string& path) {
+    BookCover::cancelPending();
     AppScreens::drawLoading(framebuffer, m_currentBookTitle.c_str());
     m_textReader.closeFile();
     m_epubParser.close();
@@ -1058,7 +1125,8 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
             char* fallbackText = nullptr;
             size_t fallbackLen = 0;
             int fallbackIndex = 0;
-            for (int i = 0; i < (int)m_chapters.size(); i++) {
+            const int scanLimit = std::min((int)m_chapters.size(), 10);
+            for (int i = 0; i < scanLimit; i++) {
                 size_t size = 0;
                 char* html = m_epubParser.getFileContent(m_chapters[i], size);
                 if (!html) continue;
@@ -1087,6 +1155,8 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
                 m_currentBookText = fallbackText;
                 m_currentBookTextLen = fallbackLen;
                 m_currentChapterIndex = fallbackIndex;
+            } else if (fallbackText) {
+                free(fallbackText);
             }
         }
     }
@@ -1120,7 +1190,6 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
     m_state = STATE_READ;
     m_menuOpen = false;
     rememberLastBook();
-    requestCurrentBookCover();
     drawReading();
 }
 

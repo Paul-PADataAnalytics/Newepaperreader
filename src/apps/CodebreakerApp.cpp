@@ -382,7 +382,10 @@ void CodebreakerApp::sendGuess() {
         finishGame(false);
     } else {
         saveStats();
-        render();
+        UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+            drawHistory();
+            drawInput(false);
+        });
     }
 }
 
@@ -495,13 +498,17 @@ void CodebreakerApp::handleTouch(int x, int y) {
         if (x >= UI::MARGIN && x < UI::MARGIN + 118 && y >= UI::H - UI::FOOTER_H + 12 &&
             y < UI::H - 12 && m_helpPage > 0) {
             --m_helpPage;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
             return;
         }
         if (x >= UI::W - UI::MARGIN - 118 && x < UI::W - UI::MARGIN &&
             y >= UI::H - UI::FOOTER_H + 12 && y < UI::H - 12 && m_helpPage < 1) {
             ++m_helpPage;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
             return;
         }
     }
@@ -577,15 +584,7 @@ void CodebreakerApp::render() {
             case RESULT: drawResult(); break;
         }
     };
-    // A clean full refresh on every change of screen (and now and then to
-    // clear ghosting); between guesses on the board a flash-free one.
-    if (m_screen != m_lastDrawn || m_quickDraws >= 5) {
-        m_quickDraws = 0;
-        UIFramework::performFullScreenDraw(framebuffer, content);
-    } else {
-        m_quickDraws++;
-        UIFramework::performQuickFullScreenDraw(framebuffer, content);
-    }
+    UIFramework::performFullScreenDraw(framebuffer, content);
     m_lastDrawn = m_screen;
 }
 

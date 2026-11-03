@@ -240,8 +240,8 @@ void KlondikeApp::afterMove(bool moved, const std::string& failMessage) {
         }
         m_stuck = !m_game.hasUsefulMove();
         m_message = m_stuck ? "No useful moves left" : "";
-        save();
         refreshTable();
+        save();
     } else {
         m_message = failMessage;
         UIFramework::performFastPartialUpdate(framebuffer, 0, BAR_Y - 4, W, H - BAR_Y + 4, [this]() {
@@ -393,7 +393,9 @@ void KlondikeApp::handleTouch(int x, int y) {
         int step = GameKit::hitPageFooter(x, y, m_helpPage, 3);
         if (step) {
             m_helpPage += step;
-            render();
+            UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
+                drawHelp();
+            });
         }
         return;
     }
@@ -475,18 +477,11 @@ void KlondikeApp::render() {
         }
     };
     m_partials = 0;
-    if (m_screen != m_lastDrawn) UIFramework::performFullScreenDraw(framebuffer, content);
-    else UIFramework::performQuickFullScreenDraw(framebuffer, content);
+    UIFramework::performFullScreenDraw(framebuffer, content);
     m_lastDrawn = m_screen;
 }
 
 void KlondikeApp::refreshTable() {
-    // Moves redraw only what changed; a clean full refresh now and then
-    // keeps the greys crisp.
-    if (++m_partials >= 20) {
-        render();
-        return;
-    }
     UIFramework::performFastPartialUpdate(framebuffer, 0, HEADER_H, W, H - HEADER_H, [this]() {
         m_buttons.clear();
         drawTable();
@@ -665,17 +660,17 @@ void KlondikeApp::drawBar(bool addHits) {
     int room = (collect || m_stuck ? right.x - 12 : W - MARGIN) - left;
     std::string msg = m_message;
     uint8_t color = BLACK;
-    if (msg.empty()) {
+    if (msg.empty() && m_game.passLimit > 0) {
         color = DARK;
-        msg = "Move " + std::to_string(m_game.moves);
-        if (m_game.passLimit > 0)
-            msg += "  \xC2\xB7  pass " + std::to_string(m_game.passes) + " of " + std::to_string(m_game.passLimit);
+        msg = "Pass " + std::to_string(m_game.passes) + " of " + std::to_string(m_game.passLimit);
     }
-    float fs = textWidth(msg, FONT_BODY - 2) <= room ? FONT_BODY - 2 : SMALL - 2;
-    if (textWidth(msg, fs) > room) {
-        textWrapped(msg, left, BAR_Y + 2, room, SMALL - 2, color, 2, 0, true);
-    } else {
-        textCentered(msg, left + room / 2, BAR_Y + (BAR_H - lineHeight(fs)) / 2, fs, color, color == BLACK);
+    if (!msg.empty()) {
+        float fs = textWidth(msg, FONT_BODY - 2) <= room ? FONT_BODY - 2 : SMALL - 2;
+        if (textWidth(msg, fs) > room) {
+            textWrapped(msg, left, BAR_Y + 2, room, SMALL - 2, color, 2, 0, true);
+        } else {
+            textCentered(msg, left + room / 2, BAR_Y + (BAR_H - lineHeight(fs)) / 2, fs, color, color == BLACK);
+        }
     }
 }
 

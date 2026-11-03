@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - paul-padataanalytics-power-ui-revamp-companion-fixes
     paths:
       - "src/**"
       - "include/**"

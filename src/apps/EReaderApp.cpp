@@ -1121,11 +1121,20 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
             hasValidSavedEpubPosition = loadChapter(bmark.chapterIndex);
         }
 
+        if (!m_currentBookText && !m_contentsFromSpine) {
+            for (const auto& entry : m_contents) {
+                if (entry.chapter >= 0 && entry.chapter < (int)m_chapters.size() &&
+                    isPreferredEpubChapter(entry.title)) {
+                    if (loadChapter(entry.chapter)) break;
+                }
+            }
+        }
+
         if (!m_currentBookText) {
             char* fallbackText = nullptr;
             size_t fallbackLen = 0;
             int fallbackIndex = 0;
-            const int scanLimit = std::min((int)m_chapters.size(), 10);
+            const int scanLimit = std::min((int)m_chapters.size(), 5);
             for (int i = 0; i < scanLimit; i++) {
                 size_t size = 0;
                 char* html = m_epubParser.getFileContent(m_chapters[i], size);

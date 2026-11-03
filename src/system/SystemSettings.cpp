@@ -86,7 +86,12 @@ void load() {
     float font = doc["readingFontSize"] | d.readingFontSize;
     if (font < 12.0f || font > 60.0f) font = 28.0f;
     d.readingFontSize = font;
-    d.sleepShowsImages = doc["sleepShowsImages"] | d.sleepShowsImages;
+    if (doc["sleepScreen"].is<int>()) {
+        d.sleepScreen = clampInt(doc["sleepScreen"].as<int>(), SLEEP_SCREEN_COVER, SLEEP_SCREEN_SIMPLE);
+    } else if (doc["sleepShowsImages"].is<bool>() && !doc["sleepShowsImages"].as<bool>()) {
+        // Older setting: "Book & battery" card.
+        d.sleepScreen = SLEEP_SCREEN_SIMPLE;
+    }
     d.fullRefreshEvery = clampInt(doc["fullRefreshEvery"] | d.fullRefreshEvery, 1, 50);
     d.tzOffsetMin = clampInt(doc["tzOffsetMin"] | d.tzOffsetMin, -14 * 60, 14 * 60);
     g_settings = d;
@@ -102,7 +107,7 @@ bool save() {
     doc["imageBrightness"] = g_settings.imageBrightness;
     doc["darkMode"] = g_settings.darkMode;
     doc["readingFontSize"] = g_settings.readingFontSize;
-    doc["sleepShowsImages"] = g_settings.sleepShowsImages;
+    doc["sleepScreen"] = g_settings.sleepScreen;
     doc["fullRefreshEvery"] = g_settings.fullRefreshEvery;
     doc["tzOffsetMin"] = g_settings.tzOffsetMin;
     std::string out;

@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <SD.h>
 #endif
+#include <cstdint>
 #include <vector>
 #include <string>
 #include <functional>
@@ -12,8 +13,11 @@
 struct FileInfo {
     std::string name;
     std::string path;
-    bool isDirectory;
-    size_t size;
+    bool isDirectory = false;
+    size_t size = 0;
+    // Opaque modification stamp, only meaningful for equality checks (FAT
+    // date/time on the device, st_mtime in the simulator). 0 if unknown.
+    uint32_t mtime = 0;
 };
 
 class FileBrowser {
@@ -39,6 +43,19 @@ public:
     // for how much of a long scan remains).
     std::vector<FileInfo> scanRecursive(const char* rootPath, std::function<void()> onProgress = nullptr, int maxDepth = 8);
     bool scanSucceeded() const { return m_scanSucceeded; }
+
+    // Lists one directory (SD-root path such as "/books"), reporting each
+    // non-hidden entry with its size and modification stamp. On the device
+    // this reads FAT directory records directly, so sizes and dates cost no
+    // extra per-file lookups (File::openNextFile() stats AND opens every
+    // entry, which made large folders very slow to scan). Returns false if
+    // the directory can't be opened.
+    static bool listDirectory(const std::string& sdPath,
+                              const std::function<void(const FileInfo&)>& onEntry);
+
+    // Size and modification stamp of one file (same stamp format as
+    // listDirectory()). Returns false if it doesn't exist.
+    static bool fileStamp(const std::string& sdPath, uint32_t& size, uint32_t& mtime);
 
 private:
     std::string currentPath;

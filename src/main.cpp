@@ -28,6 +28,7 @@
 #include "ui/UIFramework.h"
 #include "ui/UIKit.h"
 #include "reader/AppStorage.h"
+#include "reader/BookCover.h"
 #include "Launcher.h"
 #include "EReaderApp.h"
 #include "AppComm.h"
@@ -431,8 +432,21 @@ static uint32_t s_sleepImageIdx = 0;
 
 static void drawSleepScreen(const std::string& bookTitle) {
     DisplayHAL::setPortrait(true);
+    const int mode = SystemSettings::get().sleepScreen;
+
+    // Book cover mode: the most recently read book (saved whenever a book is
+    // opened or left, so it's known even when sleeping from another app),
+    // drawn from the pre-rendered cover cached when it was opened.
+    AppStorage::LastBook lastBook;
+    std::string coverId;
+    if (mode == SLEEP_SCREEN_COVER) {
+        lastBook = AppStorage::loadLastBook();
+        if (lastBook.valid) coverId = BookCover::cacheIdForFile(AppStorage::toSdPath(lastBook.path));
+        if (!BookCover::hasLarge(coverId)) coverId.clear();
+    }
+
     std::vector<std::string> images;
-    if (SystemSettings::get().sleepShowsImages) images = listSleepImages();
+    if (mode == SLEEP_SCREEN_PICTURES) images = listSleepImages();
 
     uint8_t* raw = nullptr;
     if (!images.empty()) {
@@ -476,6 +490,20 @@ static void drawSleepScreen(const std::string& bookTitle) {
             textCentered("Sleeping", W / 2, by + 12, FONT_BODY, BLACK, true);
             textCentered("Press the side button to wake  \xC2\xB7  " + std::to_string(battery) + "%",
                          W / 2, by + 52, FONT_CAPTION, DARK);
+        } else if (!coverId.empty()) {
+            const int top = 40;
+            int coverW = 0, coverH = 0;
+            BookCover::drawLarge(coverId, framebuffer, MARGIN, top, W - 2 * MARGIN, BookCover::LARGE_H, &coverW, &coverH);
+            strokeRoundRect((W - coverW) / 2 - 2, top - 2, coverW + 4, coverH + 4, 0, 2, BLACK);
+            int y = textWrapped(lastBook.title, MARGIN * 2, top + coverH + 26, W - MARGIN * 4,
+                                FONT_BODY + 2, BLACK, 2, 4, true);
+            if (!lastBook.author.empty() && lastBook.author != "Unknown Author") {
+                textCentered(ellipsize(lastBook.author, W - MARGIN * 4, FONT_SMALL), W / 2, y + 4, FONT_SMALL, DARK);
+            }
+            hRule(H - 136, LIGHT, MARGIN * 3, W - MARGIN * 3, 2);
+            textCentered("Sleeping", W / 2, H - 118, FONT_BODY, BLACK, true);
+            textCentered("Press the side button to wake  \xC2\xB7  " + std::to_string(battery) + "%",
+                         W / 2, H - 76, FONT_CAPTION, DARK);
         } else {
             icon(ICON_BOOK, (W - 160) / 2, 230, 160);
             textCentered("Sleeping", W / 2, 420, 52.0f, BLACK, true);

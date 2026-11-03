@@ -9,6 +9,7 @@
 #include "ui/UIKit.h"
 #include "SystemSettings.h"
 #include "EBookmarkManager.h"
+#include "PowerManager.h"
 #include <cstring>
 #include <algorithm>
 #include <ctime>
@@ -221,6 +222,11 @@ constexpr int READ_BOTTOM = 108;
 constexpr int MENU_PANEL_H = 330;
 const Rect kSortRect(MARGIN, HEADER_H + 16, W - 2 * MARGIN, 50);
 constexpr int LIST_TOP = HEADER_H + 82;
+// Library rows are taller than UI::ROW_H to show a clearly visible cover.
+constexpr int LIBRARY_ROW_H = 136;
+constexpr int COVER_W = BookCover::THUMB_W;
+constexpr int COVER_H = BookCover::THUMB_H;
+constexpr int COVER_TOP = (LIBRARY_ROW_H - COVER_H) / 2;
 const char* kSortLabels[] = {"Progress", "Title", "Author"};
 
 Rect fontMinusRect() { return Rect(W - MARGIN - 250, H - MENU_PANEL_H + 22, 84, 58); }
@@ -256,9 +262,18 @@ void EReaderApp::onDestroy() {
         m_currentBookText = nullptr;
         m_currentBookTextLen = 0;
     }
+    // Library covers are only wanted while the list is on screen; the open
+    // book's own cover (for the sleep screen) may still finish.
+    BookCover::cancelPending();
+    requestCurrentBookCover();
     m_textReader.closeFile();
     m_epubParser.close();
     restoreTypographyDefaults();
+    if (m_catalogDirty) LibraryCatalog::save(m_records);
+    if (m_coverWorkBusy) {
+        PowerManager::setBusy(false);
+        m_coverWorkBusy = false;
+    }
 }
 
 void EReaderApp::draw() {
@@ -269,37 +284,29 @@ void EReaderApp::draw() {
     }
 }
 
-void EReaderApp::drawScanningProgressScreen(int dirsVisited) {
-    UIFramework::performFullScreenDraw(framebuffer, [this]() {
-        header("Library", true);
-        textCentered("Scanning your books...", W / 2, H / 2 - 60, FONT_BODY, BLACK, true);
-    });
-    updateScanProgressCount(dirsVisited);
-}
-
-void EReaderApp::updateScanProgressCount(int dirsVisited) {
-    UIFramework::performFastPartialUpdate(framebuffer, 0, H / 2 - 10, W, 40, [dirsVisited]() {
-        textCentered(std::to_string(dirsVisited) + " items checked", W / 2, H / 2 - 6, FONT_SMALL + 4, DARK);
+void EReaderApp::updateOpeningLibraryScreen(const std::string& detail) {
+    UIFramework::performFastPartialUpdate(framebuffer, 0, H / 2 - 40, W, 80, [&detail]() {
+        fillRoundRect(MARGIN * 3, H / 2 - 36, W - MARGIN * 6, 72, 16, WHITE);
+        strokeRoundRect(MARGIN * 3, H / 2 - 36, W - MARGIN * 6, 72, 16, 2, BLACK);
+        textCentered(detail, W / 2, H / 2 - 16, FONT_BODY, BLACK, true);
     });
 }
 
 void EReaderApp::drawOpeningLibraryScreen() {
-    UIFramework::performFastPartialUpdate(framebuffer, 0, H / 2 - 40, W, 80, []() {
-        fillRoundRect(MARGIN * 3, H / 2 - 36, W - MARGIN * 6, 72, 16, WHITE);
-        strokeRoundRect(MARGIN * 3, H / 2 - 36, W - MARGIN * 6, 72, 16, 2, BLACK);
-        textCentered("Opening library...", W / 2, H / 2 - 16, FONT_BODY, BLACK, true);
-    });
+    updateOpeningLibraryScreen("Opening library...");
 }
 
 void EReaderApp::updateLibraryItems() {
-    // A persisted scan is only trusted across a sleep-resume with no content
-    // changes since (see AppStorage::loadLibraryIndex) - on a fresh power-on,
-    // or after any add/move/delete elsewhere marks it dirty, we fall back to
-    // a real scan. This is what keeps "extremely slow" flash re-scans out of
-    // the common case (every wake-from-sleep launch) while still catching a
-    // swapped SD card or newly-synced books.
-    const uint32_t cacheStart = millis();
+    // A persisted scan is only trusted across a sleep-resume (or after this
+    // boot already scanned) with no content changes since - see
+    // AppStorage::loadLibraryIndex. Otherwise walk /books again; the walk is
+    // cheap now (one pass over the directory records) and per-book details
+    // come from LibraryCatalog, so only new or changed books are opened.
+    const uint32_t start = millis();
     AppStorage::LibraryIndex cached = AppStorage::loadLibraryIndex("/books");
+    std::unordered_map<std::string, FileInfo> bookmarkFiles;
+    const bool walked = !cached.valid;
+    m_libraryListComplete = true;
     if (cached.valid) {
         m_libraryFiles.clear();
         for (const auto& e : cached.entries) {
@@ -309,49 +316,34 @@ void EReaderApp::updateLibraryItems() {
             f.name = (slashPos == std::string::npos) ? e.path : e.path.substr(slashPos + 1);
             f.isDirectory = false;
             f.size = e.size;
+            f.mtime = e.mtime;
             m_libraryFiles.push_back(f);
         }
         printf("[EReader] Index cache hit: %zu books loaded in %ums\n",
-               cached.entries.size(), (unsigned)(millis() - cacheStart));
+               cached.entries.size(), (unsigned)(millis() - start));
     } else {
-        printf("[EReader] Index cache miss; rescanning /books\n");
-        rescanLibraryFromDisk();
+        rescanLibraryFromDisk(bookmarkFiles);
+        m_libraryListComplete = m_fileBrowser.scanSucceeded();
     }
 
-    rebuildParsedLibraryItems();
+    syncLibraryCatalog(walked ? &bookmarkFiles : nullptr, "");
+    printf("[EReader] Library ready in %ums\n", (unsigned)(millis() - start));
 }
 
-void EReaderApp::rescanLibraryFromDisk() {
+void EReaderApp::rescanLibraryFromDisk(std::unordered_map<std::string, FileInfo>& bookmarkFiles) {
     m_libraryFiles.clear();
-    BookCover::clearCache();
-
     // Recursively scan every subdirectory of /books, not just the top level,
     // so books placed in nested folders (e.g. by genre/author) are found.
-    // If the scan takes longer than 250ms, show a "Scanning..." screen so the
-    // device doesn't appear frozen; for scans that run much longer than that
-    // (hundreds of books across many folders, or a single large flat folder -
-    // scanRecursive reports progress per file as well as per directory),
-    // keep the folder count updated periodically (throttled to avoid
-    // spending more time redrawing than scanning) via a cheap scoped partial
-    // update rather than a full redraw.
-    uint32_t scanStart = millis();
-    uint32_t lastProgressUpdate = 0;
-    bool progressShown = false;
-    int dirsVisited = 0;
-    const uint32_t PROGRESS_UPDATE_INTERVAL_MS = 750;
-
+    // Only a very large tree takes long enough to need a progress count.
+    const uint32_t scanStart = millis();
+    uint32_t lastShown = 0;
+    int entries = 0;
     std::vector<FileInfo> allFiles = m_fileBrowser.scanRecursive("/books", [&]() {
-        dirsVisited++;
-        uint32_t now = millis();
-        if (!progressShown) {
-            if (now - scanStart > 250) {
-                progressShown = true;
-                lastProgressUpdate = now;
-                drawScanningProgressScreen(dirsVisited);
-            }
-        } else if (now - lastProgressUpdate > PROGRESS_UPDATE_INTERVAL_MS) {
-            lastProgressUpdate = now;
-            updateScanProgressCount(dirsVisited);
+        entries++;
+        const uint32_t now = millis();
+        if (now - scanStart > 1500 && now - lastShown > 2500) {
+            lastShown = now;
+            updateOpeningLibraryScreen("Scanning... " + std::to_string(entries) + " files");
         }
     });
 
@@ -361,17 +353,21 @@ void EReaderApp::rescanLibraryFromDisk() {
 
         std::string lowerName = f.name;
         for (char& c : lowerName) c = tolower(c);
-        bool isEpub = false;
-        if (lowerName.length() >= 5 && lowerName.substr(lowerName.length() - 5) == ".epub") isEpub = true;
-        else if (lowerName.length() >= 4 && lowerName.substr(lowerName.length() - 4) == ".txt") {}
-        else if (lowerName.length() >= 3 && lowerName.substr(lowerName.length() - 3) == ".md") {}
-        else if (lowerName.length() >= 4 && lowerName.substr(lowerName.length() - 4) == ".rtf") {}
-        else continue;
+        auto endsWith = [&lowerName](const char* suffix) {
+            const size_t n = strlen(suffix);
+            return lowerName.size() >= n && lowerName.compare(lowerName.size() - n, n, suffix) == 0;
+        };
+        if (endsWith(".bmk")) {
+            bookmarkFiles[f.path] = f;
+            continue;
+        }
+        if (!endsWith(".epub") && !endsWith(".txt") && !endsWith(".md") && !endsWith(".rtf")) continue;
 
         m_libraryFiles.push_back(f);
         AppStorage::LibraryIndexEntry entry;
         entry.path = f.path;
         entry.size = (uint32_t)f.size;
+        entry.mtime = f.mtime;
         indexEntries.push_back(entry);
     }
 
@@ -381,66 +377,93 @@ void EReaderApp::rescanLibraryFromDisk() {
         AppStorage::saveLibraryIndex("/books", indexEntries);
     }
     printf("[EReader] Disk scan: %ums, %zu books, %d entries checked, complete=%d\n",
-           (unsigned)(millis() - scanStart), indexEntries.size(), dirsVisited,
+           (unsigned)(millis() - scanStart), indexEntries.size(), entries,
            m_fileBrowser.scanSucceeded() ? 1 : 0);
 }
 
+void EReaderApp::syncLibraryCatalog(const std::unordered_map<std::string, FileInfo>* bookmarkFiles,
+                                    const std::string& refreshBookmarkFor) {
+    // First-time EPUB parsing can take a while for a big new library on the
+    // SD card: keep the "Opening library" card updated, but sparingly
+    // (every e-ink refresh costs far more than parsing a book).
+    const uint32_t start = millis();
+    uint32_t lastShown = 0;
+    LibraryCatalog::SyncStats stats;
+    m_records = LibraryCatalog::sync(m_libraryFiles, bookmarkFiles, refreshBookmarkFor,
+        [&](int done, int total) {
+            const uint32_t now = millis();
+            if (done < total && now - start > 1000 && now - lastShown > 2500) {
+                lastShown = now;
+                updateOpeningLibraryScreen("Reading books... " + std::to_string(done) + " of " + std::to_string(total));
+            }
+        }, &stats);
+    LibraryCatalog::save(m_records);
+    m_catalogDirty = false;
+    if (stats.removed > 0 && m_libraryListComplete && !m_records.empty()) {
+        // Books were deleted or replaced: drop their cached covers.
+        std::vector<std::string> keep;
+        for (const auto& record : m_records) keep.push_back(record.coverId());
+        BookCover::pruneCache(keep);
+    }
+    printf("[EReader] Catalog: %zu books, %d parsed, %d bookmarks read, %ums\n",
+           m_records.size(), stats.parsed, stats.bookmarksRead, (unsigned)(millis() - start));
+    buildLibraryItems();
+}
+
 void EReaderApp::rebuildParsedLibraryItems() {
+    syncLibraryCatalog(nullptr, AppStorage::toSdPath(m_currentBookPath));
+}
+
+void EReaderApp::buildLibraryItems() {
     m_parsedLibraryItems.clear();
 
+    // Companion-app metadata (keyed by file name) wins over the EPUB's own.
     EBookmarkManager::getInstance().initialize();
     const auto& bmarks = EBookmarkManager::getInstance().getBookmarks();
-
     std::unordered_map<std::string, const EBookmark*> metadata;
     for (const auto& b : bmarks) metadata.emplace(b.isbn, &b);
 
-    for (auto& f : m_libraryFiles) {
-        std::string lowerName = f.name;
-        for (char& c : lowerName) c = tolower(c);
-        bool isEpub = lowerName.length() >= 5 && lowerName.substr(lowerName.length() - 5) == ".epub";
+    for (size_t i = 0; i < m_libraryFiles.size() && i < m_records.size(); i++) {
+        const FileInfo& f = m_libraryFiles[i];
+        const LibraryCatalog::Record& record = m_records[i];
+        const bool isEpub = BookCover::isEpub(f.path);
 
         LibraryItem item;
         item.file = f;
         item.title = f.name;
-        item.author = "Unknown Author";
-
         size_t dotPos = item.title.find_last_of('.');
-        if (dotPos != std::string::npos) {
-            item.title = item.title.substr(0, dotPos);
-        }
+        if (dotPos != std::string::npos) item.title = item.title.substr(0, dotPos);
+        const std::string stem = item.title;
+        item.author = "Unknown Author";
+        if (!record.title.empty()) item.title = record.title;
+        if (!record.author.empty()) item.author = record.author;
 
-        const auto match = metadata.find(item.title);
+        const auto match = metadata.find(stem);
         if (match != metadata.end()) {
             const EBookmark& b = *match->second;
             if (!b.title.empty()) item.title = b.title;
             if (!b.author.empty()) item.author = b.author;
         }
 
-        // Use the file's own fully-qualified path (not "/books/" + name) so
-        // bookmarks for books in nested subdirectories resolve correctly.
-        std::string runtimePath = AppStorage::toRuntimePath(f.path);
-        if (isEpub) {
+        item.coverState = isEpub ? record.cover : (uint8_t)BookCover::STATE_NONE;
+        item.coverId = isEpub ? record.coverId() : "";
+
+        const AppStorage::BookmarkInfo& bmark = record.bookmark;
+        item.completionPercent = 0;
+        if (record.hasBookmark && isEpub) {
             // EPUB books are split across many per-chapter sub-files, so a
             // raw byte offset compared to the whole .epub (zip) file size is
             // meaningless - use chapter-granularity progress instead, which
             // is what's actually persisted (see AppStorage::BookmarkInfo).
-            AppStorage::BookmarkInfo bmark = AppStorage::loadBookmarkInfo(runtimePath);
             if (bmark.totalChapters > 0) {
                 item.completionPercent = (bmark.chapterIndex * 100) / bmark.totalChapters;
                 if (item.completionPercent > 100) item.completionPercent = 100;
                 if (item.completionPercent == 0 && bmark.chapterIndex > 0) item.completionPercent = 1;
-            } else {
-                item.completionPercent = 0;
             }
-        } else {
-            int offset = AppStorage::loadBookmark(runtimePath);
-            if (offset > 0 && f.size > 0) {
-                item.completionPercent = (offset * 100) / f.size;
-                if (item.completionPercent > 100) item.completionPercent = 100;
-                if (item.completionPercent == 0) item.completionPercent = 1;
-            } else {
-                item.completionPercent = 0;
-            }
+        } else if (record.hasBookmark && bmark.offset > 0 && f.size > 0) {
+            item.completionPercent = (int)(((int64_t)bmark.offset * 100) / (int64_t)f.size);
+            if (item.completionPercent > 100) item.completionPercent = 100;
+            if (item.completionPercent == 0) item.completionPercent = 1;
         }
 
         if (item.completionPercent >= 97) {
@@ -476,7 +499,92 @@ void EReaderApp::sortLibraryItems() {
 }
 
 int EReaderApp::libraryRowsPerPage() const {
-    return (H - FOOTER_H - LIST_TOP) / ROW_H;
+    return (H - FOOTER_H - LIST_TOP) / LIBRARY_ROW_H;
+}
+
+void EReaderApp::drawLibraryCover(const LibraryItem& item, int x, int y) {
+    int cx = 0, cy = 0, cw = 0, ch = 0;
+    if (item.coverState == BookCover::STATE_READY &&
+        BookCover::drawThumbnail(item.coverId, framebuffer, x, y, COVER_W, COVER_H, &cx, &cy, &cw, &ch)) {
+        // Hairline edge so pale covers don't melt into the page.
+        strokeRoundRect(cx - 1, cy - 1, cw + 2, ch + 2, 0, 1, MID);
+        return;
+    }
+    // Placeholder "book": also shown while the cover is still being made.
+    fillRoundRect(x + 4, y, COVER_W - 8, COVER_H, 6, PALE);
+    strokeRoundRect(x + 4, y, COVER_W - 8, COVER_H, 6, 2, LIGHT);
+    std::string ext;
+    size_t dot = item.file.name.find_last_of('.');
+    if (dot != std::string::npos) ext = item.file.name.substr(dot + 1);
+    for (char& c : ext) c = (char)toupper((unsigned char)c);
+    textCentered(ext, x + COVER_W / 2, y + COVER_H / 2 - 14, FONT_SMALL, DARK, true);
+}
+
+void EReaderApp::requestVisibleCovers() {
+    const int perPage = libraryRowsPerPage();
+    const int start = m_libraryPage * perPage;
+    BookCover::cancelPending();
+    for (int i = 0; i < perPage && start + i < (int)m_parsedLibraryItems.size(); i++) {
+        const LibraryItem& item = m_parsedLibraryItems[start + i];
+        if (item.coverState == BookCover::STATE_UNKNOWN && !item.coverId.empty()) {
+            BookCover::request(item.file.path, item.coverId);
+        }
+    }
+}
+
+void EReaderApp::requestCurrentBookCover() {
+    if (m_currentBookPath.empty() || !BookCover::isEpub(m_currentBookPath)) return;
+    BookCover::cancelPending();
+    if (!m_epubParser.mayHaveCover()) return;
+    const std::string sdPath = AppStorage::toSdPath(m_currentBookPath);
+    const std::string id = BookCover::cacheIdForFile(sdPath);
+    if (!id.empty() && !BookCover::hasLarge(id)) BookCover::request(sdPath, id);
+}
+
+void EReaderApp::update() {
+    BookCover::pump();
+    std::string id;
+    BookCover::State state;
+    while (BookCover::takeResult(id, state)) {
+        for (auto& record : m_records) {
+            if (record.cover != state && record.coverId() == id) {
+                record.cover = state;
+                m_catalogDirty = true;
+            }
+        }
+        const int perPage = libraryRowsPerPage();
+        for (size_t i = 0; i < m_parsedLibraryItems.size(); i++) {
+            LibraryItem& item = m_parsedLibraryItems[i];
+            if (item.coverId != id) continue;
+            item.coverState = state;
+            const int row = (int)i - m_libraryPage * perPage;
+            if (m_state == STATE_LIB && state == BookCover::STATE_READY && row >= 0 && row < perPage) {
+                const int x = MARGIN;
+                const int y = LIST_TOP + row * LIBRARY_ROW_H + COVER_TOP;
+                // One pixel larger than the box: the cover's hairline edge.
+                UIFramework::performFastPartialUpdate(framebuffer, x - 1, y - 1, COVER_W + 2, COVER_H + 2, [this, &item, x, y]() {
+                    drawLibraryCover(item, x, y);
+                });
+            }
+        }
+    }
+
+    const bool coversBusy = BookCover::busy();
+    // Full clock while a cover decodes (the main loop would drop to 80MHz).
+    if (coversBusy) PowerManager::boostCpu();
+    if (m_catalogDirty && !coversBusy) {
+        LibraryCatalog::save(m_records);
+        m_catalogDirty = false;
+    }
+    // Keep the CPU out of light sleep while covers decode in the background.
+    if (coversBusy != m_coverWorkBusy) {
+        m_coverWorkBusy = coversBusy;
+        PowerManager::setBusy(coversBusy);
+    }
+}
+
+uint32_t EReaderApp::msUntilUpdate() const {
+    return (m_coverWorkBusy || BookCover::busy()) ? 0 : UINT32_MAX;
 }
 
 void EReaderApp::drawLibrary() {
@@ -535,20 +643,42 @@ void EReaderApp::drawLibrary() {
                 }
                 sub = folder + ext + "  \xC2\xB7  " + size;
             }
-            const int y = LIST_TOP + i * ROW_H;
-            BookCover::draw(item.file.path, framebuffer, MARGIN + 2, y + 10, 48, 74);
-            const int textX = MARGIN + 66;
+            const int y = LIST_TOP + i * LIBRARY_ROW_H;
+            drawLibraryCover(item, MARGIN, y + COVER_TOP);
+            const int textX = MARGIN + COVER_W + 18;
             const int right = W - MARGIN;
             const int trailingW = textWidth(trailing, FONT_BODY, true);
-            const int maxW = right - trailingW - 16 - textX;
-            text(ellipsize(item.title, maxW, FONT_BODY), textX, y + 12, FONT_BODY, BLACK, true);
-            if (!sub.empty()) text(ellipsize(sub, maxW, FONT_SMALL + 4), textX, y + 48, FONT_SMALL + 4, DARK);
-            textRight(trailing, right, y + 12, FONT_BODY, INK, true);
-            if (progress >= 0.0f) progressBar(textX, y + ROW_H - 14, right - textX, 5, progress);
-            hRule(y + ROW_H - 1, LIGHT, MARGIN, W - MARGIN);
+            const int titleW = right - trailingW - 16 - textX;
+            // Up to two title lines; the second is ellipsized.
+            std::string line1 = item.title, line2;
+            if (textWidth(line1, FONT_BODY, true) > titleW) {
+                size_t cut = std::string::npos;
+                for (size_t sp = item.title.find(' '); sp != std::string::npos; sp = item.title.find(' ', sp + 1)) {
+                    if (textWidth(item.title.substr(0, sp), FONT_BODY, true) > titleW) break;
+                    cut = sp;
+                }
+                if (cut != std::string::npos) {
+                    line1 = item.title.substr(0, cut);
+                    line2 = ellipsize(item.title.substr(cut + 1), right - textX, FONT_BODY, true);
+                } else {
+                    line1 = ellipsize(item.title, titleW, FONT_BODY, true);
+                }
+            }
+            int ty = y + 14;
+            text(line1, textX, ty, FONT_BODY, BLACK, true);
+            ty += lineHeight(FONT_BODY) + 4;
+            if (!line2.empty()) {
+                text(line2, textX, ty, FONT_BODY, BLACK, true);
+                ty += lineHeight(FONT_BODY) + 4;
+            }
+            text(ellipsize(sub, right - textX, FONT_SMALL + 4), textX, ty + 2, FONT_SMALL + 4, DARK);
+            textRight(trailing, right, y + 14, FONT_BODY, INK, true);
+            if (progress >= 0.0f) progressBar(textX, y + LIBRARY_ROW_H - 22, right - textX, 6, progress);
+            hRule(y + LIBRARY_ROW_H - 1, LIGHT, MARGIN, W - MARGIN);
         }
         pager(m_libraryPage, pages);
     });
+    requestVisibleCovers();
 }
 
 void EReaderApp::prepareTypographyForReading() {
@@ -990,6 +1120,7 @@ void EReaderApp::openBookAtRuntimePath(const std::string& path) {
     m_state = STATE_READ;
     m_menuOpen = false;
     rememberLastBook();
+    requestCurrentBookCover();
     drawReading();
 }
 
@@ -1013,8 +1144,8 @@ void EReaderApp::handleTouch(int x, int y) {
             drawLibrary();
             return;
         }
-        if (y >= LIST_TOP && y < H - FOOTER_H) {
-            int idx = m_libraryPage * perPage + (y - LIST_TOP) / ROW_H;
+        if (y >= LIST_TOP && y < LIST_TOP + perPage * LIBRARY_ROW_H) {
+            int idx = m_libraryPage * perPage + (y - LIST_TOP) / LIBRARY_ROW_H;
             if (idx >= 0 && idx < (int)m_parsedLibraryItems.size()) {
                 std::string targetPath = m_parsedLibraryItems[idx].file.path;
                 for (size_t i = 0; i < m_libraryFiles.size(); i++) {

@@ -1,6 +1,9 @@
 #include "AppStorage.h"
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <sys/stat.h>
 
 #ifndef NATIVE_TESTING
 #include <Arduino.h>
@@ -36,6 +39,26 @@ std::string sanitizeRootForFilename(const std::string& rootPath) {
 }
 
 const char* kLibraryDirtyFlagPath = "/data/library_dirty.flag";
+
+// Set once a full scan has been saved during this boot (and cleared by
+// markLibraryDirty()): the card can't have changed underneath us since, so
+// reopening the library needn't walk it again even after a fresh power-on.
+bool s_indexSavedThisBoot = false;
+
+// "size<TAB>mtime<TAB>path" (or the older "size<TAB>path").
+bool parseIndexLine(const char* line, AppStorage::LibraryIndexEntry& entry) {
+    const char* tab = strchr(line, '\t');
+    if (!tab) return false;
+    entry.size = (uint32_t)strtoul(line, nullptr, 10);
+    const char* rest = tab + 1;
+    const char* tab2 = strchr(rest, '\t');
+    if (tab2 && rest[0] != '/') {
+        entry.mtime = (uint32_t)strtoul(rest, nullptr, 10);
+        rest = tab2 + 1;
+    }
+    entry.path = rest;
+    return !entry.path.empty();
+}
 
 } // namespace
 
@@ -111,6 +134,13 @@ std::string toRuntimePath(const std::string& browserPath) {
 #endif
 }
 
+std::string toSdPath(const std::string& runtimePath) {
+    if (runtimePath.empty()) return runtimePath;
+    std::string path = stripSdPrefix(runtimePath);
+    if (path.empty() || path[0] != '/') path = "/" + path;
+    return path;
+}
+
 std::string toVfsPath(const std::string& runtimePath) {
 #ifdef NATIVE_TESTING
     return runtimePath;
@@ -153,65 +183,21 @@ bool saveBookmark(const std::string& runtimeBookPath, int offset, int chapterInd
 }
 
 int loadBookmark(const std::string& runtimeBookPath) {
-#ifdef NATIVE_TESTING
-    std::string path = toBookmarkPath(runtimeBookPath);
-    FILE* f = fopen(path.c_str(), "r");
-    if (!f) {
-        return 0;
-    }
-    int offset = 0;
-    fscanf(f, "%d", &offset);
-    fclose(f);
-    return offset;
-#else
-    std::string path = toBookmarkPath(runtimeBookPath);
-    // Only attempt to open if the file exists — avoids VFS error spam
-    if (!SD.exists(path.c_str())) return 0;
-    File f = SD.open(path.c_str(), FILE_READ);
-    if (!f) {
-        return 0;
-    }
-    String s = f.readString();
-    f.close();
-    return s.toInt();
-#endif
+    return loadBookmarkInfo(runtimeBookPath).offset;
 }
 
 BookmarkInfo loadBookmarkInfo(const std::string& runtimeBookPath) {
     BookmarkInfo info;
-#ifdef NATIVE_TESTING
-    std::string path = toBookmarkPath(runtimeBookPath);
-    FILE* f = fopen(path.c_str(), "r");
+    // A single fopen() with no exists() probe first: on the SD card every
+    // path lookup re-reads the directory, and SD.exists() + SD.open() cost
+    // two lookups plus a file open each.
+    FILE* f = fopen(toVfsPath(toBookmarkPath(runtimeBookPath)).c_str(), "r");
     if (!f) return info;
-    fscanf(f, "%d", &info.offset);
+    if (fscanf(f, "%d", &info.offset) != 1) info.offset = 0;
     if (fscanf(f, "%d", &info.chapterIndex) != 1) info.chapterIndex = 0;
     if (fscanf(f, "%d", &info.totalChapters) != 1) info.totalChapters = 0;
     fclose(f);
     return info;
-#else
-    std::string path = toBookmarkPath(runtimeBookPath);
-    if (!SD.exists(path.c_str())) return info;
-    File f = SD.open(path.c_str(), FILE_READ);
-    if (!f) return info;
-    String s = f.readString();
-    f.close();
-
-    int firstNl = s.indexOf('\n');
-    if (firstNl < 0) {
-        info.offset = s.toInt();
-        return info;
-    }
-    info.offset = s.substring(0, firstNl).toInt();
-
-    int secondNl = s.indexOf('\n', firstNl + 1);
-    if (secondNl < 0) {
-        info.chapterIndex = s.substring(firstNl + 1).toInt();
-        return info;
-    }
-    info.chapterIndex = s.substring(firstNl + 1, secondNl).toInt();
-    info.totalChapters = s.substring(secondNl + 1).toInt();
-    return info;
-#endif
 }
 
 bool copyFile(const std::string& sourcePath, const std::string& destinationPath,
@@ -490,6 +476,7 @@ bool wasResumedFromSleep() {
 }
 
 void markLibraryDirty() {
+    s_indexSavedThisBoot = false;
     std::string path = toRuntimePath(kLibraryDirtyFlagPath);
 #ifdef NATIVE_TESTING
     FILE* f = fopen(path.c_str(), "w");
@@ -507,7 +494,7 @@ bool saveLibraryIndex(const std::string& rootPath, const std::vector<LibraryInde
     FILE* f = fopen(path.c_str(), "w");
     if (!f) return false;
     for (const auto& e : entries) {
-        fprintf(f, "%u\t%s\n", (unsigned)e.size, e.path.c_str());
+        fprintf(f, "%u\t%u\t%s\n", (unsigned)e.size, (unsigned)e.mtime, e.path.c_str());
     }
     fclose(f);
 #else
@@ -515,7 +502,7 @@ bool saveLibraryIndex(const std::string& rootPath, const std::vector<LibraryInde
     File f = SD.open(path.c_str(), FILE_WRITE);
     if (!f) return false;
     for (const auto& e : entries) {
-        f.printf("%u\t%s\n", (unsigned)e.size, e.path.c_str());
+        f.printf("%u\t%u\t%s\n", (unsigned)e.size, (unsigned)e.mtime, e.path.c_str());
     }
     f.close();
 #endif
@@ -526,6 +513,7 @@ bool saveLibraryIndex(const std::string& rootPath, const std::vector<LibraryInde
 #else
     if (SD.exists(dirtyPath.c_str())) SD.remove(dirtyPath.c_str());
 #endif
+    s_indexSavedThisBoot = true;
     return true;
 }
 
@@ -534,51 +522,25 @@ LibraryIndex loadLibraryIndex(const std::string& rootPath) {
 
     // A fresh power-on means the SD card could have been swapped or edited
     // externally - never trust a cached scan in that case, only across a
-    // sleep-resume (where the card was never unmounted).
-    if (!wasResumedFromSleep()) return result;
+    // sleep-resume (where the card was never unmounted) or once this boot
+    // has done its own scan.
+    if (!wasResumedFromSleep() && !s_indexSavedThisBoot) return result;
 
-    std::string dirtyPath = toRuntimePath(kLibraryDirtyFlagPath);
-#ifdef NATIVE_TESTING
-    if (access(dirtyPath.c_str(), F_OK) == 0) return result;
-#else
-    if (SD.exists(dirtyPath.c_str())) return result;
-#endif
+    struct stat st;
+    if (stat(toVfsPath(toRuntimePath(kLibraryDirtyFlagPath)).c_str(), &st) == 0) return result;
 
     std::string path = toRuntimePath("/data/lib_index" + sanitizeRootForFilename(rootPath) + ".txt");
-#ifdef NATIVE_TESTING
-    FILE* f = fopen(path.c_str(), "r");
+    FILE* f = fopen(toVfsPath(path).c_str(), "r");
     if (!f) return result;
     char lineBuf[600];
     while (fgets(lineBuf, sizeof(lineBuf), f)) {
-        unsigned size = 0;
-        char pathBuf[512] = {0};
-        if (sscanf(lineBuf, "%u\t%511[^\n]", &size, pathBuf) == 2) {
-            LibraryIndexEntry entry;
-            entry.size = size;
-            entry.path = pathBuf;
-            result.entries.push_back(entry);
-        }
+        size_t len = strlen(lineBuf);
+        while (len > 0 && (lineBuf[len - 1] == '\n' || lineBuf[len - 1] == '\r')) lineBuf[--len] = '\0';
+        LibraryIndexEntry entry;
+        if (parseIndexLine(lineBuf, entry)) result.entries.push_back(entry);
     }
     fclose(f);
     result.valid = true;
-#else
-    if (!SD.exists(path.c_str())) return result;
-    File f = SD.open(path.c_str(), FILE_READ);
-    if (!f) return result;
-    while (f.available()) {
-        String line = f.readStringUntil('\n');
-        line.trim();
-        if (line.length() == 0) continue;
-        int tabPos = line.indexOf('\t');
-        if (tabPos < 0) continue;
-        LibraryIndexEntry entry;
-        entry.size = (uint32_t)line.substring(0, tabPos).toInt();
-        entry.path = line.substring(tabPos + 1).c_str();
-        result.entries.push_back(entry);
-    }
-    f.close();
-    result.valid = true;
-#endif
     return result;
 }
 

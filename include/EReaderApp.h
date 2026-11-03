@@ -4,7 +4,9 @@
 #include "reader/FileBrowser.h"
 #include "reader/TextReader.h"
 #include "EpubParser.h"
+#include "reader/LibraryCatalog.h"
 #include "ui/AppScreens.h"
+#include <unordered_map>
 #include <vector>
 #include <string>
 #include <cstdint>
@@ -22,6 +24,9 @@ public:
 
     virtual void draw() override;
     virtual void handleTouch(int x, int y) override;
+    // Collects finished background cover decodes and draws them in place.
+    virtual void update() override;
+    virtual uint32_t msUntilUpdate() const override;
     virtual bool wantsSystemBack() const override { return m_state == STATE_LIB; }
 
     // True while a book page is actively displayed (STATE_READ), as opposed
@@ -64,11 +69,18 @@ private:
         std::string title;
         std::string author;
         int completionPercent;
+        std::string coverId;
+        uint8_t coverState; // BookCover::State
     };
 
     ReaderState m_state = STATE_LIB;
     std::vector<FileInfo> m_libraryFiles;
     std::vector<LibraryItem> m_parsedLibraryItems;
+    // Cached per-book details (see LibraryCatalog), parallel to m_libraryFiles.
+    std::vector<LibraryCatalog::Record> m_records;
+    bool m_catalogDirty = false;
+    bool m_libraryListComplete = true; // false after a partial/failed walk
+    bool m_coverWorkBusy = false;
     char* m_currentBookText = nullptr;
     size_t m_currentBookTextLen = 0;
     int m_currentReadingOffset = 0;
@@ -149,15 +161,26 @@ private:
     void drawReadingMenu();
     int libraryRowsPerPage() const;
     void updateLibraryItems();
-    // Full recursive SD scan (slow) - only called when a cached index isn't
-    // usable (see AppStorage::loadLibraryIndex). Populates m_libraryFiles and
-    // persists the result so most future launches can skip this entirely.
-    void rescanLibraryFromDisk();
-    // Rebuilds m_parsedLibraryItems (titles/authors/progress %) from the
-    // already-known m_libraryFiles and re-sorts - no disk directory walk, so
-    // it's cheap enough to call on every library redraw (sort/page change,
-    // returning from reading, etc.).
+    // Full recursive SD scan - only called when a cached index isn't usable
+    // (see AppStorage::loadLibraryIndex). Populates m_libraryFiles, collects
+    // the .bmk bookmark files it saw, and persists the book list so most
+    // future launches can skip the walk entirely.
+    void rescanLibraryFromDisk(std::unordered_map<std::string, FileInfo>& bookmarkFiles);
+    // Brings m_records up to date for m_libraryFiles (parsing only new or
+    // changed EPUBs, reading only changed bookmarks), then rebuilds the items.
+    void syncLibraryCatalog(const std::unordered_map<std::string, FileInfo>* bookmarkFiles,
+                            const std::string& refreshBookmarkFor);
+    // Rebuilds m_parsedLibraryItems (titles/authors/progress %) from
+    // m_records and re-sorts. Called after returning from a book: only that
+    // book's bookmark is re-read.
     void rebuildParsedLibraryItems();
+    void buildLibraryItems();
+    // Cover thumbnail (or a placeholder) for one library row.
+    void drawLibraryCover(const LibraryItem& item, int x, int y);
+    // Queues background decodes for covers on the current page not yet cached.
+    void requestVisibleCovers();
+    // Ensures the open book's cover (used by the sleep screen) is cached.
+    void requestCurrentBookCover();
     void sortLibraryItems();
     void drawLibrary();
     // quick = flash-free page-turn refresh (falls back to a full refresh
@@ -169,8 +192,8 @@ private:
     // (m_currentBookTitle/m_currentBookAuthor must already be set by the
     // caller), restores its saved bookmark offset, and enters STATE_READ.
     void openBookAtRuntimePath(const std::string& path);
-    void drawScanningProgressScreen(int dirsVisited);
-    void updateScanProgressCount(int dirsVisited);
+    // "Opening library..." card text, updated in place (fast partial refresh).
+    void updateOpeningLibraryScreen(const std::string& detail);
     // Immediate "please wait" feedback shown the instant the app is entered,
     // before any SD card work (font load skip-check, cache load, per-book
     // bookmark reads) has a chance to run - see onCreate(). Uses a fast

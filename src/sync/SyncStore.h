@@ -43,7 +43,7 @@ std::string dueLabel(const std::string& isoDate);
 // Parses "YYYY-MM-DD" into a day key; 0 when unparsable.
 int isoDayKey(const std::string& isoDate);
 // "5 Nov 14:05" for a unix time, "never" for 0.
-std::string stampLabel(uint32_t unix);
+std::string stampLabel(uint32_t epoch);
 
 // ---- Todos ------------------------------------------------------------------
 

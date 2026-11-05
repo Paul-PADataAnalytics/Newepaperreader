@@ -11,11 +11,22 @@ if [[ ! -f .pio/libdeps/native/ArduinoJson/src/ArduinoJson.h ]]; then
     exit 1
 fi
 
-mapfile -d '' SOURCES < <(
-    find src lib/miniz lib/tinyxml2 lib/tjpgd -type f \( -name '*.cpp' -o -name '*.c' \) \
+mapfile -d '' CPP_SOURCES < <(
+    find src lib/miniz lib/tinyxml2 lib/tjpgd -type f -name '*.cpp' \
         ! -name '*.orig' ! -path '*/examples/*' -print0
 )
-SOURCES+=(tools/web_main.cpp)
+CPP_SOURCES+=(tools/web_main.cpp)
+mapfile -d '' C_SOURCES < <(
+    find src lib/miniz lib/tinyxml2 lib/tjpgd -type f -name '*.c' \
+        ! -name '*.orig' ! -path '*/examples/*' -print0
+)
+# em++ compiles .c files as C++ (tjpgd then fails on void* conversions), so
+# the C sources are compiled with emcc first and linked in as objects.
+OBJ_DIR=.pio/build/web_c
+C_OBJECTS=()
+for src in "${C_SOURCES[@]}"; do
+    C_OBJECTS+=("$OBJ_DIR/$(echo "${src%.c}" | tr / _).o")
+done
 
 EMCC_FLAGS=(
     -D NATIVE_TESTING
@@ -77,21 +88,38 @@ done
 
 mkdir -p docs
 
+# Runs an Emscripten tool locally, or in the emsdk Docker image.
 if command -v emcc >/dev/null 2>&1; then
     echo "Building firmware with local Emscripten..."
-    em++ "${SOURCES[@]}" "${EMCC_FLAGS[@]}"
+    em() { "$@"; }
 elif command -v docker >/dev/null 2>&1; then
     echo "Building firmware with ${EMSDK_IMAGE:-emscripten/emsdk:6.0.13} via Docker..."
-    docker run --rm \
-        --user "$(id -u):$(id -g)" \
-        -v "$ROOT_DIR:/src" \
-        -w /src \
-        "${EMSDK_IMAGE:-emscripten/emsdk:6.0.13}" \
-        em++ "${SOURCES[@]}" "${EMCC_FLAGS[@]}"
+    em() {
+        docker run --rm --user "$(id -u):$(id -g)" -v "$ROOT_DIR:/src" -w /src \
+            "${EMSDK_IMAGE:-emscripten/emsdk:6.0.13}" "$@"
+    }
 else
     echo "Error: install Emscripten or Docker with emscripten/emsdk." >&2
     exit 1
 fi
+
+mkdir -p "$OBJ_DIR"
+# Defines, include paths and optimisation from EMCC_FLAGS (-D/-I are
+# separate words followed by their value).
+C_FLAGS=()
+for ((i = 0; i < ${#EMCC_FLAGS[@]}; i++)); do
+    f="${EMCC_FLAGS[$i]}"
+    if [[ "$f" == "-D" || "$f" == "-I" ]]; then
+        C_FLAGS+=("$f" "${EMCC_FLAGS[$((i + 1))]}")
+        i=$((i + 1))
+    elif [[ "$f" == -D* || "$f" == -I* || "$f" == "-O2" ]]; then
+        C_FLAGS+=("$f")
+    fi
+done
+for i in "${!C_SOURCES[@]}"; do
+    em emcc -c "${C_SOURCES[$i]}" "${C_FLAGS[@]}" -o "${C_OBJECTS[$i]}"
+done
+em em++ "${CPP_SOURCES[@]}" "${C_OBJECTS[@]}" "${EMCC_FLAGS[@]}"
 
 echo "WebAssembly firmware built in docs/."
 ls -lh docs/index.html docs/index.js docs/index.wasm docs/index.data

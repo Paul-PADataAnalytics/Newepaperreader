@@ -178,9 +178,9 @@ std::string dueLabel(const std::string& iso) {
     return std::to_string(key % 100) + " " + std::string(kMonths[(key / 100) % 100 - 1]).substr(0, 3);
 }
 
-std::string stampLabel(uint32_t unix) {
-    if (!unix) return "never";
-    time_t t = (time_t)unix;
+std::string stampLabel(uint32_t epoch) {
+    if (!epoch) return "never";
+    time_t t = (time_t)epoch;
     int key = dayKey(t);
     return std::to_string(key % 100) + " " + std::string(kMonths[(key / 100) % 100 - 1]).substr(0, 3) + " " +
            timeLabel(t);

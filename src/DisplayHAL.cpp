@@ -785,6 +785,169 @@ static void drawPhysicalAreaFast(const Rect_t& area, const uint8_t* region) {
 
 static bool s_fastPartialMode = false;
 
+// Bounding box (logical coordinates, inclusive) of every pixel that differs
+// between what is on screen (backBuffer) and the new frame (frontBuffer).
+static bool diffBounds(int& minX, int& minY, int& maxX, int& maxY) {
+    const int w = DisplayHAL::getWidth();
+    const int h = DisplayHAL::getHeight();
+    uint8_t* front = DisplayHAL::frontBuffer;
+    uint8_t* back = DisplayHAL::backBuffer;
+    minX = w;
+    minY = h;
+    maxX = -1;
+    maxY = -1;
+    const int rowBytes = w / 2;
+    for (int y = 0; y < h; y++) {
+        const uint8_t* fRow = front + y * rowBytes;
+        const uint8_t* bRow = back + y * rowBytes;
+        if (memcmp(fRow, bRow, rowBytes) == 0) continue;
+        for (int bx = 0; bx < rowBytes; bx++) {
+            if (fRow[bx] != bRow[bx]) {
+                int x0 = bx * 2;
+                if (DisplayHAL::getPixel(x0, y, front) != DisplayHAL::getPixel(x0, y, back)) {
+                    if (x0 < minX) minX = x0;
+                    if (x0 > maxX) maxX = x0;
+                }
+                int x1 = x0 + 1;
+                if (DisplayHAL::getPixel(x1, y, front) != DisplayHAL::getPixel(x1, y, back)) {
+                    if (x1 < minX) minX = x1;
+                    if (x1 > maxX) maxX = x1;
+                }
+                if (y < minY) minY = y;
+                if (y > maxY) maxY = y;
+            }
+        }
+    }
+    return maxX >= minX && maxY >= minY;
+}
+
+#ifndef NATIVE_TESTING
+// Maps a logical (as displayed) inclusive box to a 16-aligned physical area.
+static Rect_t physicalArea(int minX, int minY, int maxX, int maxY) {
+    int px, py, pw, ph;
+    if (_isPortrait) {
+        px = minY;
+        py = EPD_HEIGHT - 1 - maxX;
+        pw = maxY - minY + 1;
+        ph = maxX - minX + 1;
+    } else {
+        px = minX;
+        py = minY;
+        pw = maxX - minX + 1;
+        ph = maxY - minY + 1;
+    }
+    alignPhysicalSpan(px, pw);
+    Rect_t area = {.x = px, .y = py, .width = pw, .height = ph};
+    return area;
+}
+
+// Direct-update waveform: every changed pixel is pushed straight to black or
+// white a few times; unchanged pixels get no-op data. No clearing passes and
+// no greyscale frames, so a typed character appears in a fraction of the
+// time of a partial update.
+static const int kDirectPushes = 3;
+static const int kDirectPushTime = 500;
+
+static void drawPhysicalAreaDirect(const Rect_t& area, const uint8_t* codes) {
+    const int outStart = area.x >> 2;
+    const int outBytes = area.width >> 2;
+    const int end = area.y + area.height;
+    clearLineBuffer();
+    for (int f = 0; f < kDirectPushes; f++) {
+        epd_start_frame();
+        int skipped = 0;
+        bool driven = false;
+        for (int i = 0; i < EPD_HEIGHT; i++) {
+            if (i >= area.y && i < end) {
+                while (i2s_is_busy()) {}
+                uint8_t* dst = (uint8_t*)epd_get_current_buffer() + outStart;
+                memcpy(dst, codes + (i - area.y) * outBytes, outBytes);
+                epd_output_row(kDirectPushTime);
+                driven = true;
+                skipped = 0;
+            } else if (skipped == 0) {
+                clearLineBuffer();
+                epd_output_row(driven ? kDirectPushTime : 10);
+                skipped++;
+            } else if (skipped == 1) {
+                epd_output_row(10);
+                skipped++;
+            } else {
+                epd_skip();
+            }
+        }
+        if (skipped == 0) {
+            clearLineBuffer();
+            epd_output_row(kDirectPushTime);
+            epd_output_row(10);
+        } else if (skipped == 1) {
+            epd_output_row(10);
+        }
+        epd_end_frame();
+    }
+}
+#endif
+
+void DisplayHAL::invalidateRegion(int x, int y, int w, int h) {
+    if (!frontBuffer || !backBuffer) return;
+    const int sw = getWidth(), sh = getHeight();
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > sw) w = sw - x;
+    if (y + h > sh) h = sh - y;
+    const int rowBytes = sw / 2;
+    for (int yy = y; yy < y + h; yy++) {
+        for (int bx = x / 2; bx < (x + w + 1) / 2; bx++) {
+            backBuffer[yy * rowBytes + bx] = (uint8_t)(frontBuffer[yy * rowBytes + bx] ^ 0xFF);
+        }
+    }
+}
+
+void DisplayHAL::updateScreenDirect() {
+    if (!frontBuffer || !backBuffer) return;
+    if (!s_hasShownFrame || s_shownPortrait != _isPortrait || s_shownDark != s_darkMode) {
+        updateScreenFull();
+        return;
+    }
+#ifdef NATIVE_TESTING
+    updateScreenPartial();
+#else
+    int minX, minY, maxX, maxY;
+    if (!diffBounds(minX, minY, maxX, maxY)) return;
+    EPD_POWER_SCOPE();
+    const Rect_t area = physicalArea(minX, minY, maxX, maxY);
+    const int outBytes = area.width >> 2;
+    uint8_t* codes = static_cast<uint8_t*>(malloc(outBytes * area.height));
+    if (!codes) {
+        updateScreenFast();
+        return;
+    }
+    memset(codes, 0, outBytes * area.height);
+    for (int py = 0; py < area.height; ++py) {
+        uint8_t* row = codes + py * outBytes;
+        for (int px = 0; px < area.width; ++px) {
+            const int ax = area.x + px;
+            const int ay = area.y + py;
+            const int lx = _isPortrait ? EPD_HEIGHT - 1 - ay : ax;
+            const int ly = _isPortrait ? ax : ay;
+            uint8_t now = getPixel(lx, ly, frontBuffer);
+            uint8_t was = getPixel(lx, ly, backBuffer);
+            if (now == was) continue;
+            if (s_darkMode) now = 15 - now;
+            // 01 drives towards black, 10 towards white.
+            const uint8_t code = now < 10 ? 0x01 : 0x02;
+            row[px >> 2] |= (uint8_t)(code << (2 * (px & 3)));
+        }
+    }
+    uint32_t t0 = millis();
+    drawPhysicalAreaDirect(area, codes);
+    free(codes);
+    Serial.printf("EPD direct %dx%d@%d,%d: %ums\n", area.width, area.height, area.x, area.y,
+                  (unsigned)(millis() - t0));
+    memcpy(backBuffer, frontBuffer, getWidth() * getHeight() / 2);
+#endif
+}
+
 void DisplayHAL::updateScreenPartial() {
     const bool fastMode = s_fastPartialMode;
     if (!frontBuffer || !backBuffer) return;
@@ -794,30 +957,9 @@ void DisplayHAL::updateScreenPartial() {
     }
     int w = getWidth();
     int h = getHeight();
-    
-    int minX = w, minY = h, maxX = -1, maxY = -1;
-    const int rowBytes = w / 2;
-    for (int y = 0; y < h; y++) {
-        const uint8_t* fRow = frontBuffer + y * rowBytes;
-        const uint8_t* bRow = backBuffer + y * rowBytes;
-        for (int bx = 0; bx < rowBytes; bx++) {
-            if (fRow[bx] != bRow[bx]) {
-                int x0 = bx * 2;
-                if (getPixel(x0, y, frontBuffer) != getPixel(x0, y, backBuffer)) {
-                    if (x0 < minX) minX = x0;
-                    if (x0 > maxX) maxX = x0;
-                }
-                int x1 = x0 + 1;
-                if (getPixel(x1, y, frontBuffer) != getPixel(x1, y, backBuffer)) {
-                    if (x1 < minX) minX = x1;
-                    if (x1 > maxX) maxX = x1;
-                }
-                if (y < minY) minY = y;
-                if (y > maxY) maxY = y;
-            }
-        }
-    }
-    if (maxX < minX || maxY < minY) {
+
+    int minX, minY, maxX, maxY;
+    if (!diffBounds(minX, minY, maxX, maxY)) {
 #ifdef NATIVE_TESTING
         if (s_debugScreen) {
             printf("[DEBUG-SCREEN] updateScreenPartial() ignored (no changes).\n");

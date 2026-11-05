@@ -3,10 +3,15 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'screens/main_screen.dart';
 import 'screens/page_entry_screen.dart';
+import 'services/ble_service.dart';
+import 'services/sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await _requestPermissions();
+  // Every successful BLE connect (manual or automatic) also syncs todos/calendar.
+  BleService().onConnectedSync = SyncService().syncDevice;
+  SyncService().loadLastResult();
   runApp(const BookSyncReaderApp());
 }
 

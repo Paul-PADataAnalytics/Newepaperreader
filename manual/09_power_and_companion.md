@@ -68,16 +68,20 @@ GATT service `12345678-1234-1234-1234-123456789abc`, advertised as `EPD-Reader`:
 
 | Command | Fields | Answer |
 | :--- | :--- | :--- |
-| `HELLO` | | `{t:"HELLO", proto:2, fw, batt, usb, free}` |
+| `HELLO` | | `{t:"HELLO", proto:2, fw, batt, usb, free, features:["todos","calendar"]}` |
 | `TIME` | `val` (epoch s), `tz` (minutes east of UTC) | `{t:"TIME", ok}`; tz is persisted |
 | `GET_LIBRARY` | `off`, `refresh` (rescan SD) | `LIBRARY` page of `{n: name, p: path, s: size}` - all books under `/books`, recursively |
 | `GET_BOOKMARKS` | `off` | `BOOKMARKS` page of `{isbn, title, author, genre, page, total, ts}` |
 | `BOOK` | `isbn, title, author, genre, page, total, ts` | `{t:"BOOK", ok, applied}` (last change wins) |
 | `DELETE_FILE` | `path` (under `/books/`) or `name` | `{t:"DELETE_RESULT", ok, error?}` |
-| `FILE_BEGIN` | `name`, `size`, `dir` (`books` or `images`) | `{t:"FILE_READY", ok, error?}` |
+| `FILE_BEGIN` | `name`, `size`, `dir` (`books`, `images`, or `data` for `todos.jsonl` / `calendar.jsonl` only) | `{t:"FILE_READY", ok, error?}` |
 | *file data* | binary: `0x01`, u32 LE offset, bytes | none |
 | `FILE_END` | `size` | `{t:"FILE_RESULT", ok, size, path, error?}` |
 | `FILE_ABORT` | | `{t:"FILE_ABORT", ok}` |
+| `READ_FILE` | `path` (only `/data/todo_edits.jsonl`), `off` | `{t:"FILE_CHUNK", ok, size, off, data: base64 (<= 270 bytes), next}` |
+| `TODO_EDITS_DONE` | `upTo` (edit `seq`) | `{t:"TODO_EDITS_DONE", ok, remaining}` - drops edits the phone has saved |
+
+The todo and calendar sync (files, sequence, what runs on every connect) is described in [Chapter 11](11_todo_and_calendar.md#5-sync-protocol).
 
 Uploads are written to `/<dir>/.upload.part` in 16 KB blocks and renamed into place only after the size matches, so an interrupted transfer never leaves a half-written book in the library. A transfer stalled for 30 s, or a disconnect, aborts it. Measured: ~15 KB/s from a laptop; Android with high connection priority is similar or faster.
 
@@ -90,11 +94,11 @@ The native simulator speaks the same protocol over TCP port 9876 (`EPD_SIM_PORT`
 | Tool | Purpose |
 | :--- | :--- |
 | `tools/device_console.py` | Serial console: `status`, `tap X Y` (on-screen coords), `shot out.png`, `sleep`, `log N`, `seq "..." "..."` |
-| `tools/sim_client.py` | Drive the simulator: `tap`, `shot`, `hello`, `library`, `upload`, `delete`, `bookmarks` |
-| `tools/ble_protocol_test.py` | End-to-end protocol test against the real device over BLE (needs `bleak`) |
+| `tools/sim_client.py` | Drive the simulator: `tap`, `shot`, `hello`, `library`, `upload` (optionally to `data`), `delete`, `bookmarks`, `sleep`, `edits`, `editsdone` |
+| `tools/ble_protocol_test.py` | End-to-end protocol test against the real device over BLE (needs `bleak`); `--sync DIR` does a todo/calendar sync from local files |
 | `tools/generate_ui_icons.py` | Regenerates `src/ui/ui_icons.h` |
 | `tools/generate_sleep_images.py` | Portrait sleep pictures as `.raw` files for `/images` |
 
-`STATUS` (and the companion `HELLO` answer) include `lastSleep`: why the device last went to sleep (button, timeout, menu, dev-command), whether a USB host was seen, the battery voltage and idle time at that moment - kept in RTC memory across deep sleep.
+`STATUS` (and the companion `HELLO` answer) include `lastSleep`: why the device last went to sleep (button, timeout, menu, dev-command, screen-refresh), whether a USB host was seen, the battery voltage and idle time at that moment - kept in RTC memory across deep sleep.
 
-Serial commands understood by the firmware: `STATUS`, `S` (screenshot), `TL x y` (tap at on-screen coordinates), `T x y` (raw touch-controller coordinates), `SLEEP`, and `SLEEPT n` (sleep, and also wake after *n* seconds - for testing the resume path without pressing the button).
+Serial commands understood by the firmware: `STATUS`, `S` (screenshot), `TL x y` (tap at on-screen coordinates), `T x y` (raw touch-controller coordinates), `TLB x1 y1 x2 y2 ...` (several taps delivered as one batch, like fast typing), `SLEEP`, `SLEEPT n` (sleep, and also wake after *n* seconds - for testing the resume path without pressing the button), and `SLEEPR n` (sleep with an app's own sleep screen, e.g. the calendar, redrawn after *n* seconds instead of at midnight).

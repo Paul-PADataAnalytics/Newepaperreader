@@ -5,9 +5,13 @@ BLE (needs `pip install bleak` and a Bluetooth adapter).
 
     python3 tools/ble_protocol_test.py                 # hello, library, bookmarks
     python3 tools/ble_protocol_test.py --upload FILE   # also upload, verify, delete
+    python3 tools/ble_protocol_test.py --sync DIR      # todo/calendar sync like the app:
+        # print + acknowledge device note edits, then upload DIR/todos.jsonl and
+        # DIR/calendar.jsonl (whichever exist) to /data
 """
 import argparse
 import asyncio
+import base64
 import json
 import os
 import struct
@@ -71,6 +75,7 @@ class Link:
 async def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--upload")
+    ap.add_argument("--sync")
     args = ap.parse_args()
 
     print("scanning...")
@@ -87,7 +92,8 @@ async def main():
         print("connected, mtu", client.mtu_size)
         link = Link(client)
         await link.start()
-        print(await link.request({"t": "HELLO"}))
+        r_hello = await link.request({"t": "HELLO"})
+        print(r_hello)
         now = time.time()
         print(await link.request({"t": "TIME", "val": int(now), "tz": int(-time.timezone / 60 + (60 if time.daylight and time.localtime().tm_isdst else 0))}))
 
@@ -98,6 +104,40 @@ async def main():
             print("  ", b)
         marks = await link.paged({"t": "GET_BOOKMARKS"})
         print("bookmarks:", len(marks))
+
+        async def send_file(path, name, folder):
+            data = open(path, "rb").read()
+            r = await link.request({"t": "FILE_BEGIN", "name": name, "size": len(data), "dir": folder})
+            if not r.get("ok"):
+                raise SystemExit("FILE_BEGIN refused: %s" % r)
+            chunk = max(20, min(495, client.mtu_size - 3 - 5))
+            t0 = time.time()
+            for off in range(0, len(data), chunk):
+                await client.write_gatt_char(WRITE, bytes([1]) + struct.pack("<I", off) + data[off:off + chunk], response=True)
+            r = await link.request({"t": "FILE_END", "size": len(data)}, timeout=60)
+            print(name, r, "%.1f KB/s" % (len(data) / 1024 / max(0.001, time.time() - t0)))
+            return r
+
+        if args.sync:
+            if "todos" not in r_hello.get("features", []):
+                raise SystemExit("firmware does not support todo/calendar sync")
+            edits, off = b"", 0
+            while off >= 0:
+                r = await link.request({"t": "READ_FILE", "path": "/data/todo_edits.jsonl", "off": off})
+                if not r.get("ok"):
+                    raise SystemExit(r)
+                edits += base64.b64decode(r.get("data", ""))
+                off = r.get("next", -1)
+            lines = [json.loads(l) for l in edits.decode().splitlines() if l.strip()]
+            print("device edits:", len(lines))
+            for e in lines:
+                print("  ", e)
+            if lines:
+                print(await link.request({"t": "TODO_EDITS_DONE", "upTo": max(e["seq"] for e in lines)}))
+            for name in ("todos.jsonl", "calendar.jsonl"):
+                path = os.path.join(args.sync, name)
+                if os.path.exists(path):
+                    await send_file(path, name, "data")
 
         if args.upload:
             data = open(args.upload, "rb").read()

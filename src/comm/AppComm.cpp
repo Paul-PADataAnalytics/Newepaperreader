@@ -5,6 +5,7 @@
 #include "DisplayHAL.h"
 #include "reader/AppStorage.h"
 #include "reader/FileBrowser.h"
+#include "sync/SyncStore.h"
 #include <ArduinoJson.h>
 #include <mutex>
 #include <deque>
@@ -44,11 +45,12 @@ static uint32_t millis() {
 // and manual/09_power_and_companion.md)
 // ---------------------------------------------------------------------------
 static const int PROTOCOL_VERSION = 2;
-static const char* FIRMWARE_VERSION = "3.0.0";
+static const char* FIRMWARE_VERSION = "3.1.0";
 static const uint8_t FRAME_FILE_DATA = 0x01;
 static const size_t INBOX_CAPACITY = 32;
 static const size_t RESPONSE_BUDGET = 460; // stays under the 512-byte ATT value cap
 static const uint32_t UPLOAD_STALL_TIMEOUT_MS = 30000;
+static const size_t READ_CHUNK = 270; // base64 -> 360 chars: the answer stays under RESPONSE_BUDGET
 
 // ---------------------------------------------------------------------------
 // Inbox shared between the radio task and the main loop
@@ -218,6 +220,25 @@ bool isSafeFileName(const std::string& name) {
     return true;
 }
 
+// Files the phone may upload into /data (synced todo/calendar data).
+bool isSyncDataFile(const std::string& name) { return name == "todos.jsonl" || name == "calendar.jsonl"; }
+
+std::string base64(const uint8_t* data, size_t len) {
+    static const char* tbl = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((len + 2) / 3 * 4);
+    for (size_t i = 0; i < len; i += 3) {
+        uint32_t v = (uint32_t)data[i] << 16;
+        if (i + 1 < len) v |= (uint32_t)data[i + 1] << 8;
+        if (i + 2 < len) v |= data[i + 2];
+        out += tbl[(v >> 18) & 63];
+        out += tbl[(v >> 12) & 63];
+        out += i + 1 < len ? tbl[(v >> 6) & 63] : '=';
+        out += i + 2 < len ? tbl[v & 63] : '=';
+    }
+    return out;
+}
+
 std::string baseName(const std::string& path) {
     size_t slash = path.find_last_of('/');
     return slash == std::string::npos ? path : path.substr(slash + 1);
@@ -381,6 +402,9 @@ void handleJson(const std::string& msg) {
         r["usb"] = PowerManager::isUsbConnected();
         r["usbHost"] = PowerManager::isUsbHostActive();
         r["lastSleep"] = PowerManager::lastSleepSummary();
+        JsonArray features = r["features"].to<JsonArray>();
+        features.add("todos");
+        features.add("calendar");
 #ifndef NATIVE_TESTING
         r["free"] = (double)(SD.totalBytes() - SD.usedBytes());
 #endif
@@ -517,8 +541,12 @@ void handleJson(const std::string& msg) {
         std::string name = doc["name"] | "";
         uint32_t size = doc["size"] | 0;
         std::string dir = doc["dir"] | "books";
-        if (dir != "books" && dir != "images") {
+        if (dir != "books" && dir != "images" && dir != "data") {
             respondError("FILE_READY", rid, "Unsupported folder");
+            return;
+        }
+        if (dir == "data" && !isSyncDataFile(name)) {
+            respondError("FILE_READY", rid, "Not a sync data file");
             return;
         }
         if (!isSafeFileName(name)) {
@@ -585,8 +613,46 @@ void handleJson(const std::string& msg) {
         if (ok) {
             g_upload.partPath.clear(); // nothing to clean up
             if (g_upload.finalPath.rfind("/books/", 0) == 0) invalidateLibrary();
+            if (g_upload.finalPath == "/data/todos.jsonl") {
+                SyncStore::bumpTodos();
+                s_lastEvent = "Todos synced";
+            } else if (g_upload.finalPath == "/data/calendar.jsonl") {
+                SyncStore::bumpCalendar();
+                s_lastEvent = "Calendar synced";
+            }
         }
         uploadReset();
+        respond(r);
+    } else if (type == "READ_FILE") {
+        std::string path = doc["path"] | "";
+        int off = doc["off"] | 0;
+        if (path != SyncStore::todoEditsPath() || off < 0) {
+            respondError("FILE_CHUNK", rid, "File not readable");
+            return;
+        }
+        std::string data;
+        SyncStore::readSmallFile(path.c_str(), data);
+        size_t start = (size_t)off < data.size() ? (size_t)off : data.size();
+        size_t n = data.size() - start < READ_CHUNK ? data.size() - start : READ_CHUNK;
+        JsonDocument r;
+        r["t"] = "FILE_CHUNK";
+        r["rid"] = rid;
+        r["ok"] = true;
+        r["size"] = (uint32_t)data.size();
+        r["off"] = (uint32_t)start;
+        r["data"] = base64((const uint8_t*)data.data() + start, n);
+        r["next"] = start + n < data.size() ? (int)(start + n) : -1;
+        respond(r);
+    } else if (type == "TODO_EDITS_DONE") {
+        uint32_t upTo = doc["upTo"] | 0u;
+        int remaining = SyncStore::dropTodoEditsUpTo(upTo);
+        SyncStore::bumpTodos();
+        s_lastEvent = "Todo edits sent to NootTask";
+        JsonDocument r;
+        r["t"] = "TODO_EDITS_DONE";
+        r["rid"] = rid;
+        r["ok"] = true;
+        r["remaining"] = remaining;
         respond(r);
     } else if (type == "FILE_ABORT") {
         uploadReset();
@@ -824,7 +890,8 @@ static bool transportConnected() { return client_socket >= 0; }
 
 // Simulator-only test hooks: {"cmd":"touch","x":..,"y":..} taps at logical
 // (as-displayed) coordinates; {"cmd":"dump","path":".."} writes a PGM of the
-// screen; {"cmd":"idle"} reports whether the main loop has nothing queued.
+// screen; {"cmd":"sleep"} enters lock mode (sleep screen; a tap wakes).
+void requestSleepNow();
 static bool handleSimCommand(const std::string& msg) {
     if (msg.empty() || msg[0] != '{' || msg.find("\"cmd\"") == std::string::npos) return false;
     JsonDocument doc;
@@ -839,6 +906,8 @@ static bool handleSimCommand(const std::string& msg) {
         } else {
             DisplayHAL::injectTouch(x, y);
         }
+    } else if (cmd == "sleep") {
+        requestSleepNow();
     } else if (cmd == "dump") {
         std::string path = doc["path"] | "screen.pgm";
         DisplayHAL::dumpVisible(path.c_str());

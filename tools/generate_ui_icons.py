@@ -186,6 +186,32 @@ def icon_games():
     return img
 
 
+def icon_todo():
+    img, d = canvas()
+    # Checklist: three ticked/unticked boxes with lines.
+    for i, y in enumerate((16, 40, 64)):
+        rrect(d, (12, y, 30, y + 18), 3, width=4 * SS)
+        line(d, [(40, y + 9), (86, y + 9)], width=5 * SS)
+        if i < 2:
+            line(d, [(15, y + 9), (20, y + 14), (32, y - 2)], width=4 * SS)
+    return img
+
+
+def icon_calendar():
+    img, d = canvas()
+    rrect(d, (10, 18, 86, 84), 8)
+    d.rectangle((10 * SS, 18 * SS, 86 * SS, 36 * SS), fill=0)
+    d.rounded_rectangle((10 * SS, 18 * SS, 86 * SS, 36 * SS), radius=8 * SS, fill=0)
+    for x in (30, 66):
+        line(d, [(x, 10), (x, 24)], width=5 * SS)
+    for row in range(3):
+        for col in range(4):
+            cx = 22 + col * 17
+            cy = 48 + row * 12
+            d.rectangle(((cx - 4) * SS, (cy - 3) * SS, (cx + 4) * SS, (cy + 3) * SS), fill=0)
+    return img
+
+
 ICONS = [
     ("ICON_BOOK", icon_book),
     ("ICON_BOOKMARK", icon_bookmark),
@@ -199,6 +225,8 @@ ICONS = [
     ("ICON_LIGHTHOUSE", icon_lighthouse),
     ("ICON_KEY", icon_key),
     ("ICON_GAMES", icon_games),
+    ("ICON_TODO", icon_todo),
+    ("ICON_CALENDAR", icon_calendar),
 ]
 
 

@@ -6,6 +6,8 @@ import '../main.dart';
 import '../models/book_record.dart';
 import '../services/ble_service.dart';
 import '../services/book_storage_service.dart';
+import '../services/sync_service.dart';
+import 'sync_settings_screen.dart';
 
 /// Connection to the EPD-Reader: connect, device status and sync actions.
 class BleSyncScreen extends StatefulWidget {
@@ -18,6 +20,7 @@ class BleSyncScreen extends StatefulWidget {
 class _BleSyncScreenState extends State<BleSyncScreen> {
   final BleService _ble = BleService();
   final BookStorageService _storage = BookStorageService();
+  final SyncService _sync = SyncService();
   List<BluetoothDevice> _devices = [];
   bool _busy = false;
   String _busyLabel = '';
@@ -27,6 +30,9 @@ class _BleSyncScreenState extends State<BleSyncScreen> {
     super.initState();
     _ble.connected.addListener(_rebuild);
     _ble.deviceInfo.addListener(_rebuild);
+    _sync.running.addListener(_rebuild);
+    _sync.status.addListener(_rebuild);
+    _sync.lastSyncTime.addListener(_rebuild);
     if (!_ble.isConnected) _autoConnect();
   }
 
@@ -34,6 +40,9 @@ class _BleSyncScreenState extends State<BleSyncScreen> {
   void dispose() {
     _ble.connected.removeListener(_rebuild);
     _ble.deviceInfo.removeListener(_rebuild);
+    _sync.running.removeListener(_rebuild);
+    _sync.status.removeListener(_rebuild);
+    _sync.lastSyncTime.removeListener(_rebuild);
     super.dispose();
   }
 
@@ -131,6 +140,57 @@ class _BleSyncScreenState extends State<BleSyncScreen> {
     });
   }
 
+  Widget _todoSyncCard(bool connected) {
+    final running = _sync.running.value;
+    final last = _sync.lastSyncTime.value;
+    final status = _sync.status.value;
+    final when = last == null
+        ? 'Never synced'
+        : 'Last sync ${last.day}/${last.month} ${last.hour.toString().padLeft(2, '0')}:${last.minute.toString().padLeft(2, '0')}';
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.event_note, color: Color(0xFF00B4D8)),
+                SizedBox(width: 12),
+                Text('Todo & calendar sync', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(running ? status : (status.isEmpty ? when : '$when\n$status'),
+                style: const TextStyle(color: Colors.white60)),
+            if (running) const Padding(padding: EdgeInsets.only(top: 8), child: LinearProgressIndicator()),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () =>
+                        Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SyncSettingsScreen())),
+                    icon: const Icon(Icons.tune),
+                    label: const Text('Settings'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: (connected && !running) ? () => _sync.syncDevice() : null,
+                    icon: const Icon(Icons.sync),
+                    label: const Text('Sync now'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final connected = _ble.isConnected;
@@ -194,6 +254,8 @@ class _BleSyncScreenState extends State<BleSyncScreen> {
               label: const Text('Set device clock'),
               style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
             ),
+            const SizedBox(height: 12),
+            _todoSyncCard(connected),
             const SizedBox(height: 24),
             TextButton(
               onPressed: _busy ? null : () => _ble.disconnect(),
@@ -222,6 +284,8 @@ class _BleSyncScreenState extends State<BleSyncScreen> {
                   trailing: FilledButton(onPressed: _busy ? null : () => _connect(d), child: const Text('Connect')),
                 ),
               ),
+            const SizedBox(height: 12),
+            _todoSyncCard(connected),
           ],
         ],
       ),

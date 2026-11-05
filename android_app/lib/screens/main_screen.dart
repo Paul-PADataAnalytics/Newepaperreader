@@ -3,6 +3,7 @@ import 'home_screen.dart';
 import 'gutenberg_screen.dart';
 import 'ble_sync_screen.dart';
 import 'device_library_screen.dart';
+import 'todos_screen.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -18,6 +19,7 @@ class _MainScreenState extends State<MainScreen> {
     const HomeScreen(),
     const GutenbergScreen(),
     const DeviceLibraryScreen(),
+    const TodosScreen(),
     const BleSyncScreen(),
   ];
 
@@ -48,6 +50,10 @@ class _MainScreenState extends State<MainScreen> {
           BottomNavigationBarItem(
             icon: Icon(Icons.sd_storage),
             label: 'Library',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.checklist),
+            label: 'Todos',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.bluetooth),

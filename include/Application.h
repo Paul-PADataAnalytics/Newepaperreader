@@ -48,4 +48,21 @@ public:
     // itself (e.g. from a detail view back to its list).
     virtual bool wantsSystemBack() const { return true; }
     virtual bool onBack() { return false; }
+
+    // Text entry: when true, every tap queued while the screen was busy is
+    // delivered (none are dropped as stale) and onInputBatchEnd() runs once
+    // after each batch, so the app can redraw once for several key presses.
+    virtual bool wantsQueuedTaps() const { return false; }
+    virtual void onInputBatchEnd() {}
+
+    // Called first when the device is about to deep-sleep (a full reset
+    // follows): persist anything the user would not want to lose.
+    virtual void onBeforeSleep() {}
+
+    // Called just before deep sleep. Return true after drawing a custom
+    // sleep screen (full refresh); false shows the standard one.
+    virtual bool drawSleepScreen() { return false; }
+    // Seconds until the custom sleep screen should be redrawn (the device
+    // briefly wakes on a timer, redraws and sleeps again); 0 = never.
+    virtual uint32_t sleepScreenRefreshSec() const { return 0; }
 };

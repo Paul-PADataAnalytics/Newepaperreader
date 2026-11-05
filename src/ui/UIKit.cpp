@@ -63,11 +63,9 @@ std::string ellipsize(const std::string& s, int maxW, float size, bool bold) {
     return suffix;
 }
 
-int textWrapped(const std::string& s, int x, int y, int w, float size, uint8_t color,
-                int maxLines, int lineGap, bool centered) {
-    if (s.empty() || w <= 0) return y;
-    const int lh = lineHeight(size) + lineGap;
+std::vector<std::string> wrapLines(const std::string& s, int w, float size) {
     std::vector<std::string> lines;
+    if (s.empty() || w <= 0) return lines;
     size_t paragraphStart = 0;
     while (paragraphStart < s.size()) {
         size_t paragraphEnd = s.find('\n', paragraphStart);
@@ -94,6 +92,14 @@ int textWrapped(const std::string& s, int x, int y, int w, float size, uint8_t c
         if (paragraphEnd == s.size()) break;
         paragraphStart = paragraphEnd + 1;
     }
+    return lines;
+}
+
+int textWrapped(const std::string& s, int x, int y, int w, float size, uint8_t color,
+                int maxLines, int lineGap, bool centered) {
+    if (s.empty() || w <= 0) return y;
+    const int lh = lineHeight(size) + lineGap;
+    std::vector<std::string> lines = wrapLines(s, w, size);
 
     size_t drawCount = lines.size();
     if (maxLines > 0 && drawCount > (size_t)maxLines) drawCount = (size_t)maxLines;

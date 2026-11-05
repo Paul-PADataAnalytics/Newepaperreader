@@ -24,6 +24,15 @@ public:
     // Used for page turns; leaves faint ghosting, so mix in a regular
     // updateScreenFull() every few pages. Falls back to full in dark mode.
     static void updateScreenQuick();
+    // Fastest possible update for typing: only the pixels that changed are
+    // pushed straight to black or white (no clearing flash, no greyscale).
+    // Anti-aliased edges become hard; follow up with updateScreenFast() /
+    // a full redraw to restore greys and clear any ghosting.
+    static void updateScreenDirect();
+    // Makes the next partial/fast update redraw this logical region even if
+    // the framebuffer content did not change (e.g. to restore greys after
+    // direct updates).
+    static void invalidateRegion(int x, int y, int w, int h);
     
     static uint8_t* frontBuffer;
     static uint8_t* backBuffer;

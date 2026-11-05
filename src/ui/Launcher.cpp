@@ -13,6 +13,8 @@
 #include "NumberPlaceApp.h"
 #include "CrevasseApp.h"
 #include "KlondikeApp.h"
+#include "TodoApp.h"
+#include "CalendarApp.h"
 #include "DisplayHAL.h"
 #include "TypographyEngine.h"
 #include "AppComm.h"
@@ -48,6 +50,8 @@ static Application* createWordSearch() { return new WordSearchApp(); }
 static Application* createNumberPlace() { return new NumberPlaceApp(); }
 static Application* createCrevasse() { return new CrevasseApp(); }
 static Application* createKlondike() { return new KlondikeApp(); }
+static Application* createTodo() { return new TodoApp(); }
+static Application* createCalendar() { return new CalendarApp(); }
 
 // ---- Home screen layout ----------------------------------------------------
 namespace {
@@ -55,13 +59,13 @@ using namespace UI;
 
 constexpr int CLOCK_TOP = STATUS_H;
 constexpr int CLOCK_H = 150;
-constexpr int CARD_Y = 196;
-constexpr int CARD_H = 176;
-constexpr int GRID_Y = 404;
+constexpr int CARD_Y = 190;
+constexpr int CARD_H = 160;
+constexpr int GRID_Y = 368;
 constexpr int GRID_COLS = 2;
-constexpr int GRID_GAP = 16;
+constexpr int GRID_GAP = 12;
 constexpr int TILE_W = (W - 2 * MARGIN - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS;
-constexpr int TILE_H = 112;
+constexpr int TILE_H = 98;
 
 Rect tileRect(int i) {
     int row = i / GRID_COLS;
@@ -73,8 +77,8 @@ Rect cardRect() { return Rect(MARGIN, CARD_Y, W - 2 * MARGIN, CARD_H); }
 
 // Home grid tiles: apps plus the sleep shortcut.
 constexpr int TILE_SLEEP = -3;
-const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_IMAGES, APP_FILES,
-                      APP_CALCULATOR, APP_GAMES, APP_SETTINGS, TILE_SLEEP};
+const int kTiles[] = {APP_READER, APP_BOOKMARKS, APP_TODO, APP_CALENDAR, APP_IMAGES,
+                      APP_FILES, APP_CALCULATOR, APP_GAMES, APP_SETTINGS, TILE_SLEEP};
 constexpr int kTileCount = sizeof(kTiles) / sizeof(kTiles[0]);
 
 void drawClockBlock() {
@@ -126,6 +130,8 @@ void Launcher::init() {
     m_apps[APP_NUMBERPLACE] = {"Number Place", "Sudoku, as it began in 1979", createNumberPlace, ICON_GAMES};
     m_apps[APP_CREVASSE]   = {"Crevasse 1911", "Cross the Antarctic ice", createCrevasse, ICON_GAMES};
     m_apps[APP_KLONDIKE]   = {"Klondike 1897", "Patience in a gold-rush cabin", createKlondike, ICON_GAMES};
+    m_apps[APP_TODO]       = {"Todos",      "NootTask and Google Tasks", createTodo, ICON_TODO};
+    m_apps[APP_CALENDAR]   = {"Calendar",   "Google Calendar, read-only", createCalendar, ICON_CALENDAR};
     m_activeAppIndex = -1;
     m_activeApp = nullptr;
 }

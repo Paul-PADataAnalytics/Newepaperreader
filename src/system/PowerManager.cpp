@@ -107,9 +107,9 @@ void recordSleep(SleepReason reason) {
 const char* lastSleepSummary() {
     static char buf[96];
     if (s_sleepRecord.magic != SLEEP_RECORD_MAGIC || s_sleepRecord.reason == SLEEP_NONE) return "none";
-    static const char* kNames[] = {"none", "button", "timeout", "dev-command", "menu"};
+    static const char* kNames[] = {"none", "button", "timeout", "dev-command", "menu", "screen-refresh"};
     snprintf(buf, sizeof(buf), "%s usbHost=%u %umV idle=%us n=%u",
-             kNames[s_sleepRecord.reason < 5 ? s_sleepRecord.reason : 0], s_sleepRecord.usbHost,
+             kNames[s_sleepRecord.reason < 6 ? s_sleepRecord.reason : 0], s_sleepRecord.usbHost,
              s_sleepRecord.millivolts, (unsigned)(s_sleepRecord.idleMs / 1000), (unsigned)s_sleepRecord.count);
     return buf;
 }

@@ -21,6 +21,8 @@ enum AppId {
     APP_NUMBERPLACE,
     APP_CREVASSE,
     APP_KLONDIKE,
+    APP_TODO,
+    APP_CALENDAR,
     APP_COUNT
 };
 

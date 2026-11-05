@@ -69,6 +69,8 @@ void text(const std::string& s, int x, int y, float size, uint8_t color = INK, b
 void textCentered(const std::string& s, int cx, int y, float size, uint8_t color = INK, bool bold = false);
 void textRight(const std::string& s, int rightX, int y, float size, uint8_t color = INK, bool bold = false);
 std::string ellipsize(const std::string& s, int maxW, float size, bool bold = false);
+// Word-wraps into lines no wider than w ('\n' starts a new line).
+std::vector<std::string> wrapLines(const std::string& s, int w, float size);
 // Word-wraps into a column; returns the y just below the last line drawn.
 int textWrapped(const std::string& s, int x, int y, int w, float size, uint8_t color = INK,
                 int maxLines = 0, int lineGap = 6, bool centered = false);

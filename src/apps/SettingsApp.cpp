@@ -188,7 +188,7 @@ void SettingsApp::drawContent() {
             hRule(y + 75);
             y += 76;
         };
-        row("Firmware", "v3.0.0");
+        row("Firmware", "v3.1.0");
 #ifndef NATIVE_TESTING
         char buf[48];
         snprintf(buf, sizeof(buf), "%u KB", (unsigned)(ESP.getFreeHeap() / 1024));

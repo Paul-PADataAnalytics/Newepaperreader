@@ -37,7 +37,12 @@ flutter pub get
 
 # Step 3: Build debug APK
 echo -e "${GREEN}==> Compiling Debug APK...${NC}"
-flutter build apk --debug
+# Optional Google Web OAuth client id (see android_app/README.md)
+DART_DEFINES=()
+if [ -n "${GOOGLE_SERVER_CLIENT_ID:-}" ]; then
+    DART_DEFINES+=("--dart-define=GOOGLE_SERVER_CLIENT_ID=$GOOGLE_SERVER_CLIENT_ID")
+fi
+flutter build apk --debug "${DART_DEFINES[@]}"
 
 # Verify output APK exists
 APK_PATH="build/app/outputs/flutter-apk/app-debug.apk"

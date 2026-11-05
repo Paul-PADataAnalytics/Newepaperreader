@@ -2,6 +2,8 @@
 
 Welcome to the LilyGo EPD47 E-Reader System **v3.0.0**! This is the complete custom firmware for the LilyGo T5-ePaper-S3 (4.7" E-Ink display) built using PlatformIO.
 
+**New in v3.1**: a **Todos** app (NootTask and Google Tasks, with NootTask notes editable using a fast on-screen keyboard), a read-only **Calendar** app (Google Calendar, with an agenda sleep screen), all synced by the companion app every time it connects - the reader itself never goes online. See [Chapter 11](manual/11_todo_and_calendar.md).
+
 **New in v3.0**: portrait-only redesigned UI, configurable auto-sleep (also while reading) with a much lower-power deep sleep, a "stay awake on USB" and developer "always on" option, brightened and dithered pictures, and a rebuilt companion-app link (working device library, uploads with progress, delete). See [Chapter 9](manual/09_power_and_companion.md).
 
 ![Launcher](images/screen_exact.jpg)
@@ -22,6 +24,7 @@ Welcome to the LilyGo EPD47 E-Reader System **v3.0.0**! This is the complete cus
 - **[Chapter 8: Calculator & Settings Applications](manual/08_calculator_and_settings.md)** (v3.0.0): Calculator and the Display / Power / Bluetooth / About settings.
 - **[Chapter 9: Power, Sleep & the Companion Protocol](manual/09_power_and_companion.md)** (v3.0.0): Sleep design, BLE protocol v2 and developer tools.
 - **[Chapter 10: Games](manual/10_games.md)** (v3.0.0): Tea Race 1866, The Keeper and Codebreaker 1917.
+- **[Chapter 11: Todos, Calendar & the On-Screen Keyboard](manual/11_todo_and_calendar.md)** (v3.1.0): NootTask/Google todos with note editing, Google Calendar, agenda sleep screen, keyboard and sync protocol.
 
 ---
 

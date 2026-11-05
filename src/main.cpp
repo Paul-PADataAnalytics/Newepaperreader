@@ -77,7 +77,11 @@ struct TouchEvent {
     int16_t x;
     int16_t y;
     TouchPhase phase;
+    uint32_t ms; // when the controller reported it (debounce uses this, so
+                 // taps queued during a slow refresh keep their spacing)
 };
+
+static const int TOUCH_QUEUE_LEN = 32;
 
 static void IRAM_ATTR touchIsrHandler(void *arg) {
     if (touchReaderTaskHandle) {
@@ -101,8 +105,16 @@ static void touchReaderTask(void *param) {
         // touching it. Only forward state changes and held presses, so an
         // idle panel doesn't wake the main loop 100 times a second.
         static bool lastDown = false;
-        bool forward = down || lastDown;
+        bool wasDown = lastDown;
+        bool forward = down || wasDown;
         lastDown = down;
+        // Held-press repeats only refresh the position; never let them fill
+        // the queue and crowd out the press/release transitions of fast
+        // typing while the main loop is busy refreshing the panel.
+        if (down && wasDown && touchEventQueue &&
+            uxQueueMessagesWaiting(touchEventQueue) >= TOUCH_QUEUE_LEN / 2) {
+            forward = false;
+        }
         if (!forward) {
             xSemaphoreGive(touchReadMutex);
             vTaskDelay(pdMS_TO_TICKS(2));
@@ -112,6 +124,7 @@ static void touchReaderTask(void *param) {
         ev.x = static_cast<int16_t>(tx);
         ev.y = static_cast<int16_t>(ty);
         ev.phase = down ? TouchPhase::DOWN : TouchPhase::UP;
+        ev.ms = millis();
 
         if (touchEventQueue) {
             xQueueSend(touchEventQueue, &ev, 0);
@@ -146,9 +159,55 @@ void launchSettingsApp() {
 
 static void enterLockMode(PowerManager::SleepReason reason);
 static uint32_t s_testTimerWakeSec = 0;
+static uint32_t s_testRefreshSec = 0;
 #ifndef NATIVE_TESTING
 static uint32_t s_usbSleepTestUntil = 0;
+// Set when the last deep sleep armed a timer to redraw an app's sleep screen.
+RTC_DATA_ATTR static bool s_sleepRefreshArmed = false;
 #endif
+
+namespace {
+struct TapList {
+    static const int MAX = 24;
+    int16_t x[MAX];
+    int16_t y[MAX];
+    int count = 0;
+    void add(int px, int py) {
+        if (count >= MAX) return;
+        x[count] = (int16_t)px;
+        y[count] = (int16_t)py;
+        count++;
+    }
+};
+} // namespace
+
+static bool activeAppWantsQueuedTaps() {
+    Application* app = Launcher::getInstance().getActiveApp();
+    return app && app->wantsQueuedTaps();
+}
+
+// Normal apps get one tap per loop iteration (later ones are stale once a
+// refresh has run). Text-entry apps get the whole batch, then one
+// onInputBatchEnd() to redraw for all of it.
+static void dispatchTaps(const TapList& taps) {
+    if (taps.count == 0) return;
+    Launcher& launcher = Launcher::getInstance();
+    Application* app = launcher.getActiveApp();
+    const bool batch = app && app->wantsQueuedTaps();
+    const int n = batch ? taps.count : 1;
+    for (int i = 0; i < n; i++) {
+#ifndef NATIVE_TESTING
+        Serial.printf("Handling touch at %d, %d\n", taps.x[i], taps.y[i]);
+#else
+        printf("Handling touch at %d, %d\n", taps.x[i], taps.y[i]);
+#endif
+        launcher.handleTouch(taps.x[i], taps.y[i]);
+        if (i + 1 < n && launcher.getActiveApp() != app) break;
+        if (i + 1 < n && !app->wantsQueuedTaps()) break;
+    }
+    Application* cur = launcher.getActiveApp();
+    if (batch && cur == app && cur->wantsQueuedTaps()) cur->onInputBatchEnd();
+}
 
 // ---------------------------------------------------------------------------
 // Serial console (development): "T x y" raw touch, "TL x y" touch in
@@ -171,13 +230,34 @@ void processSerialCommands() {
                 // to the UI (bypasses the GT911 press/release debouncing).
                 PowerManager::noteUserActivity();
                 PowerManager::boostCpu();
-                Serial.printf("Handling touch at %d, %d\n", x, y);
-                Launcher::getInstance().handleTouch(x, y);
+                TapList one;
+                one.add(x, y);
+                dispatchTaps(one);
             } else {
                 DisplayHAL::injectTouch(x, y);
                 if (touchReaderTaskHandle) xTaskNotifyGive(touchReaderTaskHandle);
             }
         }
+    } else if (cmd.startsWith("TLB ")) {
+        // Several on-screen taps delivered as one batch, like fast typing
+        // that queued up during a refresh: "TLB x1 y1 x2 y2 ...".
+        PowerManager::noteUserActivity();
+        PowerManager::boostCpu();
+        TapList taps;
+        int pos = 4;
+        while (pos < (int)cmd.length()) {
+            int sp1 = cmd.indexOf(' ', pos);
+            if (sp1 < 0) break;
+            int sp2 = cmd.indexOf(' ', sp1 + 1);
+            int x = cmd.substring(pos, sp1).toInt();
+            int y = cmd.substring(sp1 + 1, sp2 < 0 ? cmd.length() : sp2).toInt();
+            taps.add(x, y);
+            if (sp2 < 0) break;
+            pos = sp2 + 1;
+        }
+        uint32_t t0 = millis();
+        dispatchTaps(taps);
+        Serial.printf("TLB %d taps handled in %ums\n", taps.count, (unsigned)(millis() - t0));
     } else if (cmd == "S") {
         Serial.println("SCREENSHOT_START");
         Serial.println("P5");
@@ -192,6 +272,11 @@ void processSerialCommands() {
         // Development: sleep, but also wake on a timer so the full
         // sleep/resume cycle can be tested without pressing the button.
         s_testTimerWakeSec = (uint32_t)cmd.substring(7).toInt();
+        enterLockMode(PowerManager::SLEEP_DEV_COMMAND);
+    } else if (cmd.startsWith("SLEEPR ")) {
+        // Development: sleep, redrawing the app's own sleep screen (e.g. the
+        // calendar) after n seconds instead of at midnight.
+        s_testRefreshSec = (uint32_t)cmd.substring(7).toInt();
         enterLockMode(PowerManager::SLEEP_DEV_COMMAND);
     } else if (cmd.startsWith("USBSLEEP ")) {
         // Development: allow idle light sleep for n seconds despite the USB
@@ -233,15 +318,15 @@ void setup() {
     PowerManager::restoreAfterWake();
 #ifndef NATIVE_TESTING
     Serial.begin(115200);
-    Serial.println("Starting LilyGO EPD47 E-Reader System v3.0.0...");
+    Serial.println("Starting LilyGO EPD47 E-Reader System v3.1.0...");
 #else
-    printf("Starting LilyGO EPD47 E-Reader System v3.0.0 (Native Mock)...\n");
+    printf("Starting LilyGO EPD47 E-Reader System v3.1.0 (Native Mock)...\n");
 #endif
 
     DisplayHAL::init();
 
 #ifndef NATIVE_TESTING
-    touchEventQueue = xQueueCreate(8, sizeof(TouchEvent));
+    touchEventQueue = xQueueCreate(TOUCH_QUEUE_LEN, sizeof(TouchEvent));
     touchReadMutex = xSemaphoreCreateMutex();
     if (!touchEventQueue || !touchReadMutex) {
         Serial.println("[power] touch queue/mutex allocation failed");
@@ -302,6 +387,22 @@ void setup() {
 
     Launcher::getInstance().init();
 
+#ifndef NATIVE_TESTING
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    Serial.printf("Wake cause: %d\n", (int)cause);
+    if (cause == ESP_SLEEP_WAKEUP_TIMER && s_sleepRefreshArmed) {
+        // Timed wake only to redraw an app's sleep screen (the calendar
+        // after midnight): reopen the app without showing it and go
+        // straight back to sleep. The side button still wakes normally.
+        AppStorage::SavedSystemState saved = AppStorage::loadSystemState();
+        if (saved.valid && saved.appIndex >= 0 && saved.appIndex < APP_COUNT && saved.appIndex != APP_READER) {
+            Launcher::getInstance().launchApp(saved.appIndex, false);
+            enterLockMode(PowerManager::SLEEP_SCREEN_REFRESH); // never returns
+        }
+        s_sleepRefreshArmed = false;
+    }
+#endif
+
     if (SystemSettings::get().bleEnabled) {
         AppComm::init();
     }
@@ -310,8 +411,6 @@ void setup() {
 #ifndef NATIVE_TESTING
     // Waking from lock mode (BUTTON_1 ext0) restores the app that was open,
     // and for the e-reader the exact page. Any other reset boots to home.
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    Serial.printf("Wake cause: %d\n", (int)cause);
     if (cause == ESP_SLEEP_WAKEUP_EXT0 || cause == ESP_SLEEP_WAKEUP_TIMER) {
         AppStorage::SavedSystemState saved = AppStorage::loadSystemState();
         if (saved.valid && saved.appIndex >= 0 && saved.appIndex < APP_COUNT) {
@@ -560,6 +659,8 @@ static void enterLockMode(PowerManager::SleepReason reason) {
     std::string bookAuthor;
     std::string bookPath;
     std::string readingStatus;
+    Application* app = Launcher::getInstance().getActiveApp();
+    if (app) app->onBeforeSleep();
     EReaderApp* reader = activeReader();
     if (reader && reader->isReadingBook()) {
         readingStatus = reader->getReadingStatusLine();
@@ -572,7 +673,13 @@ static void enterLockMode(PowerManager::SleepReason reason) {
     }
     AppStorage::saveSystemState(state);
 
-    drawSleepScreen(bookTitle, bookAuthor, bookPath, readingStatus);
+    uint32_t refreshSec = 0;
+    if (!reader && app && app->drawSleepScreen()) {
+        refreshSec = app->sleepScreenRefreshSec();
+        if (refreshSec && s_testRefreshSec) refreshSec = s_testRefreshSec;
+    } else {
+        drawSleepScreen(bookTitle, bookAuthor, bookPath, readingStatus);
+    }
 
 #ifndef NATIVE_TESTING
     Serial.println("Entering deep sleep (BUTTON_1 wakes)");
@@ -588,9 +695,16 @@ static void enterLockMode(PowerManager::SleepReason reason) {
     rtc_gpio_pullup_en(static_cast<gpio_num_t>(BUTTON_1));
     rtc_gpio_pulldown_dis(static_cast<gpio_num_t>(BUTTON_1));
     esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(BUTTON_1), 0);
-    if (s_testTimerWakeSec > 0) esp_sleep_enable_timer_wakeup((uint64_t)s_testTimerWakeSec * 1000000ULL);
+    s_sleepRefreshArmed = false;
+    if (s_testTimerWakeSec > 0) {
+        esp_sleep_enable_timer_wakeup((uint64_t)s_testTimerWakeSec * 1000000ULL);
+    } else if (refreshSec > 0) {
+        s_sleepRefreshArmed = true;
+        esp_sleep_enable_timer_wakeup((uint64_t)refreshSec * 1000000ULL);
+    }
     esp_deep_sleep_start(); // never returns
 #else
+    (void)refreshSec;
     printf("NATIVE_TESTING: simulated sleep (click to wake)\n");
     isSystemSleeping = true;
 #endif
@@ -707,22 +821,28 @@ void loop() {
 
     int tx = -1, ty = -1;
     bool gotTouchEvent = false;
-    bool pendingTap = false;
-    int tapX = -1, tapY = -1;
+    TapList taps;
 
 #ifndef NATIVE_TESTING
+    // Text entry wants every tap, including a second finger landing before
+    // the first lifts (the controller then reports one point that jumps).
+    const bool typing = activeAppWantsQueuedTaps();
+    static int lastDownX = -1, lastDownY = -1;
     TouchEvent ev{};
     while (touchEventQueue && xQueueReceive(touchEventQueue, &ev, 0) == pdTRUE) {
         if (ev.phase == TouchPhase::DOWN) {
             gotTouchEvent = true;
+            if (typing && touchDownWaiting && touchFired &&
+                (abs(ev.x - lastDownX) > 40 || abs(ev.y - lastDownY) > 40)) {
+                touchFired = false; // rollover: treat as a new press
+                lastUpTime = ev.ms - TAP_DEBOUNCE_MS;
+            }
             touchDownWaiting = true;
-            tx = ev.x;
-            ty = ev.y;
-            if (!touchFired && !pendingTap &&
-                static_cast<int32_t>(now - lastUpTime) >= (int32_t)TAP_DEBOUNCE_MS) {
-                pendingTap = true;
-                tapX = ev.x;
-                tapY = ev.y;
+            tx = lastDownX = ev.x;
+            ty = lastDownY = ev.y;
+            if (!touchFired && (typing || taps.count == 0) &&
+                static_cast<int32_t>(ev.ms - lastUpTime) >= (int32_t)TAP_DEBOUNCE_MS) {
+                taps.add(ev.x, ev.y);
                 touchFired = true;
             }
         } else {
@@ -730,7 +850,7 @@ void loop() {
             // a press we actually saw counts as activity.
             if (touchDownWaiting) {
                 gotTouchEvent = true;
-                lastUpTime = now;
+                lastUpTime = ev.ms;
             }
             touchDownWaiting = false;
             touchFired = false;
@@ -781,30 +901,26 @@ void loop() {
     Launcher::getInstance().loop();
 
 #ifndef NATIVE_TESTING
-    if (!pendingTap && touchDownWaiting && !touchFired &&
+    if (taps.count == 0 && touchDownWaiting && !touchFired &&
         static_cast<int32_t>(now - lastUpTime) >= (int32_t)TAP_DEBOUNCE_MS) {
-        pendingTap = true;
-        tapX = tx;
-        tapY = ty;
+        taps.add(tx, ty);
         touchFired = true;
     }
-    if (pendingTap) {
-        Serial.printf("Handling touch at %d, %d\n", tapX, tapY);
-        Launcher::getInstance().handleTouch(tapX, tapY);
-    }
+    dispatchTaps(taps);
 #else
     if (gotTouchEvent && !touchFired) {
         touchFired = true;
-        printf("Handling touch at %d, %d\n", tx, ty);
-        Launcher::getInstance().handleTouch(tx, ty);
+        taps.add(tx, ty);
+        dispatchTaps(taps);
     }
     if (!gotTouchEvent) touchFired = false;
     DisplayHAL::handleEvents();
     if (DisplayHAL::windowShouldClose()) exit(0);
 #endif
 
-    // Taps that landed while a slow e-ink refresh was running are stale.
-    if ((millis() - loopStartTime) > 200) {
+    // Taps that landed while a slow e-ink refresh was running are stale -
+    // except while typing, where every key press counts.
+    if ((millis() - loopStartTime) > 200 && !activeAppWantsQueuedTaps()) {
 #ifndef NATIVE_TESTING
         TouchEvent dump;
         while (touchEventQueue && xQueueReceive(touchEventQueue, &dump, 0) == pdTRUE) { }

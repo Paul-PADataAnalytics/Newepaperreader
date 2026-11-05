@@ -34,7 +34,10 @@ bool isUsbConnected();
 bool isUsbHostActive();
 
 // Why the device last went to sleep (kept in RTC memory across deep sleep).
-enum SleepReason : uint8_t { SLEEP_NONE = 0, SLEEP_BUTTON, SLEEP_TIMEOUT, SLEEP_DEV_COMMAND, SLEEP_USER_MENU };
+// SLEEP_SCREEN_REFRESH: woke on a timer only to redraw an app's sleep
+// screen (e.g. the calendar at midnight), then slept again.
+enum SleepReason : uint8_t { SLEEP_NONE = 0, SLEEP_BUTTON, SLEEP_TIMEOUT, SLEEP_DEV_COMMAND, SLEEP_USER_MENU,
+                             SLEEP_SCREEN_REFRESH };
 void recordSleep(SleepReason reason);
 // Human-readable summary of the previous sleep, e.g. for STATUS / HELLO.
 const char* lastSleepSummary();

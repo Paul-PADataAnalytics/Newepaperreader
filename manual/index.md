@@ -37,3 +37,5 @@ Welcome to the official 8-chapter reference manual for the **LilyGo EPD47 E-Read
   Run the firmware in a web browser, and publish it with GitHub Pages.
 - **[Chapter 10: Games](10_games.md)** (v3.0.0)  
   Tea Race 1866, The Keeper and Codebreaker 1917.
+- **[Chapter 11: Todos, Calendar & the On-Screen Keyboard](11_todo_and_calendar.md)** (v3.1.0)  
+  NootTask and Google Tasks todos (with note editing), read-only Google Calendar with an agenda sleep screen, the fast on-screen keyboard, and the sync protocol.

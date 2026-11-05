@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -42,7 +43,18 @@ class DeviceInfo {
   final bool usb;
   final int? freeBytes;
 
-  DeviceInfo({required this.firmware, required this.protocol, required this.battery, required this.usb, this.freeBytes});
+  /// Optional capabilities, e.g. "todos", "calendar".
+  final List<String> features;
+
+  DeviceInfo(
+      {required this.firmware,
+      required this.protocol,
+      required this.battery,
+      required this.usb,
+      this.freeBytes,
+      this.features = const []});
+
+  bool supports(String feature) => features.contains(feature);
 
   factory DeviceInfo.fromJson(Map<String, dynamic> json) => DeviceInfo(
         firmware: (json['fw'] ?? '?') as String,
@@ -50,6 +62,7 @@ class DeviceInfo {
         battery: (json['batt'] ?? 0) as int,
         usb: json['usb'] == true,
         freeBytes: json['free'] is num ? (json['free'] as num).toInt() : null,
+        features: (json['features'] as List<dynamic>? ?? const []).whereType<String>().toList(),
       );
 }
 
@@ -110,6 +123,10 @@ class BleService {
 
   /// Called whenever the device pushes a single book's progress.
   void Function(BookRecord book)? onSingleBookUpdated;
+
+  /// Run (not awaited) after every successful connect, once HELLO and the
+  /// time sync are done. Set from main() to start the todo/calendar sync.
+  Future<void> Function()? onConnectedSync;
 
   bool get isConnected => _device?.isConnected == true && _write != null;
 
@@ -192,6 +209,11 @@ class BleService {
     try {
       await sendTimeSync();
     } catch (_) {}
+
+    final sync = onConnectedSync;
+    if (sync != null) {
+      unawaited(Future(sync).catchError((Object e) => debugPrint('Post-connect sync failed: $e')));
+    }
   }
 
   Future<void> _discover(BluetoothDevice device) async {
@@ -412,6 +434,30 @@ class BleService {
     final books = items.map(DeviceLibraryEntry.fromJson).toList();
     books.sort((a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()));
     return books;
+  }
+
+  /// Reads a whole file from the device (only /data/todo_edits.jsonl is allowed).
+  Future<Uint8List> readDeviceFile(String path) async {
+    final out = BytesBuilder(copy: false);
+    int off = 0;
+    while (off >= 0) {
+      final r = await request({'t': 'READ_FILE', 'path': path, 'off': off});
+      if (r['ok'] != true) throw DeviceException((r['error'] ?? 'Could not read $path') as String);
+      final data = r['data'];
+      if (data is String && data.isNotEmpty) out.add(base64Decode(data));
+      final next = (r['next'] as num?)?.toInt() ?? -1;
+      if (next >= 0 && next <= off) throw DeviceException('Bad READ_FILE offset from device');
+      off = next;
+    }
+    return out.takeBytes();
+  }
+
+  /// Tells the device every note edit with seq <= [upTo] has reached the
+  /// server. Returns the number of edit lines the device still keeps.
+  Future<int> todoEditsDone(int upTo) async {
+    final r = await request({'t': 'TODO_EDITS_DONE', 'upTo': upTo});
+    if (r['ok'] != true) throw DeviceException((r['error'] ?? 'TODO_EDITS_DONE failed') as String);
+    return (r['remaining'] as num?)?.toInt() ?? 0;
   }
 
   Future<void> deleteLibraryFile(DeviceLibraryEntry book) async {

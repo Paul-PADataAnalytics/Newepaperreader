@@ -13,6 +13,10 @@ Examples:
     tools/sim_client.py library
     tools/sim_client.py upload path/to/book.epub
     tools/sim_client.py delete /books/book.epub
+    tools/sim_client.py upload todos.jsonl todos.jsonl data   # sync data file
+    tools/sim_client.py sleep                  # show the sleep screen (tap wakes)
+    tools/sim_client.py edits                  # read /data/todo_edits.jsonl
+    tools/sim_client.py editsdone 3            # acknowledge edits up to seq 3
 """
 import json
 import os
@@ -107,8 +111,9 @@ def main(argv):
     elif op == "upload":
         path = argv[1]
         name = argv[2] if len(argv) > 2 else os.path.basename(path)
+        folder = argv[3] if len(argv) > 3 else "books"
         data = open(path, "rb").read()
-        r = sim.request({"t": "FILE_BEGIN", "name": name, "size": len(data)})
+        r = sim.request({"t": "FILE_BEGIN", "name": name, "size": len(data), "dir": folder})
         print(r)
         if not r.get("ok"):
             return 1
@@ -116,6 +121,22 @@ def main(argv):
         for off in range(0, len(data), chunk):
             sim.send(bytes([1]) + struct.pack("<I", off) + data[off:off + chunk])
         print(sim.request({"t": "FILE_END", "size": len(data)}, timeout=60))
+    elif op == "sleep":
+        sim.cmd({"cmd": "sleep"})
+        time.sleep(1.0)
+    elif op == "edits":
+        import base64
+        data, off = b"", 0
+        while off >= 0:
+            r = sim.request({"t": "READ_FILE", "path": "/data/todo_edits.jsonl", "off": off})
+            if not r.get("ok"):
+                print(r)
+                return 1
+            data += base64.b64decode(r.get("data", ""))
+            off = r.get("next", -1)
+        sys.stdout.write(data.decode())
+    elif op == "editsdone":
+        print(sim.request({"t": "TODO_EDITS_DONE", "upTo": int(argv[1])}))
     else:
         print("unknown op", op)
         return 1

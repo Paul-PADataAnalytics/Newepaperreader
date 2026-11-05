@@ -10,6 +10,13 @@ Highlights of the v3.0 rework (hardware-verified on the device):
 - **Companion protocol v2** (`src/comm/AppComm.cpp`, `android_app/lib/services/ble_service.dart`): request ids, paged answers (Android caps attribute reads at 512 bytes), streamed binary uploads with back-pressure. All BLE messages are handled centrally in `AppComm::poll()` from `loop()`; apps must not consume them.
 - **GPIO 0 is never used by application code** - it is the EPD driver's CFG_STR line.
 
+## v3.1.0 (2026-11-05) - Todos, Calendar, keyboard
+See [Chapter 11](manual/11_todo_and_calendar.md). Verified on the device and on a real phone (NootTask + Google):
+- `TodoApp` / `CalendarApp` read `/data/todos.jsonl` / `/data/calendar.jsonl` through `src/sync/SyncStore` (PSRAM buffer, per-line index). Note edits go to `/data/todo_edits.jsonl` and are pushed by the phone (`READ_FILE` / `TODO_EDITS_DONE`).
+- `src/ui/SoftKeyboard` + `src/ui/TextEditor`: typing uses `DisplayHAL::updateScreenDirect()` (~50-70 ms), batched via `Application::wantsQueuedTaps()` / `onInputBatchEnd()`. `main.cpp` now timestamps touch events, queues 32 and delivers every queued tap to text-entry apps.
+- `Application::drawSleepScreen()` / `sleepScreenRefreshSec()`: the calendar's agenda sleep screen, redrawn on a timer wake after midnight (`s_sleepRefreshArmed`, `SLEEPR n` to test).
+- Companion: `android_app/lib/services/{sync_service,noot_task_service,google_service}.dart`; sync runs on every BLE connect. Google needs an Android OAuth client (see `android_app/README.md`).
+
 ## Testing
 - Simulator: `pio run -e native`, run the binary with the SD root as cwd (`SDL_VIDEODRIVER=dummy` for headless), drive it with `tools/sim_client.py` (taps, screenshots, protocol).
 - Device: `tools/device_console.py` (`STATUS`, taps, screenshots, `SLEEPT n` timed sleep/wake). Opening the port with pyserial's default DTR/RTS does not reset the board; clearing DTR/RTS does.
